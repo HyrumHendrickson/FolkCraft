@@ -24,7 +24,7 @@ pub fn worlds_screen(app: &mut App) {
 
     let content_h = app.worlds.len() as f32 * (row_h + 8.0);
     let max_scroll = (content_h - (list_bottom - list_top)).max(0.0);
-    app.scroll = (app.scroll - mouse_wheel().1 * 30.0).clamp(0.0, max_scroll);
+    app.scroll = (app.scroll - wheel_notches() * 30.0).clamp(0.0, max_scroll);
 
     if app.worlds.is_empty() {
         text_centered("No worlds yet. Create one below.", w / 2.0, list_top + 60.0, 28, GRAY);

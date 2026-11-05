@@ -67,7 +67,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
   generated terrain, so they break by hand, drop themselves, and stay gone (recorded in `World::removed`).
 - A **Rabbit Foot** in the hotbar gives a broken pebble a `RABBIT_FOOT_PEEP_STONE_CHANCE` (20%) chance to
   add a Peep Stone, and leaves or pine needles a `RABBIT_FOOT_HOLLY_ROD_CHANCE` (20%) chance to add a Holly Rod.
-  It also keeps the existing Loadstone and Gold Ore bonuses. Holly Rods do nothing yet. A Peep Stone shows the rainbow, and a Compass leads to a mountain (see "Landmarks" below).
+  It also keeps the existing Loadstone and Gold Ore bonuses. A Holly Rod in the hotbar draws will-o-whisps (see Animals). A Peep Stone shows the rainbow by day and the grand castle by night, each with a ghostly trail, and a Compass leads to a mountain (see "Landmarks" below).
 - **Boulders** (`Block::Boulder`) lie among the stones at `GROUND_BOULDER_PER_MILLE` 2 per mille of columns (twice as often on
   hills). They are solid, rust-streaked rocks that only a **bronze mallet** breaks (`BREAK_SECONDS_BOULDER` 4 s). A broken boulder
   drops one stone, one pebble and `BOULDER_IRON_MIN..=BOULDER_IRON_MAX` (1 to 3) iron ore, and stays gone.
@@ -166,7 +166,11 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     chase deer or quail. At most `MAX_BEAR` (1) lives nearby; spawns are weighted by `SPAWN_WEIGHT_*` (a bear's weight is 4, about a quarter of its old 15).
   - A **will-o-whisp** appears only while the world is night. It floats about three blocks above the terrain,
     flees at `WILL_O_WHISP_FLEE_SPEED` when the player comes within `WILL_O_WHISP_FLEE_DISTANCE`, and has no
-    attacks, drops or weapon interaction yet. At most `MAX_WILL_O_WHISP` (12) live nearby and its spawn weight is `SPAWN_WEIGHT_WILL_O_WHISP` (100), so at night
+    attacks, drops or weapon interaction. **Holly rod:** `Game::update_animals` sets `Animal::lure` (the player's position) on every whisp
+    while `Game::holly_rod_in_hotbar`. A whisp within `WILL_O_WHISP_ATTRACT_DISTANCE` floats towards the player (`Animal::float_to`, no fleeing);
+    within `WILL_O_WHISP_BOND_DISTANCE` (five feet) it sets `Animal::bonded` and circles the player, keeping up (a bonded whisp beyond
+    `WILL_O_WHISP_TELEPORT_DISTANCE` rejoins at once). Bonded whisps survive the despawn at day. With the rod gone from the hotbar the bond
+    is dropped, and by day the whisp despawns. Animals are not saved, so bonds are not either. At most `MAX_WILL_O_WHISP` (12) live nearby and its spawn weight is `SPAWN_WEIGHT_WILL_O_WHISP` (100), so at night
     they are common. They are drawn translucent (`animal_draw::will_o_whisp_parts`: halo, flickering body and heart, eyes, a fading
     tail) by `draw_ghosts`, after the water, since `draw_box` honours the colour's alpha.
   - Animals hop up one-block steps and turn aside from taller obstacles. They spawn out of sight
@@ -224,11 +228,11 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `animal_draw.rs` | Box models for animals, and arrows (thin wrapper over `draw_box`). |
 | `play.rs` | The in-game frame: input, simulation step, 3D render, HUD. Calls into `hud.rs` and `effects.rs`. |
 | `hud.rs` | Hotbar, inventory screen (layout, drag and drop, crafting list), item icons, toasts. |
-| `effects.rs` | Animated flames, ember glow, whatever lies cooking or smelting on a fire, and the rainbow (`rainbow_quads` is the geometry, `draw_rainbow` draws it). Dynamic, so chunk meshes stay static. |
+| `effects.rs` | Animated flames, ember glow, whatever lies cooking or smelting on a fire, the blocky rainbow (`rainbow_blocks`, `draw_rainbow`) and the ghostly trail (`trail_wisps`, `draw_trail`). Dynamic, so chunk meshes stay static. |
 | `dropped.rs` | Items on the ground: spawn, physics, pickup, drawing (`draw_box` is shared with `effects.rs`). |
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
 | `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
-| `landmarks.rs` | `Lake`, `Mountain`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
+| `landmarks.rs` | `Lake`, `Mountain`, `GrandCastle`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
 | `river.rs` | `is_river`, `river_near`: rivers as zero contours of a smooth noise field. Pure functions of seed and column. |
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG. |
 | `player.rs` | Player state, keyboard input, AABB physics. |
@@ -335,20 +339,32 @@ applied to them again as usual. Every number is in the "Landmarks" section of `c
   feet cell or the two below, so a jump does not count) until the player is `LAKE_TREK_CHUNKS` (10) chunks from where they
   entered, along either axis, makes a `Lake` ahead of them, beyond `GEN_RADIUS` so it does not pop in. It is a wavy basin of
   radius about 130 (`LAKE_RADIUS`), one block deep (`LAKE_DEPTH`), plus a straight channel from the player's column so the water is
-  continuous. In the middle is a dry island (`LAKE_ISLAND_SHARE` of the radius, so about 39 blocks) as high as the land, with the
-  usual forest, and on it a castle of `Block::CastleStone` (`Lake::castle_block`, shape in `castle_is_solid`: an outer wall with a gate in
+  continuous. In the middle is an island (`LAKE_ISLAND_SHARE` of the radius, so about 58 blocks): a hill (`Lake::hill_rise`) `ISLAND_HILL_HEIGHT` blocks
+  high with a flat top of `ISLAND_PLATEAU_RADIUS`, climbable by jumping (a test checks every step), with forest on its low slopes
+  (`TREE_LINE_RISE`), and on the flat top a castle of `Block::CastleStone` (`Lake::castle_block`, shape in `castle_is_solid`: an outer wall with a gate in
   the south side, four corner towers, a keep with a door and roof, all with battlements). The castle square is cleared of
   plants and rocks and kept free of trees (`CASTLE_TREE_MARGIN`). A lake with too small an island has no castle (`Lake::has_castle`).
   Hills fade out beside it (`Landmarks::relief_scale`), so no cliff is left.
 - **Mountain.** Holding a Compass, `Treks` adds the distance walked north (`COMPASS_NORTH_BEARING`, towards smaller z); putting it
   away resets the count, walking south subtracts. At `COMPASS_TREK_CHUNKS` (10) a `Mountain` of `MOUNTAIN_HEIGHT` 170 (ten times the first version) and `MOUNTAIN_RADIUS` 400 appears
-  ahead. Its slope never exceeds one block per column (a test checks this), so it can be climbed by jumping. From
+  ahead. Its base slope is under one block per column, but `MOUNTAIN_MAX_LEDGES` (12) rings of `MOUNTAIN_LEDGE_HEIGHT` (2) block cliff break it
+  (`Mountain::rise_at`). Each ring has one gap, a ramp, and the gaps alternate sides (`Mountain::gap_angle`), so the way up zigzags. Tests check
+  that a path of one-block steps reaches the summit and that no straight line from any of 72 directions can be climbed. From
   `SNOW_LINE_RISE` up the ground is `Block::Snow`: solid, opaque and unbreakable. No trees grow above `TREE_LINE_RISE`, and the exposed ground above it is drawn as grey rock instead of grass (`mesh.rs`).
   A mountain stands over any river or lake beneath it.
 - **Rainbow.** With a Peep Stone in hand and `RainbowState::Unseen`, `Game::try_show_rainbow` places a `Block::GoldPile`
-  26 to 36 blocks away on dry bare ground (saved like any placed block) and sets `RainbowState::Active`. The arc is drawn
-  only while a Peep Stone is held (`Game::visible_rainbow`). Mining the pile drops `RAINBOW_GOLD_DROP` gold and sets
+  26 to 36 blocks away on dry bare ground (saved like any placed block) and sets `RainbowState::Active`. The arc is built of translucent blocks (`effects::rainbow_blocks`) and is drawn
+  only by day while a Peep Stone is held (`Game::visible_rainbow`); at night a held Peep Stone makes the grand castle instead. Mining the pile drops `RAINBOW_GOLD_DROP` gold and sets
   `RainbowState::Spent`, which is saved and never reverts: there is no further rainbow.
+- **Ghostly trail.** `Game::trail_path` gives the path a held Peep Stone shows: by day to `Landmarks::rainbow_end` (kept in
+  `spent_gold` once the gold is taken), by night to the grand castle's gate and keep door. `effects::trail_wisps` is the geometry and
+  `draw_trail` draws it, `TRAIL_LENGTH` blocks ahead.
+- **Grand castle.** At night, with a Peep Stone in hand and no castle yet, `Game::try_show_grand_castle` places a `GrandCastle` at least
+  `GRAND_DISTANCE` blocks away (along either axis) in a direction `Landmarks::has_room_for` finds clear of lakes and mountains. Hills fade out
+  round it and no river or tree is allowed in its clearing, so it stands level. `grand_castle_is_solid` is the shape: outer wall, gate, towers,
+  and a keep of `GRAND_STOREYS` floors with stairs; a test walks from the gate to the roof.
+- **Day and night.** Drinking a stew calls `Game::set_night`, which starts a `Blackout` of `DAY_NIGHT_BLACKOUT_SECONDS`; the world changes
+  once the screen is black (`Game::update_blackout`), and `play.rs` draws the black overlay last.
 - Trek progress is not saved; it starts over when a world is loaded. A step of more than 12 blocks in one frame (a respawn)
   also resets it.
 
@@ -374,6 +390,8 @@ lake <x> <z> <radius> <phase> <from x> <from z>   a lake and its channel to the 
 mountain <x> <z> <radius> <height> <phase>        a mountain
 rainbow spent                    the gold was taken: never another rainbow
 rainbow <from x> <from z> <x> <y> <z>   the rainbow is out, its gold pile at (x, y, z)
+rainbowend <x> <y> <z>           where a spent rainbow's gold lay (the peep stone still leads there)
+grandcastle <x> <z>              the grand castle's centre
 ```
 
 Unknown or malformed records are ignored, and older saves without the later lines still load.

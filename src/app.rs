@@ -35,6 +35,8 @@ pub struct App {
     pub pending_delete: Option<WorldInfo>,
     /// How far (pixels) the help text is scrolled.
     pub help_scroll: f32,
+    /// Whether the help was opened from inside a game (F1), so that closing it goes back to that game.
+    pub help_from_game: bool,
 }
 
 impl App {
@@ -52,6 +54,7 @@ impl App {
             game: None,
             pending_delete: None,
             help_scroll: 0.0,
+            help_from_game: false,
         }
     }
 
@@ -85,7 +88,33 @@ impl App {
 
     pub fn open_help(&mut self) {
         self.help_scroll = 0.0;
+        self.help_from_game = false;
         self.mode = Mode::Help;
+    }
+
+    /// Open the help over a running game (F1). The game is paused and the cursor freed until the help is closed.
+    pub fn open_help_in_game(&mut self) {
+        self.help_scroll = 0.0;
+        self.help_from_game = true;
+        self.mode = Mode::Help;
+        set_cursor_grab(false);
+        show_mouse(true);
+    }
+
+    /// Close the help: back to the game it was opened from, or to the list of worlds.
+    pub fn close_help(&mut self) {
+        if self.help_from_game && self.game.is_some() {
+            self.help_from_game = false;
+            self.mode = Mode::Playing;
+            set_cursor_grab(true);
+            show_mouse(false);
+            if let Some(game) = self.game.as_mut() {
+                game.skip_look_frames = 3;
+            }
+        } else {
+            self.help_from_game = false;
+            self.mode = Mode::Worlds;
+        }
     }
 
     pub fn enter_game(&mut self, info: WorldInfo) {

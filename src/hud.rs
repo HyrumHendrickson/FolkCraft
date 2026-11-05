@@ -606,7 +606,7 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
     // --- Right-hand list: every recipe the current items can pay for and, in dev mode, then every item ---
     let entries = craft_entries(craftable(inventory), dev_mode);
     let max_rows = ((grid_size().y + CRAFT_ROW_GAP) / (CRAFT_ROW_H + CRAFT_ROW_GAP)) as usize;
-    let wheel = mouse_wheel().1;
+    let wheel = crate::ui::wheel_notches();
     if wheel != 0.0 {
         // The item list is long, so dev mode scrolls a few rows to the notch.
         let step = if dev_mode { 3 } else { 1 } * if wheel < 0.0 { 1 } else { -1 };

@@ -5,11 +5,15 @@
 //!
 //! - A **lake** appears when the player has walked ten chunks through a river without leaving the water. It is a
 //!   large wavy basin, one block deep like a river, joined to the river by a straight channel. In the middle is a
-//!   large island of dry land, and on the island stands a small castle.
+//!   large island: a hill with a flat top, and on the flat top stands a small castle.
 //! - A **mountain** appears when the player has followed a held compass north for ten chunks. It is tall, can be
-//!   climbed one block at a time, and is capped with snow.
-//! - A **rainbow** appears once, when the player holds a peep stone. It ends in a pile of gold; once the gold
-//!   has been taken there is never another rainbow.
+//!   climbed one block at a time, and is capped with snow. Rings of cliff (ledges) break its slope, each with one
+//!   gap, the gaps on alternate sides, so it has to be climbed in a zigzag.
+//! - A **rainbow** appears once, by day, when the player holds a peep stone. It ends in a pile of gold; once the gold
+//!   has been taken there is never another rainbow. The peep stone shows a ghostly trail to the end of the rainbow
+//!   for ever after.
+//! - A **grand castle** appears once, at night, when the player holds a peep stone: a large castle of five floors,
+//!   beyond the edge of the land, which the peep stone's ghostly trail leads to.
 //!
 //! This file holds the data and the rules (where the water and the slopes are, when a trek is complete). The
 //! world, the save file and the game only call into it, and none of it needs a window to be tested.
@@ -110,6 +114,31 @@ impl Lake {
             return dist - reach * 1.25;
         }
         dist - reach * lobes(self.phase + 31, dz.atan2(dx))
+    }
+
+    /// How many blocks the island hill raises the ground at the column (wx, wz): nothing off the island or on a
+    /// lake too small for a castle, the full `ISLAND_HILL_HEIGHT` on the flat top (a disc of `ISLAND_PLATEAU_RADIUS`
+    /// round the centre, which the castle stands on) and a slope between, steady enough to be climbed one block
+    /// at a time.
+    pub fn hill_rise(&self, wx: i32, wz: i32) -> i32 {
+        if !self.has_castle() {
+            return 0;
+        }
+        let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
+        let reach = self.island_radius();
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist > reach * 1.25 {
+            return 0;
+        }
+        let foot = reach * lobes(self.phase + 31, dz.atan2(dx));
+        if dist >= foot {
+            return 0;
+        }
+        let run = (foot - ISLAND_PLATEAU_RADIUS).max(1.0);
+        let t = ((foot - dist) / run).clamp(0.0, 1.0);
+        // Mostly an even slope, with soft shoulders at the foot and the top.
+        let shape = 0.6 * t + 0.4 * smoothstep(t);
+        (ISLAND_HILL_HEIGHT as f32 * shape).round() as i32
     }
 
     /// Whether the column (wx, wz) is under the lake: inside its shore and outside its island.
@@ -227,19 +256,47 @@ impl Mountain {
         dist - self.radius as f32 * lobes(self.phase, dz.atan2(dx))
     }
 
+    /// How many ledges (rings of cliff) break the mountain's slope.
+    pub fn ledge_count(&self) -> i32 {
+        (self.height / MOUNTAIN_LEDGE_SPACING_HEIGHT).clamp(0, MOUNTAIN_MAX_LEDGES)
+    }
+
+    /// The angle (radians) at which ledge `k` has its gap: to one side of the mountain's axis for every other ledge
+    /// and to the other side for the rest, so that the way up zigzags.
+    fn gap_angle(&self, k: i32) -> f32 {
+        let axis = self.phase as f32 * 0.1;
+        axis + if k % 2 == 0 { MOUNTAIN_GAP_OFFSET_ANGLE } else { -MOUNTAIN_GAP_OFFSET_ANGLE }
+    }
+
     /// How many blocks the ground is raised at the column (wx, wz): zero off the mountain, the full `height` at
-    /// the summit and a smooth slope between.
+    /// the summit and a slope between, broken by ledges. A ledge is a ring of cliff `MOUNTAIN_LEDGE_HEIGHT` blocks
+    /// high at a fixed share of the way up, with one gap: there the same rise is spread out into a ramp. The gap
+    /// of each ledge lies on the opposite side from the one before it.
     pub fn rise_at(&self, wx: i32, wz: i32) -> i32 {
         let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
         let dist = (dx * dx + dz * dz).sqrt();
         if dist >= farthest_reach(self.radius) {
             return 0;
         }
-        let foot = self.radius as f32 * lobes(self.phase, dz.atan2(dx));
+        let angle = dz.atan2(dx);
+        let foot = self.radius as f32 * lobes(self.phase, angle);
         if dist >= foot {
             return 0;
         }
-        (self.height as f32 * smoothstep(1.0 - dist / foot)).round() as i32
+        let ledges = self.ledge_count();
+        let mut rise = (self.height - ledges * MOUNTAIN_LEDGE_HEIGHT) as f32 * smoothstep(1.0 - dist / foot);
+        let ramp = (foot / (ledges + 1) as f32 * 0.45).clamp(2.0, MOUNTAIN_RAMP_WIDTH);
+        for k in 0..ledges {
+            let inward = foot * (k + 1) as f32 / (ledges + 1) as f32 - dist;
+            if inward <= 0.0 {
+                continue;
+            }
+            let off_axis = (angle - self.gap_angle(k) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            let in_gap = 1.0 - smoothstep((off_axis.abs() - MOUNTAIN_GAP_HALF_ANGLE) / MOUNTAIN_GAP_BLEND_ANGLE);
+            let width = MOUNTAIN_CLIFF_WIDTH + (ramp - MOUNTAIN_CLIFF_WIDTH) * in_gap;
+            rise += MOUNTAIN_LEDGE_HEIGHT as f32 * smoothstep(inward / width);
+        }
+        rise.round() as i32
     }
 
     /// The columns the mountain can touch, widened by `margin`: (min x, min z, max x, max z).
@@ -247,6 +304,127 @@ impl Mountain {
         let reach = farthest_reach(self.radius).ceil() as i32 + margin;
         (self.x - reach, self.z - reach, self.x + reach, self.z + reach)
     }
+}
+
+/// The grand castle: a large castle of grey stone beyond the edge of the land. Centre in world coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrandCastle {
+    pub x: i32,
+    pub z: i32,
+}
+
+impl GrandCastle {
+    /// The columns the castle can touch, widened by `margin`: (min x, min z, max x, max z).
+    pub fn bounds(&self, margin: i32) -> (i32, i32, i32, i32) {
+        let reach = GRAND_REACH + margin;
+        (self.x - reach, self.z - reach, self.x + reach, self.z + reach)
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the castle's square.
+    pub fn near(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        (wx - self.x).abs() <= GRAND_REACH + margin && (wz - self.z).abs() <= GRAND_REACH + margin
+    }
+
+    /// What the castle is made of in the cell `dy` blocks above the ground at the column (wx, wz): see
+    /// `Lake::castle_block`.
+    pub fn castle_block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+        if !(0..GRAND_HEIGHT).contains(&dy) || !self.near(wx, wz, 0) {
+            return None;
+        }
+        Some(if grand_castle_is_solid(wx - self.x, wz - self.z, dy) { Block::CastleStone } else { Block::Air })
+    }
+
+    /// The spot just outside the gate, on the south side (towards +z), and the door of the keep: where the ghostly
+    /// trail goes, as (x, z) in world coordinates, at the middle of a column.
+    pub fn gate_approach(&self) -> (f32, f32) {
+        (self.x as f32 + 0.5, (self.z + GRAND_WALL_HALF + 10) as f32 + 0.5)
+    }
+
+    pub fn keep_door(&self) -> (f32, f32) {
+        (self.x as f32 + 0.5, (self.z + GRAND_KEEP_HALF + 2) as f32 + 0.5)
+    }
+
+    /// A castle whose nearest edge is `GRAND_DISTANCE` blocks from `at` (counting along either axis, as the chunks
+    /// do), in the direction `angle`: beyond the land that is already made.
+    pub fn ahead(at: (f32, f32), angle: f32) -> GrandCastle {
+        let (c, s) = (angle.cos(), angle.sin());
+        let gap = (GRAND_DISTANCE + GRAND_REACH) as f32 / c.abs().max(s.abs());
+        GrandCastle { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
+    }
+}
+
+/// The cell of step `i` (1 to 5) of the stair that climbs from floor `storey` to the next one inside the keep. The
+/// stairs follow one another along the east wall (going north) and then along the north wall (going west).
+fn keep_stair_cell(storey: i32, i: i32) -> (i32, i32) {
+    match storey {
+        0 => (9, 9 - i),
+        1 => (9, 4 - i),
+        2 => (9, -1 - i),
+        3 => (9 - i, -9),
+        _ => (4 - i, -9),
+    }
+}
+
+/// The shape of the grand castle, in blocks from its centre (`dx`, `dz`) and above the ground (`dy`, 0 is the first
+/// layer of air). Seen from above: an outer wall `GRAND_WALL_HALF` from the centre with a gate in the south side
+/// (towards +z) five wide; a solid tower at each corner, two flanking the gate and one in the middle of each of the
+/// other three sides; and in the middle a keep of `GRAND_KEEP_HALF`, five floors of `GRAND_STOREY` blocks each, with a
+/// door in its south side, windows, a stair from each floor up to the next, and a roof with battlements to walk on.
+/// Everything ends in battlements: every other block along the top is left out.
+fn grand_castle_is_solid(dx: i32, dz: i32, dy: i32) -> bool {
+    let (ax, az) = (dx.abs(), dz.abs());
+    let merlon = (dx + dz).rem_euclid(2) == 0;
+    let (wall, keep) = (GRAND_WALL_HALF, GRAND_KEEP_HALF);
+    // Up to and including `top`, with a battlement above it.
+    let crowned = |top: i32| dy <= top || (dy == top + 1 && merlon);
+
+    // The corner towers.
+    if (ax - wall).abs() <= 4 && (az - wall).abs() <= 4 {
+        return crowned(25);
+    }
+    // The towers beside the gate, and in the middle of the north, east and west walls.
+    let gate_tower = (ax - 7).abs() <= 2 && dz > 0 && (az - wall).abs() <= 3;
+    let side_tower = (az - wall).abs() <= 3 && ax <= 3 && dz < 0 || (ax - wall).abs() <= 3 && az <= 3;
+    if gate_tower || side_tower {
+        return crowned(17);
+    }
+    // The outer wall, two blocks thick, with the gate.
+    if ax.max(az) >= wall - 1 && ax.max(az) <= wall {
+        if dz > 0 && az >= wall - 1 && ax <= 2 && dy <= 5 {
+            return false;
+        }
+        return crowned(11);
+    }
+    // The keep.
+    if ax <= keep && az <= keep {
+        if ax >= keep - 1 || az >= keep - 1 {
+            // Its walls: a door, and windows on every floor.
+            if dz > 0 && az >= keep - 1 && ax <= 1 && dy <= 3 {
+                return false;
+            }
+            let along = if az >= keep - 1 { dx } else { dz };
+            let storey_row = dy.rem_euclid(GRAND_STOREY);
+            if dy < GRAND_STOREY * GRAND_STOREYS - 1 && (1..=2).contains(&storey_row) && along.rem_euclid(4) == 0 && along.abs() <= 8 && (ax < keep - 1 || az < keep - 1) {
+                return false;
+            }
+            return crowned(GRAND_STOREY * GRAND_STOREYS - 1);
+        }
+        // Inside: the stairs...
+        for storey in 0..GRAND_STOREYS {
+            for i in 1..=GRAND_STOREY {
+                if (dx, dz) == keep_stair_cell(storey, i) && dy >= storey * GRAND_STOREY && dy < storey * GRAND_STOREY + i {
+                    return true;
+                }
+            }
+        }
+        // ...and the floors (and the roof), each cut open above the first four steps of the stair below it.
+        if dy >= GRAND_STOREY - 1 && (dy + 1) % GRAND_STOREY == 0 {
+            let floor = (dy + 1) / GRAND_STOREY;
+            let hole = (1..GRAND_STOREY).any(|i| (dx, dz) == keep_stair_cell(floor - 1, i));
+            return !hole;
+        }
+    }
+    false
 }
 
 /// The rainbow: an arc that rises beside the player and comes down on a pile of gold.
@@ -276,6 +454,10 @@ pub struct Landmarks {
     pub lakes: Vec<Lake>,
     pub mountains: Vec<Mountain>,
     pub rainbow: RainbowState,
+    /// Where the rainbow's gold lay, once it has been taken (so the peep stone still leads there).
+    pub spent_gold: Option<Pos>,
+    /// The world's one grand castle, once a peep stone has been held at night.
+    pub grand_castle: Option<GrandCastle>,
 }
 
 impl Landmarks {
@@ -289,6 +471,34 @@ impl Landmarks {
         self.mountains.iter().map(|m| m.rise_at(wx, wz)).max().unwrap_or(0)
     }
 
+    /// How many blocks the island hills of the lakes raise the ground at the column (wx, wz).
+    pub fn island_rise(&self, wx: i32, wz: i32) -> i32 {
+        self.lakes.iter().map(|l| l.hill_rise(wx, wz)).max().unwrap_or(0)
+    }
+
+    /// Whether a grand castle at `castle` would stand clear of every lake and mountain (and of the ground they
+    /// blend into).
+    pub fn has_room_for(&self, castle: &GrandCastle) -> bool {
+        let margin = LANDMARK_BLEND + 4;
+        let (cx0, cz0, cx1, cz1) = castle.bounds(margin);
+        let overlaps = |(x0, z0, x1, z1): (i32, i32, i32, i32)| x0 <= cx1 && x1 >= cx0 && z0 <= cz1 && z1 >= cz0;
+        !self.lakes.iter().any(|l| overlaps(l.bounds(margin))) && !self.mountains.iter().any(|m| overlaps(m.bounds(margin)))
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the grand castle's square.
+    pub fn near_grand_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.grand_castle.map_or(false, |c| c.near(wx, wz, margin))
+    }
+
+    /// The end of the rainbow: the pile of gold, or the place where it lay once it has been taken.
+    pub fn rainbow_end(&self) -> Option<Pos> {
+        match self.rainbow {
+            RainbowState::Active(r) => Some(r.gold),
+            RainbowState::Spent => self.spent_gold,
+            RainbowState::Unseen => None,
+        }
+    }
+
     /// How much of the natural hills and valleys show at the column (wx, wz): 0 on a lake or a mountain, rising
     /// smoothly to 1 `LANDMARK_BLEND` blocks away from one, so no cliff is left at the edge. 1 where there is
     /// nothing near.
@@ -296,7 +506,9 @@ impl Landmarks {
         let blend = LANDMARK_BLEND as f32;
         let lakes = self.lakes.iter().map(|l| l.outer_distance(wx, wz));
         let mountains = self.mountains.iter().map(|m| m.edge_distance(wx, wz));
-        lakes.chain(mountains).map(|d| smoothstep(d / blend)).fold(1.0, f32::min)
+        // The grand castle stands on level ground: the hills die away round it.
+        let castle = self.grand_castle.map(|c| (wx - c.x).abs().max((wz - c.z).abs()) as f32 - (GRAND_REACH + 2) as f32);
+        lakes.chain(mountains).chain(castle).map(|d| smoothstep(d / blend)).fold(1.0, f32::min)
     }
 
     /// Whether the column (wx, wz) is within `margin` blocks of the square a castle stands in.
@@ -309,7 +521,9 @@ impl Landmarks {
         let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
         let (x1, z1) = (x0 + CHUNK_SIZE - 1, z0 + CHUNK_SIZE - 1);
         let overlaps = |(bx0, bz0, bx1, bz1): (i32, i32, i32, i32)| bx0 <= x1 && bx1 >= x0 && bz0 <= z1 && bz1 >= z0;
-        self.lakes.iter().any(|l| overlaps(l.bounds(LANDMARK_BLEND))) || self.mountains.iter().any(|m| overlaps(m.bounds(LANDMARK_BLEND)))
+        self.lakes.iter().any(|l| overlaps(l.bounds(LANDMARK_BLEND)))
+            || self.mountains.iter().any(|m| overlaps(m.bounds(LANDMARK_BLEND)))
+            || self.grand_castle.map_or(false, |c| overlaps(c.bounds(LANDMARK_BLEND)))
     }
 }
 
@@ -537,27 +751,226 @@ mod tests {
         assert_eq!(marks.relief_scale(5000 - 700, 0), 1.0, "and none at its foot");
     }
 
+    /// The rise of every column of a mountain centred on (0, 0), as a grid `(2 * reach + 1)` columns across.
+    fn heights(m: &Mountain, reach: i32) -> Vec<i16> {
+        let side = 2 * reach + 1;
+        (0..side * side).map(|i| m.rise_at(i % side - reach, i / side - reach) as i16).collect()
+    }
+
     #[test]
-    fn a_mountain_is_ten_times_taller_than_it_was_and_can_be_climbed_one_block_at_a_time() {
+    fn a_mountain_is_tall_and_every_ledge_has_a_gap_so_it_can_still_be_climbed() {
         assert_eq!(MOUNTAIN_HEIGHT, 10 * 17, "ten times the old height");
         assert!(MOUNTAIN_HEIGHT > 3 * HILL_MAX_HEIGHT, "much taller than any hill");
-        for phase in [0, 9, 17, 25, 33, 41, 49, 57, 62] {
+        for phase in [0, 17, 41, 62] {
             let m = mountain(phase);
             assert_eq!(m.rise_at(0, 0), MOUNTAIN_HEIGHT, "the summit");
             assert_eq!(m.rise_at(MOUNTAIN_RADIUS * 2, 0), 0);
+            assert_eq!(m.ledge_count(), MOUNTAIN_MAX_LEDGES);
             let reach = farthest_reach(MOUNTAIN_RADIUS) as i32 + 2;
-            let mut highest = 0;
-            for z in -reach..=reach {
-                for x in -reach..=reach {
-                    let here = m.rise_at(x, z);
-                    highest = highest.max(here);
-                    // A jump clears about one block, so no step between neighbouring columns may be bigger.
-                    assert!((here - m.rise_at(x + 1, z)).abs() <= 1, "phase {phase}: step at {x},{z}");
-                    assert!((here - m.rise_at(x, z + 1)).abs() <= 1, "phase {phase}: step at {x},{z}");
+            let side = 2 * reach + 1;
+            let grid = heights(&m, reach);
+            assert_eq!(*grid.iter().max().unwrap() as i32, MOUNTAIN_HEIGHT);
+            // A jump clears a little over one block. Walk from the foot, a block at a time, up steps of one at most
+            // (and down any): the summit must be reachable.
+            let at = |x: i32, z: i32| ((z + reach) * side + x + reach) as usize;
+            let start = at(reach, 0);
+            assert_eq!(grid[start], 0);
+            let mut seen = vec![false; grid.len()];
+            let mut queue = std::collections::VecDeque::from([start]);
+            seen[start] = true;
+            let mut summit = false;
+            while let Some(i) = queue.pop_front() {
+                let (x, z) = ((i as i32 % side) - reach, (i as i32 / side) - reach);
+                summit |= grid[i] as i32 == MOUNTAIN_HEIGHT;
+                for (nx, nz) in [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)] {
+                    if nx.abs() > reach || nz.abs() > reach {
+                        continue;
+                    }
+                    let j = at(nx, nz);
+                    if !seen[j] && grid[j] - grid[i] <= 1 {
+                        seen[j] = true;
+                        queue.push_back(j);
+                    }
                 }
             }
-            assert_eq!(highest, MOUNTAIN_HEIGHT);
+            assert!(summit, "phase {phase}: no way up that a jump can climb");
         }
+    }
+
+    #[test]
+    fn a_mountain_cannot_be_run_straight_up_from_any_side_but_has_to_be_zigzagged() {
+        for phase in [0, 9, 33, 58] {
+            let m = mountain(phase);
+            let reach = farthest_reach(MOUNTAIN_RADIUS) as i32;
+            for ray in 0..72 {
+                let angle = ray as f32 * std::f32::consts::TAU / 72.0;
+                // Walk the line inwards, column by column, and find the tallest step up.
+                let mut last = (i32::MAX, i32::MAX);
+                let mut previous = 0;
+                let mut tallest = 0;
+                for r in (0..=reach * 2).map(|i| reach as f32 - i as f32 * 0.5) {
+                    let cell = ((angle.cos() * r).round() as i32, (angle.sin() * r).round() as i32);
+                    if cell == last {
+                        continue;
+                    }
+                    last = cell;
+                    let here = m.rise_at(cell.0, cell.1);
+                    tallest = tallest.max(here - previous);
+                    previous = here;
+                }
+                assert!(tallest >= MOUNTAIN_LEDGE_HEIGHT, "phase {phase}: the way straight up at {ray} is only steps of {tallest}");
+            }
+            // The cliffs are as tall as the ledges and no more than a ledge and a slope.
+            let grid = heights(&m, reach);
+            let side = 2 * reach + 1;
+            let steepest = (0..grid.len() as i32)
+                .filter(|i| i % side + 1 < side)
+                .map(|i| (grid[i as usize + 1] - grid[i as usize]).abs())
+                .max()
+                .unwrap();
+            assert!(steepest as i32 <= MOUNTAIN_LEDGE_HEIGHT + 2, "steepest step {steepest}");
+        }
+    }
+
+    #[test]
+    fn the_gaps_in_the_ledges_lie_on_alternate_sides_of_the_mountain() {
+        let m = mountain(20);
+        let sides: Vec<f32> = (0..m.ledge_count()).map(|k| m.gap_angle(k)).collect();
+        for pair in sides.windows(2) {
+            assert!((pair[0] - pair[1]).abs() > 2.0 * (MOUNTAIN_GAP_HALF_ANGLE + MOUNTAIN_GAP_BLEND_ANGLE), "neighbouring gaps overlap: {pair:?}");
+        }
+        // A small mountain (as the tests use) has fewer ledges, or none, and is smooth.
+        assert_eq!(Mountain { x: 0, z: 0, radius: 40, height: 10, phase: 0 }.ledge_count(), 0);
+    }
+
+    #[test]
+    fn the_island_hill_is_flat_on_top_and_only_on_a_lake_big_enough_for_a_castle() {
+        let l = Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 5, from: (0, 0) };
+        assert_eq!(l.hill_rise(0, 0), ISLAND_HILL_HEIGHT);
+        assert_eq!(l.hill_rise(ISLAND_PLATEAU_RADIUS as i32, 0), ISLAND_HILL_HEIGHT, "the flat top reaches the plateau's edge");
+        assert!(l.hill_rise(ISLAND_PLATEAU_RADIUS as i32 + 10, 0) < ISLAND_HILL_HEIGHT);
+        assert_eq!(l.hill_rise(l.radius * 2, 0), 0);
+        assert!(l.island_radius() * 0.75 > ISLAND_PLATEAU_RADIUS * 2.0, "a hill much larger than its flat top");
+        let small = Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) };
+        assert_eq!(small.hill_rise(0, 0), 0, "a small island is flat");
+        // The castle's whole square is on the flat top.
+        let corner = (CASTLE_REACH as f32 * std::f32::consts::SQRT_2).ceil();
+        assert!(corner <= ISLAND_PLATEAU_RADIUS);
+    }
+
+    /// Whether the cell is stone in the grand castle (and the ground, which is the level below it).
+    fn grand_solid(dx: i32, dz: i32, dy: i32) -> bool {
+        dy < 0 || GrandCastle { x: 0, z: 0 }.castle_block(dx, dz, dy) == Some(Block::CastleStone)
+    }
+
+    /// Where a player can stand in the grand castle, found by walking: (x, z, y) is a cell whose feet are in air
+    /// with stone beneath. A step up of one block is a jump; falling is allowed. Returns every spot reached from
+    /// `start`.
+    fn walk_the_grand_castle(start: (i32, i32, i32)) -> std::collections::HashSet<(i32, i32, i32)> {
+        let reach = GRAND_REACH + 8;
+        let free = |x: i32, z: i32, y: i32| !grand_solid(x, z, y);
+        let mut seen = std::collections::HashSet::from([start]);
+        let mut queue = std::collections::VecDeque::from([start]);
+        while let Some((x, z, y)) = queue.pop_front() {
+            for (nx, nz) in [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)] {
+                if nx.abs() > reach || nz.abs() > reach {
+                    continue;
+                }
+                // Straight ahead, or up one block (which needs room to jump), or down a few.
+                let mut options = Vec::new();
+                if free(nx, nz, y) && free(nx, nz, y + 1) {
+                    let mut ny = y;
+                    while ny > y - 5 && free(nx, nz, ny - 1) {
+                        ny -= 1;
+                    }
+                    if grand_solid(nx, nz, ny - 1) {
+                        options.push(ny);
+                    }
+                }
+                if free(x, z, y + 2) && free(nx, nz, y + 1) && free(nx, nz, y + 2) && grand_solid(nx, nz, y) {
+                    options.push(y + 1);
+                }
+                for ny in options {
+                    if seen.insert((nx, nz, ny)) {
+                        queue.push_back((nx, nz, ny));
+                    }
+                }
+            }
+        }
+        seen
+    }
+
+    #[test]
+    fn the_grand_castle_can_be_entered_by_its_gate_and_climbed_floor_by_floor_to_the_roof() {
+        let reached = walk_the_grand_castle((0, GRAND_WALL_HALF + 6, 0));
+        let inside_keep = |&&(x, z, _): &&(i32, i32, i32)| x.abs() <= GRAND_KEEP_HALF - 2 && z.abs() <= GRAND_KEEP_HALF - 2;
+        for floor in 0..=GRAND_STOREYS {
+            let y = floor * GRAND_STOREY;
+            assert!(reached.iter().filter(inside_keep).any(|&(_, _, h)| h == y), "no way to stand on floor {floor} (height {y}) inside the keep");
+        }
+        let courtyard = (0, GRAND_WALL_HALF - 8);
+        assert!(reached.contains(&(courtyard.0, courtyard.1, 0)), "the courtyard is reached through the gate");
+        let highest = reached.iter().map(|&(_, _, y)| y).max().unwrap();
+        assert!(highest >= GRAND_STOREY * GRAND_STOREYS, "the roof of the keep (and a tower, if they can) is reachable: {highest}");
+    }
+
+    #[test]
+    fn the_grand_castle_is_large_walled_and_towered_with_a_gate_and_a_keep_door() {
+        let c = GrandCastle { x: 100, z: -40 };
+        let at = |dx: i32, dz: i32, dy: i32| c.castle_block(c.x + dx, c.z + dz, dy);
+        let wall = Some(Block::CastleStone);
+        assert_eq!(at(GRAND_WALL_HALF, 0, 3), wall, "the outer wall");
+        assert_eq!(at(0, GRAND_WALL_HALF, 3), Some(Block::Air), "the gate, in the south wall");
+        assert_eq!(at(2, GRAND_WALL_HALF, 5), Some(Block::Air));
+        assert_eq!(at(3, GRAND_WALL_HALF, 0), wall);
+        assert_eq!(at(0, GRAND_WALL_HALF, 6), wall, "and a lintel over it");
+        assert_eq!(at(GRAND_WALL_HALF, GRAND_WALL_HALF, 22), wall, "a corner tower is taller than the wall");
+        assert_eq!(at(GRAND_WALL_HALF - 5, 0, 15), Some(Block::Air), "the wall is lower than the tower");
+        assert_eq!(at(0, GRAND_KEEP_HALF, 1), Some(Block::Air), "the keep's door");
+        assert_eq!(at(0, GRAND_KEEP_HALF, 4), wall);
+        assert_eq!(at(1, -GRAND_KEEP_HALF, 1), wall, "and no door in the north");
+        assert_eq!(at(4, -GRAND_KEEP_HALF, 1), Some(Block::Air), "a window");
+        assert_eq!(at(0, 0, 1), Some(Block::Air), "empty inside");
+        assert_eq!(at(0, 0, GRAND_STOREY - 1), wall, "the first floor");
+        assert_eq!(at(0, 0, GRAND_STOREY * GRAND_STOREYS - 1), wall, "the roof");
+        assert_eq!(at(0, 0, GRAND_STOREY * 2), Some(Block::Air), "the room above the second floor");
+        assert_eq!(at(0, 0, GRAND_HEIGHT), None, "nothing above the castle");
+        assert_eq!(c.castle_block(c.x + GRAND_REACH + 1, c.z, 0), None);
+        assert!(GRAND_REACH >= GRAND_WALL_HALF + 4 && GRAND_HEIGHT > GRAND_STOREY * GRAND_STOREYS, "the keep's roof fits under the tallest tower");
+        // Far larger than the small castle, and five floors tall.
+        assert!(GRAND_REACH > 2 * CASTLE_REACH && GRAND_STOREYS >= 3);
+        // The trail leads to the gate and then to the keep's door, both on the south side.
+        let (gx, gz) = c.gate_approach();
+        let (kx, kz) = c.keep_door();
+        assert!(gz > (c.z + GRAND_WALL_HALF) as f32 && kz < gz && kx == gx);
+        assert!(!grand_solid_at(&c, kx as i32, kz as i32), "the door's step is open air");
+    }
+
+    fn grand_solid_at(c: &GrandCastle, wx: i32, wz: i32) -> bool {
+        c.castle_block(wx, wz, 0) == Some(Block::CastleStone)
+    }
+
+    #[test]
+    fn the_grand_castle_flattens_the_hills_round_it_and_counts_as_touching_its_chunks() {
+        let mut marks = Landmarks::default();
+        marks.grand_castle = Some(GrandCastle { x: 0, z: 0 });
+        assert_eq!(marks.relief_scale(0, 0), 0.0);
+        assert_eq!(marks.relief_scale(GRAND_REACH, GRAND_REACH), 0.0);
+        assert_eq!(marks.relief_scale(GRAND_REACH + 2 + LANDMARK_BLEND, 0), 1.0);
+        assert!(marks.touches_chunk(0, 0) && marks.touches_chunk(-1, -1) && !marks.touches_chunk(20, 20));
+        assert!(marks.near_grand_castle(GRAND_REACH + 3, 0, 5) && !marks.near_grand_castle(GRAND_REACH + 8, 0, 5));
+    }
+
+    #[test]
+    fn the_end_of_the_rainbow_is_remembered_after_its_gold_is_taken() {
+        let mut marks = Landmarks::default();
+        assert_eq!(marks.rainbow_end(), None);
+        marks.rainbow = RainbowState::Active(Rainbow { from: (0, 0), gold: (30, 6, 12) });
+        assert_eq!(marks.rainbow_end(), Some((30, 6, 12)));
+        marks.rainbow = RainbowState::Spent;
+        assert_eq!(marks.rainbow_end(), None, "an old save that never kept the place");
+        marks.spent_gold = Some((30, 6, 12));
+        assert_eq!(marks.rainbow_end(), Some((30, 6, 12)));
     }
 
     #[test]

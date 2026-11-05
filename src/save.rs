@@ -10,7 +10,7 @@ use crate::config::*;
 use crate::dropped::DroppedItem;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
-use crate::landmarks::{Lake, Landmarks, Mountain, Rainbow, RainbowState, MAX_LANDMARK_RADIUS, MOUNTAIN_MAX_HEIGHT};
+use crate::landmarks::{GrandCastle, Lake, Landmarks, Mountain, Rainbow, RainbowState, MAX_LANDMARK_RADIUS, MOUNTAIN_MAX_HEIGHT};
 use crate::player::Player;
 use crate::rng::clock_seed;
 use crate::world::{Cooking, Pos, Pot, World};
@@ -95,6 +95,8 @@ impl SaveData {
 ///     "mountain <x> <z> <radius> <height> <phase>"        a mountain
 ///     "rainbow spent"            the rainbow's gold has been taken: there is never another rainbow
 ///     "rainbow <from x> <from z> <x> <y> <z>"  the rainbow is out there, its gold at (x, y, z)
+///     "rainbowend <x> <y> <z>"   where the gold of a spent rainbow lay (the peep stone still leads there)
+///     "grandcastle <x> <z>"      the grand castle, centred on that column
 /// Worlds saved before the inventory existed simply have none of the last six, and worlds saved before the
 /// landmarks existed have none of the last three. Animals, arrows and treks in progress are not saved.
 pub fn serialize_save(
@@ -130,8 +132,16 @@ pub fn serialize_save(
     }
     match world.landmarks.rainbow {
         RainbowState::Unseen => {}
-        RainbowState::Spent => out.push_str("rainbow spent\n"),
+        RainbowState::Spent => {
+            out.push_str("rainbow spent\n");
+            if let Some((x, y, z)) = world.landmarks.spent_gold {
+                out.push_str(&format!("rainbowend {x} {y} {z}\n"));
+            }
+        }
         RainbowState::Active(r) => out.push_str(&format!("rainbow {} {} {} {} {}\n", r.from.0, r.from.1, r.gold.0, r.gold.1, r.gold.2)),
+    }
+    if let Some(c) = world.landmarks.grand_castle {
+        out.push_str(&format!("grandcastle {} {}\n", c.x, c.z));
     }
     for (slot, stack) in inventory.slots.iter().enumerate() {
         if let Some(s) = stack {
@@ -210,6 +220,18 @@ pub fn parse_save(text: &str) -> SaveData {
                     if data.landmarks.rainbow != RainbowState::Spent {
                         data.landmarks.rainbow = RainbowState::Active(Rainbow { from: (*fx, *fz), gold: (*x, *y, *z) });
                     }
+                }
+            }
+            Some("rainbowend") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, y, z] = v[..] {
+                    data.landmarks.spent_gold = Some((x, y, z));
+                }
+            }
+            Some("grandcastle") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.grand_castle = Some(GrandCastle { x, z });
                 }
             }
             Some("berry") => {
@@ -446,6 +468,22 @@ mod tests {
         assert!(text.contains("rainbow spent"));
         assert_eq!(parse_save(&text).landmarks, world.landmarks);
         assert_eq!(parse_save("W\n1\n0 6 0 0 0\n").landmarks, Landmarks::default(), "older worlds have none");
+    }
+
+    #[test]
+    fn the_grand_castle_and_the_end_of_a_spent_rainbow_survive_a_save_round_trip() {
+        let mut world = World::new(3, HashSet::new());
+        world.landmarks.grand_castle = Some(GrandCastle { x: -150, z: 220 });
+        world.landmarks.rainbow = RainbowState::Spent;
+        world.landmarks.spent_gold = Some((30, 6, 12));
+        let text = serialize_save("W", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
+        assert!(text.contains("grandcastle -150 220") && text.contains("rainbowend 30 6 12"));
+        assert_eq!(parse_save(&text).landmarks, world.landmarks);
+        // A world saved before the end was kept is still spent, with nowhere to lead to.
+        let old = parse_save("W\n1\n0 6 0 0 0\nrainbow spent\n");
+        assert_eq!((old.landmarks.rainbow, old.landmarks.rainbow_end()), (RainbowState::Spent, None));
+        // Damaged lines are ignored.
+        assert_eq!(parse_save("W\n1\n0 6 0 0 0\ngrandcastle 1\nrainbowend a b c\n").landmarks, Landmarks::default());
     }
 
     #[test]

@@ -109,8 +109,13 @@ pub const LAKE_RADIUS: i32 = 130;
 /// Gap in blocks between the player and the near shore of a new lake. It is more than `GEN_RADIUS` chunks, so
 /// the lake appears beyond the edge of the generated land instead of in front of the player.
 pub const LAKE_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
-/// The island in the middle of a lake has this share of the lake's radius (about 39 blocks for a big lake).
-pub const LAKE_ISLAND_SHARE: f32 = 0.3;
+/// The island in the middle of a lake has this share of the lake's radius (about 58 blocks for a big lake).
+pub const LAKE_ISLAND_SHARE: f32 = 0.45;
+/// The island is a hill: it rises this many blocks above the plain to a flat top, which the small castle stands
+/// on. The top is a disc of this radius (the castle's corners reach 14 blocks); the slope runs from it down to the
+/// shore, gently enough to be climbed one block at a time.
+pub const ISLAND_HILL_HEIGHT: i32 = 18;
+pub const ISLAND_PLATEAU_RADIUS: f32 = 18.0;
 /// Half the width of the stretch of water that joins the river to the lake.
 pub const LAKE_CHANNEL_HALF_WIDTH: f32 = 2.5;
 /// Lakes are one block deep, like rivers.
@@ -126,6 +131,21 @@ pub const MOUNTAIN_RADIUS: i32 = 400;
 pub const MOUNTAIN_HEIGHT: i32 = 170;
 /// Gap in blocks between the player and the foot of a new mountain (see `LAKE_DISTANCE`).
 pub const MOUNTAIN_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
+/// A mountain is steeper in parts: its slope is broken by ledges, rings of cliff `MOUNTAIN_LEDGE_HEIGHT` blocks high
+/// (more than a jump clears) that run round it. Each ring has one gap, a ramp, and the gaps of one ring and the next
+/// lie on opposite sides of the mountain, so the climb zigzags and cannot be run straight up. A mountain has one
+/// ledge for every `MOUNTAIN_LEDGE_SPACING_HEIGHT` blocks of height, at most `MOUNTAIN_MAX_LEDGES`.
+pub const MOUNTAIN_LEDGE_HEIGHT: i32 = 2;
+pub const MOUNTAIN_MAX_LEDGES: i32 = 12;
+pub const MOUNTAIN_LEDGE_SPACING_HEIGHT: i32 = 14;
+/// Half the angle (radians) each gap in a ledge is wide, how far from the mountain's axis the gaps lie (alternately
+/// to one side and the other), and the angle over which a gap blends into the cliff.
+pub const MOUNTAIN_GAP_HALF_ANGLE: f32 = 0.20;
+pub const MOUNTAIN_GAP_OFFSET_ANGLE: f32 = 0.50;
+pub const MOUNTAIN_GAP_BLEND_ANGLE: f32 = 0.20;
+/// A ledge's face is this many blocks wide (a sheer cliff, so that no aliasing of the grid leaves a way up) and its ramp at most this many.
+pub const MOUNTAIN_CLIFF_WIDTH: f32 = 0.01;
+pub const MOUNTAIN_RAMP_WIDTH: f32 = 10.0;
 /// Ground this many blocks above the plain is covered in snow.
 pub const SNOW_LINE_RISE: i32 = 120;
 /// No trees grow where the ground is more than this many blocks above the plain (a pine is ten tall).
@@ -141,6 +161,30 @@ pub const CASTLE_REACH: i32 = 10;
 pub const CASTLE_HEIGHT: i32 = 11;
 /// No tree grows within this many blocks of the castle's outer edge.
 pub const CASTLE_TREE_MARGIN: i32 = 6;
+
+/// The grand castle: a large castle of grey stone with five floors, found by following the ghostly trail that a
+/// peep stone shows at night. These are the outer wall's half-width, the farthest any part reaches from the centre,
+/// the height of the tallest tower and the keep's half-width, and the clearing round it where no tree grows.
+pub const GRAND_WALL_HALF: i32 = 26;
+pub const GRAND_REACH: i32 = 30;
+pub const GRAND_HEIGHT: i32 = 27;
+pub const GRAND_KEEP_HALF: i32 = 11;
+pub const GRAND_TREE_MARGIN: i32 = 8;
+/// Blocks between floors of the keep, and how many floors it has.
+pub const GRAND_STOREY: i32 = 5;
+pub const GRAND_STOREYS: i32 = 5;
+/// The grand castle rises this far beyond the generated land (the nearest part is at least this far from the player).
+pub const GRAND_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
+
+/// The ghostly trail a peep stone shows: how far ahead of the player it is drawn, the gap between its wisps (blocks)
+/// and how high they float above the ground.
+pub const TRAIL_LENGTH: f32 = 70.0;
+pub const TRAIL_SPACING: f32 = 1.6;
+pub const TRAIL_HEIGHT: f32 = 1.1;
+
+/// Day turns to night, and night to day, behind a blackout of this many seconds in all: the screen fades to black,
+/// stays black while the sky changes, and fades back.
+pub const DAY_NIGHT_BLACKOUT_SECONDS: f32 = 1.0;
 
 /// Holding a peep stone shows a rainbow once. Its gold lies this far from the player (min, max), in blocks.
 pub const RAINBOW_GOLD_MIN_DISTANCE: f32 = 26.0;
@@ -286,6 +330,17 @@ pub const WILL_O_WHISP_BOB_AMPLITUDE: f32 = 0.18;
 pub const WILL_O_WHISP_BOB_SPEED: f32 = 2.4;
 /// Many more of them, and much more often, than there once were (4 at most, weight 20).
 pub const MAX_WILL_O_WHISP: usize = 12;
+/// A will-o-whisp is drawn to a player with a holly rod in the hotbar from this far away, and floats towards them
+/// at `WILL_O_WHISP_LURE_SPEED`. Once it is within `WILL_O_WHISP_BOND_DISTANCE` (five feet) it is bonded: it keeps
+/// near the player, circling at about `WILL_O_WHISP_ORBIT_RADIUS`, for as long as the rod stays in the hotbar,
+/// by night and by day. A bonded whisp more than `WILL_O_WHISP_TELEPORT_DISTANCE` away rejoins the player.
+pub const WILL_O_WHISP_ATTRACT_DISTANCE: f32 = 24.0;
+pub const WILL_O_WHISP_BOND_DISTANCE: f32 = 1.52;
+pub const WILL_O_WHISP_LURE_SPEED: f32 = 4.0;
+pub const WILL_O_WHISP_FOLLOW_SPEED: f32 = 11.0;
+pub const WILL_O_WHISP_ORBIT_RADIUS: f32 = 1.4;
+pub const WILL_O_WHISP_ORBIT_HEIGHT: f32 = 1.3;
+pub const WILL_O_WHISP_TELEPORT_DISTANCE: f32 = 40.0;
 pub const SPAWN_WEIGHT_WILL_O_WHISP: u64 = 100;
 
 // --- Rabbits, moose and stews -----------------------------------------------------------

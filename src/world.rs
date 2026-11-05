@@ -7,7 +7,7 @@ use crate::block::Block;
 use crate::chunk::{idx, Chunk};
 use crate::config::*;
 use crate::item::{Hearth, ItemKind};
-use crate::landmarks::{Landmarks, Lake, Mountain, Rainbow, RainbowState};
+use crate::landmarks::{GrandCastle, Landmarks, Lake, Mountain, Rainbow, RainbowState};
 use crate::terrain::{berry_bush_is_purple, generate_chunk_with, ground_top_with, is_wet_column};
 
 pub type Pos = (i32, i32, i32);
@@ -194,8 +194,18 @@ impl World {
         self.regenerate_landmark_chunks();
     }
 
-    /// Show the rainbow, or retire it for good once its gold has been taken.
+    /// Bring the grand castle into the world (see `add_lake`). A world has only one.
+    pub fn add_grand_castle(&mut self, castle: GrandCastle) {
+        self.landmarks.grand_castle = Some(castle);
+        self.regenerate_landmark_chunks();
+    }
+
+    /// Show the rainbow, or retire it for good once its gold has been taken (the place where the gold lay is kept,
+    /// so that a peep stone still leads there).
     pub fn set_rainbow(&mut self, state: RainbowState) {
+        if state == RainbowState::Spent {
+            self.landmarks.spent_gold = self.landmarks.rainbow_end().or(self.landmarks.spent_gold);
+        }
         self.landmarks.rainbow = state;
     }
 

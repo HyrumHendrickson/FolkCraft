@@ -6,7 +6,7 @@
 
 use macroquad::prelude::*;
 
-use crate::app::{App, Mode};
+use crate::app::App;
 use crate::config::*;
 use crate::recipe::RECIPES;
 use crate::ui::*;
@@ -43,6 +43,7 @@ pub fn help_lines() -> Vec<Line> {
         item("Left mouse: hold it on a block to break it, or click to swing an axe or shoot a bow. A bar shows how far along the break is."),
         item("Right mouse: place the item you hold, eat it, or work a fire (see below)."),
         item("1 to 9 or the mouse wheel: choose what you hold from the hotbar. E: open the inventory. Esc: close it, or save and return to the menu."),
+        item("F1: open this help in the middle of a game (the game waits). F1 or Esc closes it. Here, scroll with the mouse wheel, the arrow keys, Page Up and Page Down, Home and End, or by dragging the bar at the right."),
         item("Inventory: drag a stack onto another slot to move or merge it. The panel on the right lists everything you can make right now; click one to make it."),
         item("Dev mode: when you create a world you can choose Dev mode instead of Normal. The game is the same, except that in the inventory you can scroll the list on the right past the recipes to a list of every item; click one to add it, right click to add a stack."),
         heading("Staying alive"),
@@ -54,22 +55,30 @@ pub fn help_lines() -> Vec<Line> {
         heading("The land"),
         item("The world is forest, with clearings full of grass, flowers and berry bushes, broad gentle hills and valleys, and winding rivers. Lakes and mountains are not found by chance: see Exploring."),
         item(format!("At most {MAX_DROPPED_ITEMS} items can lie on the ground at once. Beyond that the oldest ones disappear, so pick up what you want to keep, and do not leave things lying about.")),
-        item("The ground cannot be dug. You can walk up any one-block step by jumping, which is how you climb a hill or a mountain."),
+        item("The ground cannot be dug. You can walk up any one-block step by jumping, which is how you climb a hill. A step of two blocks is a cliff: you cannot jump it, so go round it."),
         item("Rivers are one block deep: wade straight through them, and jump to climb out the other side. Look down at the river bed to see what lies on it."),
         heading("Exploring"),
         text("Three things reward you for going out and looking. None is found by chance: each comes from doing something, and each is explained here step by step."),
         item(format!(
-            "Lake, island and castle. Step into a river and wade along it, without leaving the water, until you are {LAKE_TREK_CHUNKS} chunks ({} blocks) from where you entered, counting along either direction. Jumping while you wade is fine; stepping out onto the bank starts you over. A very large lake then appears ahead, about {} blocks across, still only one block deep, joined to your river by a channel of water. Keep wading to reach it. In the middle of the lake is a large island with forest on it, and in the middle of the island stands a small castle of grey stone. Its outer wall has a gate on the south side, and inside is a keep with a door on its south side. Castle stone cannot be broken. Lakes are made again each time you make the walk.",
+            "Lake, island and castle. Step into a river and wade along it, without leaving the water, until you are {LAKE_TREK_CHUNKS} chunks ({} blocks) from where you entered, counting along either direction. Jumping while you wade is fine; stepping out onto the bank starts you over. A very large lake then appears ahead, about {} blocks across, still only one block deep, joined to your river by a channel of water. Keep wading to reach it. In the middle of the lake is a large island: a hill with a flat top, {ISLAND_HILL_HEIGHT} blocks high, with forest on its lower slopes. Every step of the slope can be jumped, so climb it anywhere. On the flat top stands a small castle of grey stone. Its outer wall has a gate on the south side, and inside is a keep with a door on its south side. Castle stone cannot be broken. Lakes are made again each time you make the walk.",
             LAKE_TREK_CHUNKS * CHUNK_SIZE,
             LAKE_RADIUS * 2
         )),
         item(format!(
-            "Mountain. Hold a Compass: a dial appears in the top right with a red needle that points north, and it turns as you turn. Walk north, the way the needle points, for {COMPASS_TREK_CHUNKS} chunks ({} blocks): the dial counts your progress. Putting the compass away starts the count over, and walking south takes progress back. A mountain then rises ahead, {MOUNTAIN_HEIGHT} blocks tall and several hundred blocks wide. You can climb it one block at a time by jumping, so keep jumping uphill, and bring food, since it is a long climb. Trees stop a little way up, then the slope is bare rock, and from {SNOW_LINE_RISE} blocks up the ground is snow. Snow cannot be mined yet.",
+            "Mountain. Hold a Compass: a dial appears in the top right with a red needle that points north, and it turns as you turn. Walk north, the way the needle points, for {COMPASS_TREK_CHUNKS} chunks ({} blocks): the dial counts your progress. Putting the compass away starts the count over, and walking south takes progress back. A mountain then rises ahead, {MOUNTAIN_HEIGHT} blocks tall and several hundred blocks wide. Its slope is broken by {MOUNTAIN_MAX_LEDGES} rings of cliff, each {MOUNTAIN_LEDGE_HEIGHT} blocks high, which no jump can clear. Each ring has one gap, a ramp, and the gaps lie on alternate sides of the mountain, so you cannot run straight up: zigzag from one gap to the next, jumping the one-block steps between them, and bring food, since it is a long climb. Trees stop a little way up, then the slope is bare rock, and from {SNOW_LINE_RISE} blocks up the ground is snow. Snow cannot be mined yet.",
             COMPASS_TREK_CHUNKS * CHUNK_SIZE
         )),
         item(format!(
-            "Rainbow. Hold a Peep Stone. A rainbow appears nearby, rising beside you and coming down on a pile of gold about {} to {} blocks away. It shows only while the Peep Stone is in your hand, so keep it there and walk towards the end of the rainbow. Hold left mouse on the pile to take {RAINBOW_GOLD_DROP} gold. There is only one rainbow in a world: once its gold is taken you will never see another.",
+            "Rainbow. Hold a Peep Stone. A rainbow appears nearby, rising beside you and coming down on a pile of gold about {} to {} blocks away. It shows only while the Peep Stone is in your hand, and only by day, so keep it there and walk towards the end of the rainbow. The rainbow is built of translucent blocks. Hold left mouse on the pile to take {RAINBOW_GOLD_DROP} gold. There is only one rainbow in a world: once its gold is taken you will never see another.",
             RAINBOW_GOLD_MIN_DISTANCE as i32, RAINBOW_GOLD_MAX_DISTANCE as i32
+        )),
+        item(format!(
+            "Ghostly trail. Hold a Peep Stone and faint lights float over the ground ahead of you, drifting towards the place it points to, for up to {} blocks at a time. By day the trail leads to the end of the rainbow, and it keeps leading there even after the gold has been taken. At night it leads to the grand castle.",
+            TRAIL_LENGTH as i32
+        )),
+        item(format!(
+            "Grand castle. Hold a Peep Stone at night. The first time you do so in a world, a grand castle rises somewhere beyond the edge of the land, at least {GRAND_DISTANCE} blocks away, and a ghostly trail leads towards it. It is a great castle of grey stone, about {} blocks across: an outer wall with towers and a gate on the south side, and in the middle a keep of {GRAND_STOREYS} floors with a door on its south side, windows, a stair from each floor to the next, and a roof to walk on. The trail leads to the gate and then to the door of the keep. There is only one grand castle in a world. Castle stone cannot be broken.",
+            GRAND_REACH * 2 + 1
         )),
         item("Getting a Peep Stone: kill a rabbit (one in four drops a Rabbit Foot), keep the foot anywhere in your hotbar, and break pebbles by hand. Each has a chance to add a Peep Stone."),
         item("Getting a Compass: with the Rabbit Foot in your hotbar, break stones by hand until one drops a Loadstone. Break a boulder with a Bronze Mallet for iron ore. A Loadstone and an Iron Ore make a Compass in the inventory."),
@@ -77,7 +86,7 @@ pub fn help_lines() -> Vec<Line> {
         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
         item("Stones and pebbles lie on the ground everywhere, and on the river bed under the water. Hold left mouse on one to pick it up."),
-        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, boulders a {}% chance to drop Gold Ore, pebbles a {}% chance to add a Peep Stone, and leaves or pine needles a {}% chance to add a Holly Rod. Holly Rods do nothing yet. Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass. See \"Exploring\" below for the Peep Stone and the Compass.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE, RABBIT_FOOT_PEEP_STONE_CHANCE, RABBIT_FOOT_HOLLY_ROD_CHANCE)),
+        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, boulders a {}% chance to drop Gold Ore, pebbles a {}% chance to add a Peep Stone, and leaves or pine needles a {}% chance to add a Holly Rod (see Will-o-whisps below). Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass. See \"Exploring\" below for the Peep Stone and the Compass.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE, RABBIT_FOOT_PEEP_STONE_CHANCE, RABBIT_FOOT_HOLLY_ROD_CHANCE)),
         item(format!("Clay lies on the river bed. Hold left mouse on a lump to dig {CLAY_DROP} clay out of it. Clay makes a clay forge.")),
         item(format!(
             "Boulders are big grey rocks, a little wider than a block, scattered on the ground (more on hills). Only a Bronze Mallet breaks one: hold left mouse on it for {} seconds. It drops a stone, a pebble and {BOULDER_IRON_MIN} to {BOULDER_IRON_MAX} iron ore.",
@@ -126,6 +135,12 @@ pub fn help_lines() -> Vec<Line> {
             STEW_SECONDS as i32
         )),
         item(format!("A stew restores {STEW_HEAL_FACTOR} times as much life as the same meat cooked: right click it to eat it when you are hurt. Cooked rabbit gives {RABBIT_MEAT_HEAL} and cooked moose {MOOSE_MEAT_HEAL}.")),
+        heading("Day and night"),
+        item(format!(
+            "Right click Purple Berry Stew to drink it: it hurts you ({PURPLE_BERRY_STEW_DAMAGE} hearts) and turns the day to night. Right click Red Berry Stew to drink it: it heals you ({BERRY_STEW_HEAL} hearts) and turns the night to day. The screen goes black for about {} second while the sky changes.",
+            DAY_NIGHT_BLACKOUT_SECONDS as i32
+        )),
+        item("Berry bushes change colour with the sky: red berries by day are purple by night, and the other way round. Will-o-whisps appear only at night, and the rainbow only by day."),
         heading("Animals and hunting"),
         item(format!(
             "Deer ({DEER_HEALTH} health) and quail ({QUAIL_HEALTH} health) run or fly away from you, and from bears. Deer are faster than you even when you sprint."
@@ -148,7 +163,11 @@ pub fn help_lines() -> Vec<Line> {
             MOOSE_GIVE_UP_DISTANCE as i32
         )),
         item(format!(
-            "Will-o-whisps appear at night, and in numbers (up to {MAX_WILL_O_WHISP} at once). They are pale, see-through, ghostly things with a glowing heart, two dark eyes and a thin tail, and they float above the ground. They flee at {WILL_O_WHISP_FLEE_SPEED} blocks per second when you come within {WILL_O_WHISP_FLEE_DISTANCE} blocks. They have no attacks or drops yet."
+            "Will-o-whisps appear at night, and in numbers (up to {MAX_WILL_O_WHISP} at once). They are pale, see-through, ghostly things with a glowing heart, two dark eyes and a thin tail, and they float above the ground. They flee at {WILL_O_WHISP_FLEE_SPEED} blocks per second when you come within {WILL_O_WHISP_FLEE_DISTANCE} blocks. They have no attacks or drops."
+        )),
+        item(format!(
+            "Holly Rod and will-o-whisps. Keep a Holly Rod anywhere in your hotbar (you need not hold it) and every will-o-whisp within {} blocks floats towards you instead of fleeing. One that comes within five feet of you stays near you and follows you wherever you go, circling you, for as long as the rod stays in the hotbar. When you drink Red Berry Stew to make it day, those whisps come with you and follow you by day too. Take the rod out of the hotbar and they let go: they flee again, and by day they fade away.",
+            WILL_O_WHISP_ATTRACT_DISTANCE as i32
         )),
         item("A blow throws the animal back, and a blow that hurts you (or a burn) throws you back, so you can see when something lands."),
         item("An arrow that hits an animal is used up. An arrow that misses lands on the ground: walk over it to pick it up again. Feathers are what you need to make more."),
@@ -254,18 +273,32 @@ pub fn help_screen(app: &mut App) {
     let (rows, total) = layout(&help_lines(), content_w, &measure);
     let view = bottom - top;
     let max_scroll = (total - view + 20.0).max(0.0);
-    let mut scroll = app.help_scroll - mouse_wheel().1 * 40.0;
+    // The wheel is counted in notches (see `wheel_notches`), a few lines each.
+    let mut scroll = app.help_scroll - wheel_notches() * 3.0 * ROW_HEIGHT;
     if is_key_down(KeyCode::Down) {
         scroll += 600.0 * get_frame_time();
     }
     if is_key_down(KeyCode::Up) {
         scroll -= 600.0 * get_frame_time();
     }
-    if is_key_pressed(KeyCode::PageDown) {
+    if is_key_pressed(KeyCode::PageDown) || is_key_pressed(KeyCode::Space) {
         scroll += view * 0.9;
     }
     if is_key_pressed(KeyCode::PageUp) {
         scroll -= view * 0.9;
+    }
+    if is_key_pressed(KeyCode::Home) {
+        scroll = 0.0;
+    }
+    if is_key_pressed(KeyCode::End) {
+        scroll = max_scroll;
+    }
+    // Dragging the scroll bar with the mouse.
+    if max_scroll > 0.0 && is_mouse_button_down(MouseButton::Left) {
+        let (mx, my) = mouse_position();
+        if mx >= w - 30.0 && my >= top && my <= bottom {
+            scroll = ((my - top) / view * (total + 20.0) - view / 2.0).clamp(0.0, max_scroll);
+        }
     }
     app.help_scroll = scroll.clamp(0.0, max_scroll);
 
@@ -301,8 +334,8 @@ pub fn help_screen(app: &mut App) {
         draw_rectangle(w - 16.0, bar_y, 6.0, bar_h, Color::new(0.45, 0.75, 0.40, 0.6));
     }
     let back = button(Rect::new(w / 2.0 - 110.0, h - 84.0, 220.0, 56.0), "Back", true);
-    if back || is_key_pressed(KeyCode::Escape) {
-        app.mode = Mode::Worlds;
+    if back || is_key_pressed(KeyCode::Escape) || (app.help_from_game && is_key_pressed(KeyCode::F1)) {
+        app.close_help();
     }
 }
 
@@ -400,6 +433,36 @@ mod tests {
             assert!(t.contains(part.as_str()), "the help says {part:?}");
         }
         assert!(!t.contains("Peep Stones and Holly Rods do nothing yet") && !t.contains("Compass, which does nothing yet"), "stale text is gone");
+    }
+
+    #[test]
+    fn the_help_covers_the_newer_parts_of_the_game() {
+        let t = all_text();
+        for part in [
+            "F1: open this help",
+            "a hill with a flat top",
+            "rings of cliff",
+            "zigzag",
+            "Ghostly trail.",
+            "even after the gold has been taken",
+            "Grand castle.",
+            "Holly Rod and will-o-whisps.",
+            "within five feet",
+            "follow you by day too",
+            "Day and night",
+            "goes black",
+            "only by day",
+        ] {
+            assert!(t.contains(part), "the help says {part:?}");
+        }
+        assert!(!t.contains("Holly Rods do nothing yet") && !t.contains("keep jumping uphill"), "stale text is gone");
+        assert!(help_lines().contains(&Line::Heading("Day and night".into())));
+    }
+
+    #[test]
+    fn the_help_is_long_enough_to_need_scrolling() {
+        let (rows, total) = layout(&help_lines(), 860.0, &ten_per_char);
+        assert!(rows.len() > 150 && total > 3000.0, "{} rows, {total} px", rows.len());
     }
 
     #[test]

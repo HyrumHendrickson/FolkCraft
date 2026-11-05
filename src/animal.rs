@@ -220,6 +220,14 @@ pub struct Animal {
     pub knock: Vec3,
     /// A moose that has been hurt: it chases the player until `MOOSE_GIVE_UP_DISTANCE` lies between them.
     pub enraged: bool,
+    /// Set every frame for a will-o-whisp: where the player stands (feet) if they have a holly rod in the hotbar,
+    /// which draws whisps to them, and `None` otherwise.
+    pub lure: Option<Vec3>,
+    /// A will-o-whisp that has come within `WILL_O_WHISP_BOND_DISTANCE` of a player with a holly rod. It follows them,
+    /// day or night, until the rod leaves the hotbar.
+    pub bonded: bool,
+    /// Where on its circle round the player a bonded whisp floats (radians), different for each.
+    orbit: f32,
 }
 
 /// What a body bumped into during one step.
@@ -295,7 +303,12 @@ impl Animal {
             attack_cooldown: 0.0,
             knock: Vec3::ZERO,
             enraged: false,
+            lure: None,
+            bonded: false,
+            orbit: 0.0,
         };
+        // Taken from the random heading, so that each whisp has its own place on the circle.
+        a.orbit = a.heading * 1.7;
         a.rest(rng);
         a
     }
@@ -375,6 +388,46 @@ impl Animal {
         true
     }
 
+    /// Whether a will-o-whisp is drawn to the player who holds a holly rod in their hotbar: it is once it is bonded,
+    /// and before that when the player is within `WILL_O_WHISP_ATTRACT_DISTANCE`.
+    fn drawn_to_lure(&self) -> bool {
+        match self.lure {
+            Some(player) => self.bonded || (self.pos - player).length() <= WILL_O_WHISP_ATTRACT_DISTANCE,
+            None => false,
+        }
+    }
+
+    /// Float a will-o-whisp that is drawn to the player (feet at `player`) on by `dt` seconds. It drifts towards them,
+    /// and once within `WILL_O_WHISP_BOND_DISTANCE` it bonds: from then on it circles the player at about
+    /// `WILL_O_WHISP_ORBIT_RADIUS`, keeping up however fast they run.
+    fn float_to(&mut self, player: Vec3, dt: f32) {
+        let centre = player + vec3(0.0, 1.0, 0.0);
+        if !self.bonded && (centre - self.pos).length() <= WILL_O_WHISP_BOND_DISTANCE {
+            self.bonded = true;
+        }
+        self.phase += dt * WILL_O_WHISP_BOB_SPEED;
+        let before = self.pos;
+        if self.bonded {
+            let around = self.phase * 0.35 + self.orbit;
+            let bob = 0.15 * self.phase.sin();
+            let goal = player + vec3(around.cos() * WILL_O_WHISP_ORBIT_RADIUS, WILL_O_WHISP_ORBIT_HEIGHT + bob, around.sin() * WILL_O_WHISP_ORBIT_RADIUS);
+            let gap = goal - self.pos;
+            let speed = (gap.length() * 5.0).min(WILL_O_WHISP_FOLLOW_SPEED);
+            self.pos += gap.normalize_or_zero() * (speed * dt).min(gap.length());
+        } else {
+            let gap = centre - self.pos;
+            self.pos += gap.normalize_or_zero() * (WILL_O_WHISP_LURE_SPEED * dt).min(gap.length());
+        }
+        let moved = self.pos - before;
+        if moved.x.abs() + moved.z.abs() > 1e-4 {
+            self.heading = moved.z.atan2(moved.x);
+        }
+        self.vel = moved / dt.max(1e-4);
+        // Should the rod leave the hotbar, the whisp floats on from here.
+        self.launch_y = self.pos.y - self.phase.sin() * WILL_O_WHISP_BOB_AMPLITUDE;
+        self.on_ground = false;
+    }
+
     /// Advance the animal by `dt` seconds. `threat` is the point (feet) it reacts to: the player for a bear;
     /// for deer and quail the nearer of the player and any bear.
     /// Returns an item the animal dropped on this frame: the feather of a quail that just took off.
@@ -442,7 +495,13 @@ impl Animal {
                 }
             }
             AnimalKind::WillOWhisp => {
-                if flat_gap < WILL_O_WHISP_FLEE_DISTANCE {
+                if self.lure.is_none() {
+                    self.bonded = false;
+                }
+                if self.drawn_to_lure() {
+                    // Drawn to the holly rod: no fleeing (see `float_to`).
+                    self.mode = Mode::Idle;
+                } else if flat_gap < WILL_O_WHISP_FLEE_DISTANCE {
                     self.mode = Mode::Flee;
                     if flat_gap > 1e-3 {
                         self.heading = away;
@@ -469,6 +528,10 @@ impl Animal {
         }
 
         if self.kind == AnimalKind::WillOWhisp {
+            if let (true, Some(player)) = (self.drawn_to_lure(), self.lure) {
+                self.float_to(player, dt);
+                return dropped;
+            }
             let speed = if self.mode == Mode::Flee { WILL_O_WHISP_FLEE_SPEED } else { 0.0 };
             self.vel = vec3(self.heading.cos() * speed, 0.0, self.heading.sin() * speed);
             self.pos.x += self.vel.x * dt;

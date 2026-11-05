@@ -111,9 +111,10 @@ pub const RAINBOW_COLORS: [(f32, f32, f32); 7] = [
     (0.30, 0.24, 0.78),
     (0.60, 0.28, 0.82),
 ];
-/// Pieces each band of the arc is cut into, and how wide a band is, in blocks.
-const RAINBOW_SEGMENTS: usize = 36;
-const RAINBOW_BAND_WIDTH: f32 = 0.8;
+/// Pieces the arc is sampled in, to find the blocks it passes through (fine enough that no block is skipped).
+const RAINBOW_SAMPLES: usize = 160;
+/// How thick the arc is, in blocks, from its red outer edge to its violet inner one: one block to a band.
+const RAINBOW_BAND_BLOCKS: i32 = 7;
 
 /// The point of the rainbow's arc a share `t` (0 to 1) of the way from `from` to `to`: the straight line between
 /// the ends, lifted by a parabola that is `RAINBOW_ARC_RATIO` of the span high at the middle.
@@ -122,57 +123,159 @@ pub fn rainbow_point(from: Vec3, to: Vec3, t: f32) -> Vec3 {
     from + (to - from) * t + Vec3::Y * (RAINBOW_ARC_RATIO * span * 4.0 * t * (1.0 - t))
 }
 
-/// One flat piece of one band of the rainbow: its four corners, and the band it belongs to (0 is the red one).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RainbowQuad {
-    pub corners: [Vec3; 4],
+/// One block of the rainbow: the cell it fills (its lowest corner) and the band it belongs to (0 is the red one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RainbowBlock {
+    pub cell: (i32, i32, i32),
     pub band: usize,
 }
 
-/// The pieces the rainbow from `from` to `to` is drawn from: seven bands side by side across the arc, red on the
-/// outside, each cut into `RAINBOW_SEGMENTS` pieces. Plain geometry; `draw_rainbow` puts it on the screen.
-pub fn rainbow_quads(from: Vec3, to: Vec3) -> Vec<RainbowQuad> {
+/// The blocks the rainbow from `from` to `to` is built of: the arc is lifted into a stack of seven bands, red on the
+/// outside and violet on the inside, one block thick each, and every band is the cells that its curve passes through.
+/// A cell is in one band only (the outer band wins where two overlap), and a rainbow with both ends in one column
+/// does not break. Plain geometry; `draw_rainbow` puts it on the screen.
+pub fn rainbow_blocks(from: Vec3, to: Vec3) -> Vec<RainbowBlock> {
     let chord = vec3(to.x - from.x, 0.0, to.z - from.z);
     // Horizontal, across the arc: the arc lies in the vertical plane through its ends.
     let across = Vec3::Y.cross(chord).try_normalize().unwrap_or(Vec3::X);
-    let mut quads = Vec::with_capacity(RAINBOW_COLORS.len() * RAINBOW_SEGMENTS);
-    // The point of the arc, and the direction pointing outwards from the arc's curve, at a share `t` of the way.
-    let frame = |t: f32| {
-        let step = 1e-3;
-        let tangent = (rainbow_point(from, to, (t + step).min(1.0)) - rainbow_point(from, to, (t - step).max(0.0))).normalize_or_zero();
-        (rainbow_point(from, to, t), tangent.cross(across).normalize_or_zero())
-    };
+    let mut taken: std::collections::HashSet<(i32, i32, i32)> = std::collections::HashSet::new();
+    let mut blocks = Vec::new();
     for band in 0..RAINBOW_COLORS.len() {
-        let centre = (RAINBOW_COLORS.len() as f32 / 2.0 - 0.5 - band as f32) * RAINBOW_BAND_WIDTH;
-        let (inner, outer) = (centre - RAINBOW_BAND_WIDTH / 2.0, centre + RAINBOW_BAND_WIDTH / 2.0);
-        for i in 0..RAINBOW_SEGMENTS {
-            let ((p0, n0), (p1, n1)) = (frame(i as f32 / RAINBOW_SEGMENTS as f32), frame((i + 1) as f32 / RAINBOW_SEGMENTS as f32));
-            quads.push(RainbowQuad { corners: [p0 + n0 * inner, p1 + n1 * inner, p1 + n1 * outer, p0 + n0 * outer], band });
+        let inward = band as i32 - (RAINBOW_BAND_BLOCKS - 1) / 2;
+        for i in 0..=RAINBOW_SAMPLES {
+            let t = i as f32 / RAINBOW_SAMPLES as f32;
+            let step = 1e-3;
+            let tangent = (rainbow_point(from, to, (t + step).min(1.0)) - rainbow_point(from, to, (t - step).max(0.0))).normalize_or_zero();
+            let outwards = tangent.cross(across).normalize_or_zero();
+            // The band lies `inward` blocks towards the middle of the curve from the line of the arc.
+            let spot = rainbow_point(from, to, t) - outwards * inward as f32;
+            let cell = (spot.x.floor() as i32, spot.y.floor() as i32, spot.z.floor() as i32);
+            if taken.insert(cell) {
+                blocks.push(RainbowBlock { cell, band });
+            }
         }
     }
-    quads
+    blocks
 }
 
-/// Draw the rainbow, a translucent shimmering arc from beside the player to the pile of gold. Both faces of every
-/// piece are drawn, so it shows from either side. Call while the 3D camera is active, after the water.
+/// Draw the rainbow, a translucent shimmering arch of blocks from beside the player to the pile of gold. Faces
+/// that two blocks of the rainbow share are left out, so it shows as a clean, blocky arch; every other face is drawn
+/// from both sides. Call while the 3D camera is active, after the water.
 pub fn draw_rainbow(world: &World, rainbow: &Rainbow, time: f32) {
     let ground = |x: i32, z: i32| world.ground_top(x, z) as f32 + 1.0;
     let from = vec3(rainbow.from.0 as f32 + 0.5, ground(rainbow.from.0, rainbow.from.1), rainbow.from.1 as f32 + 0.5);
     let (gx, gy, gz) = rainbow.gold;
     let to = vec3(gx as f32 + 0.5, gy as f32 + 0.3, gz as f32 + 0.5);
-    let mut vertices = Vec::new();
+    let blocks = rainbow_blocks(from, to);
+    let filled: std::collections::HashSet<(i32, i32, i32)> = blocks.iter().map(|b| b.cell).collect();
+    // The neighbour each face looks at, and the corners of the face (unit cube).
+    const FACES: [((i32, i32, i32), [(f32, f32, f32); 4]); 6] = [
+        ((1, 0, 0), [(1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (1.0, 1.0, 1.0), (1.0, 0.0, 1.0)]),
+        ((-1, 0, 0), [(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 1.0), (0.0, 1.0, 0.0)]),
+        ((0, 1, 0), [(0.0, 1.0, 0.0), (0.0, 1.0, 1.0), (1.0, 1.0, 1.0), (1.0, 1.0, 0.0)]),
+        ((0, -1, 0), [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 1.0), (0.0, 0.0, 1.0)]),
+        ((0, 0, 1), [(0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (1.0, 1.0, 1.0), (0.0, 1.0, 1.0)]),
+        ((0, 0, -1), [(0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (1.0, 1.0, 0.0), (1.0, 0.0, 0.0)]),
+    ];
+    let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
-    for quad in rainbow_quads(from, to) {
-        let (r, g, b) = RAINBOW_COLORS[quad.band];
-        let alpha = 0.50 + 0.10 * (time * 1.7 + quad.band as f32 * 0.6).sin();
-        let base = vertices.len() as u16;
-        for corner in quad.corners {
-            vertices.push(Vertex::new(corner.x, corner.y, corner.z, 0.0, 0.0, Color::new(r, g, b, alpha)));
+    let flush = |vertices: &mut Vec<Vertex>, indices: &mut Vec<u16>| {
+        if !vertices.is_empty() {
+            draw_mesh(&Mesh { vertices: std::mem::take(vertices), indices: std::mem::take(indices), texture: None });
         }
-        // Both windings, so neither side is culled.
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3, base + 2, base + 1, base, base + 3, base + 2, base]);
+    };
+    for block in &blocks {
+        let (r, g, b) = RAINBOW_COLORS[block.band];
+        let alpha = 0.42 + 0.10 * (time * 1.7 + block.band as f32 * 0.6).sin();
+        let (cx, cy, cz) = block.cell;
+        for &((nx, ny, nz), corners) in FACES.iter() {
+            if filled.contains(&(cx + nx, cy + ny, cz + nz)) {
+                continue;
+            }
+            // A little shading by direction, so the blocks read as blocks.
+            let shade = match (nx, ny, nz) {
+                (0, 1, 0) => 1.0,
+                (0, -1, 0) => 0.7,
+                (_, 0, 0) => 0.85,
+                _ => 0.92,
+            };
+            if vertices.len() + 4 > MAX_QUADS_PER_MESH * 4 {
+                flush(&mut vertices, &mut indices);
+            }
+            let base = vertices.len() as u16;
+            for (ox, oy, oz) in corners {
+                vertices.push(Vertex::new(cx as f32 + ox, cy as f32 + oy, cz as f32 + oz, 0.0, 0.0, Color::new(r * shade, g * shade, b * shade, alpha)));
+            }
+            // Both windings, so neither side is culled.
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3, base + 2, base + 1, base, base + 3, base + 2, base]);
+        }
     }
-    draw_mesh(&Mesh { vertices, indices, texture: None });
+    flush(&mut vertices, &mut indices);
+}
+
+/// One wisp of the ghostly trail: where it floats (x, z), how far along the path it is (blocks from the player),
+/// how visible it is (0 to 1, fading with distance) and how brightly it pulses (0 to 1, the pulses running along
+/// the trail towards its end).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TrailWisp {
+    pub x: f32,
+    pub z: f32,
+    pub along: f32,
+    pub fade: f32,
+    pub pulse: f32,
+}
+
+/// Blocks from the player where the trail begins, so that it does not crowd the screen.
+const TRAIL_START: f32 = 2.5;
+
+/// The wisps of a ghostly trail along `path` (corners (x, z), the first under the player): one every `spacing` blocks
+/// from `TRAIL_START` to `length` blocks along it, or to its end if that is nearer, each swaying a little from side
+/// to side. Plain geometry; `draw_trail` puts it on the screen.
+pub fn trail_wisps(path: &[(f32, f32)], length: f32, spacing: f32, time: f32) -> Vec<TrailWisp> {
+    let mut wisps = Vec::new();
+    let mut walked = 0.0;
+    let mut next = TRAIL_START;
+    for pair in path.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+        let leg = (dx * dx + dz * dz).sqrt();
+        if leg < 1e-3 {
+            continue;
+        }
+        let (ux, uz) = (dx / leg, dz / leg);
+        while next <= walked + leg && next <= length {
+            let t = next - walked;
+            let sway = (next * 0.55 + time * 1.3).sin() * 0.35;
+            wisps.push(TrailWisp {
+                x: a.0 + ux * t - uz * sway,
+                z: a.1 + uz * t + ux * sway,
+                along: next,
+                fade: (1.0 - next / length).clamp(0.0, 1.0).sqrt(),
+                pulse: 0.5 + 0.5 * (next * 0.6 - time * 3.0).sin(),
+            });
+            next += spacing;
+        }
+        walked += leg;
+        if next > length {
+            break;
+        }
+    }
+    wisps
+}
+
+/// Draw the ghostly trail of a peep stone: faint, drifting, pulsing lights floating over the ground along `path`, pale
+/// blue at night and pale gold by day. Call while the 3D camera is active, with the other translucent things.
+pub fn draw_trail(world: &World, path: &[(f32, f32)], night: bool, time: f32) {
+    let (r, g, b) = if night { (0.70, 0.86, 1.0) } else { (1.0, 0.92, 0.62) };
+    for wisp in trail_wisps(path, TRAIL_LENGTH, TRAIL_SPACING, time) {
+        let ground = world.ground_top(wisp.x.floor() as i32, wisp.z.floor() as i32).max(GROUND_TOP) as f32 + 1.0;
+        let y = ground + TRAIL_HEIGHT + 0.12 * (time * 2.0 + wisp.along).sin();
+        let alpha = wisp.fade * (0.22 + 0.5 * wisp.pulse);
+        let size = 0.09 + 0.07 * wisp.pulse;
+        draw_box(vec3(wisp.x, y, wisp.z), vec3(size, size, size), time + wisp.along, Color::new(r, g, b, alpha));
+        // A fainter, taller streak under each wisp, like a tail of mist.
+        draw_box(vec3(wisp.x, y - 0.35, wisp.z), vec3(size * 0.5, 0.28, size * 0.5), 0.0, Color::new(r, g, b, alpha * 0.35));
+    }
 }
 
 #[cfg(test)]
@@ -191,33 +294,61 @@ mod tests {
     }
 
     #[test]
-    fn the_rainbow_has_seven_bands_of_equal_pieces_that_follow_the_arc() {
+    fn the_rainbow_is_a_blocky_arch_of_seven_colours_each_block_in_one_band() {
         let (from, to) = (vec3(0.0, 6.0, 0.0), vec3(30.0, 6.0, 0.0));
-        let quads = rainbow_quads(from, to);
-        assert_eq!(quads.len(), 7 * RAINBOW_SEGMENTS);
-        assert!(quads.len() * 2 <= MAX_QUADS_PER_MESH, "drawn both sides in one mesh");
+        let blocks = rainbow_blocks(from, to);
+        let cells: std::collections::HashSet<_> = blocks.iter().map(|b| b.cell).collect();
+        assert_eq!(cells.len(), blocks.len(), "no block twice");
         for band in 0..7 {
-            assert_eq!(quads.iter().filter(|q| q.band == band).count(), RAINBOW_SEGMENTS);
+            assert!(blocks.iter().filter(|b| b.band == band).count() > 15, "band {band} is a long run of blocks");
         }
-        // At the top of the arc the red band is the highest and the violet one the lowest.
-        let top = |band: usize| {
-            quads.iter().filter(|q| q.band == band).map(|q| q.corners.iter().map(|c| c.y).fold(f32::MIN, f32::max)).fold(f32::MIN, f32::max)
-        };
-        assert!(top(0) > top(3) && top(3) > top(6), "{} {} {}", top(0), top(3), top(6));
-        // Every piece is a real quadrilateral, and the arc reaches (nearly) down to the ground at both ends.
-        for q in &quads {
-            assert!(q.corners.iter().all(|c| c.is_finite()));
-            assert!((q.corners[0] - q.corners[3]).length() > 0.5, "a band is wide");
+        // Every block is on the grid, and the arch is joined up: each block touches another by a face or an edge.
+        for b in &blocks {
+            let near = |dx: i32, dy: i32, dz: i32| cells.contains(&(b.cell.0 + dx, b.cell.1 + dy, b.cell.2 + dz));
+            let joined = (-1..=1).any(|dx| (-1..=1).any(|dy| (-1..=1).any(|dz| (dx, dy, dz) != (0, 0, 0) && near(dx, dy, dz))));
+            assert!(joined, "{b:?} stands alone");
         }
-        let lowest = quads.iter().flat_map(|q| q.corners).map(|c| c.y).fold(f32::MAX, f32::min);
-        assert!(lowest < from.y + 4.0, "the arc comes down to the ground, lowest point {lowest}");
-        let highest = quads.iter().flat_map(|q| q.corners).map(|c| c.y).fold(f32::MIN, f32::max);
-        assert!(highest > from.y + RAINBOW_ARC_RATIO * 30.0, "and is tall: {highest}");
+        // It rises from the ground at both ends to a high crown in the middle, a number of blocks thick.
+        let top = blocks.iter().map(|b| b.cell.1).max().unwrap();
+        let lowest = blocks.iter().map(|b| b.cell.1).min().unwrap();
+        assert!(top as f32 > from.y + RAINBOW_ARC_RATIO * 30.0 * 0.9, "tall: {top}");
+        assert!(lowest as f32 <= from.y + 1.0, "it comes down to the ground: {lowest}");
+        let crown: Vec<_> = blocks.iter().filter(|b| (b.cell.0 - 15).abs() <= 1).collect();
+        assert!(crown.iter().map(|b| b.cell.1).max().unwrap() - crown.iter().map(|b| b.cell.1).min().unwrap() >= 5, "several blocks thick at the crown");
+        // The red band is on the outside, the violet on the inside.
+        let band_top = |band: usize| crown.iter().filter(|b| b.band == band).map(|b| b.cell.1).max();
+        assert!(band_top(0) > band_top(6), "red above violet: {:?} {:?}", band_top(0), band_top(6));
     }
 
     #[test]
     fn a_rainbow_with_both_ends_in_one_column_does_not_break() {
-        let quads = rainbow_quads(vec3(5.0, 6.0, 5.0), vec3(5.0, 6.0, 5.0));
-        assert!(quads.iter().all(|q| q.corners.iter().all(|c| c.is_finite())));
+        let blocks = rainbow_blocks(vec3(5.0, 6.0, 5.0), vec3(5.0, 6.0, 5.0));
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn a_trail_runs_from_beside_the_player_along_the_path_and_fades_with_distance() {
+        let path = [(0.0, 0.0), (100.0, 0.0)];
+        let wisps = trail_wisps(&path, TRAIL_LENGTH, TRAIL_SPACING, 0.0);
+        assert!(wisps.len() as f32 > TRAIL_LENGTH / TRAIL_SPACING * 0.9, "{} wisps", wisps.len());
+        assert!(wisps[0].along >= 2.0 && wisps.last().unwrap().along <= TRAIL_LENGTH);
+        assert!(wisps.windows(2).all(|w| w[1].along > w[0].along && w[1].fade <= w[0].fade), "further wisps are fainter");
+        assert!(wisps.iter().all(|w| w.x > 0.0 && w.z.abs() <= 0.36 && (0.0..=1.0).contains(&w.fade) && (0.0..=1.0).contains(&w.pulse)));
+        // The pulses travel: a moment later the bright ones have moved on.
+        let later = trail_wisps(&path, TRAIL_LENGTH, TRAIL_SPACING, 0.2);
+        assert!(wisps.iter().zip(&later).any(|(a, b)| (a.pulse - b.pulse).abs() > 0.05));
+    }
+
+    #[test]
+    fn a_trail_that_ends_nearby_stops_there_and_one_with_corners_follows_them() {
+        let short = trail_wisps(&[(0.0, 0.0), (10.0, 0.0)], TRAIL_LENGTH, TRAIL_SPACING, 0.0);
+        assert!(short.iter().all(|w| w.x <= 10.5), "nothing beyond the end");
+        assert!(short.len() >= 4);
+        // Round a corner: east for 20 blocks, then north (towards smaller z).
+        let bent = trail_wisps(&[(0.0, 0.0), (20.0, 0.0), (20.0, -40.0)], TRAIL_LENGTH, TRAIL_SPACING, 0.0);
+        assert!(bent.iter().any(|w| w.x < 19.0 && w.z.abs() < 0.5), "along the first leg");
+        assert!(bent.iter().any(|w| (w.x - 20.0).abs() < 0.5 && w.z < -10.0), "and then along the second");
+        assert!(trail_wisps(&[(3.0, 3.0), (3.0, 3.0)], TRAIL_LENGTH, TRAIL_SPACING, 0.0).is_empty(), "no path, no trail");
+        assert!(trail_wisps(&[], TRAIL_LENGTH, TRAIL_SPACING, 0.0).is_empty());
     }
 }

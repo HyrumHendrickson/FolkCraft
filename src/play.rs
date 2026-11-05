@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_flames, draw_meat, draw_pots, draw_rainbow};
+use crate::effects::{draw_flames, draw_meat, draw_pots, draw_rainbow, draw_trail};
 use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
@@ -34,6 +34,15 @@ pub fn play_screen(app: &mut App) {
         }
     };
     let dt = get_frame_time().min(0.05);
+
+    // F1 opens the help without leaving the game.
+    if is_key_pressed(KeyCode::F1) {
+        if game.inventory_open {
+            set_inventory_open(game, false);
+        }
+        app.open_help_in_game();
+        return;
+    }
 
     if is_key_pressed(KeyCode::E) {
         let open = !game.inventory_open;
@@ -63,6 +72,7 @@ pub fn play_screen(app: &mut App) {
     game.update_animals(dt);
     game.update_arrows(dt);
     game.update_health(dt);
+    game.update_blackout(dt);
 
     game.autosave_timer += dt;
     if game.autosave_timer >= AUTOSAVE_INTERVAL {
@@ -121,7 +131,7 @@ fn handle_hotbar_selection(game: &mut Game) {
         }
     }
     // Wheel down moves right along the hotbar, like Minecraft.
-    let wheel = mouse_wheel().1;
+    let wheel = crate::ui::wheel_notches();
     if wheel != 0.0 {
         game.scroll_selection(if wheel < 0.0 { 1 } else { -1 });
     }
@@ -216,9 +226,13 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
         }
     }
     draw_ghosts(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
-    // The rainbow shows only to a peep stone in the hand, and over everything, water included.
+    // The rainbow shows only by day, to a peep stone in the hand, and over everything, water included.
     if let Some(rainbow) = game.visible_rainbow() {
         draw_rainbow(&game.world, &rainbow, get_time() as f32);
+    }
+    // A peep stone in the hand also shows a ghostly trail: to the grand castle by night, to the end of the rainbow by day.
+    if let Some(path) = game.trail_path() {
+        draw_trail(&game.world, &path, game.world.night, get_time() as f32);
     }
     if let Some(hit) = target {
         // Outline the block's actual shape, so a pebble gets a small box and a trunk a thin one.
@@ -259,9 +273,13 @@ fn render_hud(game: &mut Game, drawn: usize) {
         10.0, 24.0, 22.0, WHITE,
     );
     draw_text(
-        "WASD move | Mouse look | Space jump | Shift sprint | Left break/attack/shoot | Right place/eat/cook | 1-9/wheel hotbar | E inventory | Esc save & exit",
+        "WASD move | Mouse look | Space jump | Shift sprint | Left break/attack/shoot | Right place/eat/cook | 1-9/wheel hotbar | E inventory | F1 help | Esc save & exit",
         10.0, h - 12.0, 18.0, WHITE,
     );
+    // Between day and night the whole screen goes black for a moment.
+    if let Some(blackout) = game.blackout {
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, blackout.darkness()));
+    }
 }
 
 /// A small progress bar under the crosshair while a block is being broken.

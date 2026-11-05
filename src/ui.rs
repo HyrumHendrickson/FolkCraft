@@ -42,3 +42,32 @@ pub fn text_field(r: Rect, value: &str, focused: bool) {
     let caret = if focused && (get_time() * 2.0) as i64 % 2 == 0 { "|" } else { "" };
     draw_text(&format!("{value}{caret}"), r.x + 10.0, r.y + r.h / 2.0 + 8.0, 28.0, WHITE);
 }
+
+/// Mouse wheel movement in notches (one notch is about 1.0; positive is up). Some platforms report a notch as 1,
+/// others as 120, so a large reading is scaled down. Use this instead of `mouse_wheel().1`.
+pub fn wheel_notches() -> f32 {
+    normalize_wheel(mouse_wheel().1)
+}
+
+/// See `wheel_notches`.
+pub fn normalize_wheel(raw: f32) -> f32 {
+    if raw.abs() >= 20.0 {
+        raw / 120.0
+    } else {
+        raw
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wheel_notch_is_one_whether_the_platform_says_1_or_120() {
+        assert_eq!(normalize_wheel(1.0), 1.0);
+        assert_eq!(normalize_wheel(-1.0), -1.0);
+        assert_eq!(normalize_wheel(120.0), 1.0);
+        assert_eq!(normalize_wheel(-240.0), -2.0);
+        assert_eq!(normalize_wheel(0.0), 0.0);
+    }
+}

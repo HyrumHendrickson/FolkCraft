@@ -11,7 +11,7 @@ use crate::dropped::{collect_nearby, DroppedItem};
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
-use crate::landmarks::{Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks};
+use crate::landmarks::{GrandCastle, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks};
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, save_world, SaveData, WorldInfo};
@@ -24,6 +24,35 @@ pub struct Mining {
     pub pos: Pos,
     pub block: Block,
     pub elapsed: f32,
+}
+
+/// The blackout between day and night: the screen fades to black, the sky changes while it is dark, and it fades
+/// back, all in `DAY_NIGHT_BLACKOUT_SECONDS`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blackout {
+    /// Seconds since it began.
+    pub elapsed: f32,
+    /// What the world is to become, once it is dark.
+    pub night: bool,
+    /// Whether the world has changed yet.
+    pub switched: bool,
+}
+
+/// Shares of the blackout spent fading out and fading in; the rest it is quite black.
+const BLACKOUT_FADE_SHARE: f32 = 0.3;
+
+impl Blackout {
+    /// How dark the screen is, from 0 (clear) to 1 (black).
+    pub fn darkness(&self) -> f32 {
+        let t = (self.elapsed / DAY_NIGHT_BLACKOUT_SECONDS).clamp(0.0, 1.0);
+        if t < BLACKOUT_FADE_SHARE {
+            t / BLACKOUT_FADE_SHARE
+        } else if t > 1.0 - BLACKOUT_FADE_SHARE {
+            (1.0 - t) / BLACKOUT_FADE_SHARE
+        } else {
+            1.0
+        }
+    }
 }
 
 pub struct Game {
@@ -62,6 +91,8 @@ pub struct Game {
     pub treks: Treks,
     /// Frames of mouse movement to ignore after the cursor is re-captured.
     pub skip_look_frames: u8,
+    /// The blackout in progress between day and night, if any.
+    pub blackout: Option<Blackout>,
 }
 
 impl Game {
@@ -106,6 +137,7 @@ impl Game {
             autosave_timer: 0.0,
             treks: Treks::new(),
             skip_look_frames: 0,
+            blackout: None,
         }
     }
 
@@ -172,6 +204,11 @@ impl Game {
             self.items.push(DroppedItem::spawn(kind, (x, y, z), &mut self.rng));
         }
         drops
+    }
+
+    /// Whether a holly rod is anywhere in the hotbar (it need not be in the hand).
+    pub fn holly_rod_in_hotbar(&self) -> bool {
+        self.inventory.slots[..HOTBAR_SLOTS].iter().flatten().any(|stack| stack.kind == ItemKind::HollyRod)
     }
 
     fn rabbit_foot_in_hotbar(&self) -> bool {
@@ -319,12 +356,39 @@ impl Game {
         }
     }
 
+    /// Turn the world to night or to day, behind a blackout (see `Blackout`). Nothing happens if it already is.
     fn set_night(&mut self, night: bool) {
+        match self.blackout.as_mut() {
+            Some(b) => {
+                b.night = night;
+                if b.switched {
+                    self.apply_night(night);
+                }
+            }
+            None if self.world.night != night => self.blackout = Some(Blackout { elapsed: 0.0, night, switched: false }),
+            None => {}
+        }
+    }
+
+    /// Change the sky and the world now.
+    fn apply_night(&mut self, night: bool) {
         let changed = self.world.night != night;
         self.world.set_night(night);
         if changed {
             self.toasts.push(if night { "Night falls".to_string() } else { "Day breaks".to_string() });
         }
+    }
+
+    /// Advance the blackout: once the screen is black the world changes to day or night, and the blackout ends after
+    /// `DAY_NIGHT_BLACKOUT_SECONDS`. Call once a frame.
+    pub fn update_blackout(&mut self, dt: f32) {
+        let Some(mut b) = self.blackout else { return };
+        b.elapsed += dt;
+        if !b.switched && b.elapsed >= DAY_NIGHT_BLACKOUT_SECONDS * BLACKOUT_FADE_SHARE {
+            b.switched = true;
+            self.apply_night(b.night);
+        }
+        self.blackout = if b.elapsed >= DAY_NIGHT_BLACKOUT_SECONDS { None } else { Some(b) };
     }
 
     /// Pick all currently available berries from a bush without removing the bush.
@@ -820,6 +884,7 @@ impl Game {
             self.bring_in(event);
         }
         self.try_show_rainbow();
+        self.try_show_grand_castle();
     }
 
     /// Make the lake or mountain that a finished trek leads to, and say so.
@@ -846,11 +911,27 @@ impl Game {
         self.world.block_at(x, ground, z) == Block::Dirt && self.world.block_at(x, ground + 1, z) == Block::Air
     }
 
+    /// With a peep stone in hand at night, and only if the world has no grand castle yet, bring one into the world:
+    /// beyond the edge of the land, in a direction where no lake or mountain is (as far as one can be found), with the
+    /// ghostly trail to it shown by the peep stone. Returns whether the castle appeared.
+    pub fn try_show_grand_castle(&mut self) -> bool {
+        if self.world.landmarks.grand_castle.is_some() || !self.world.night || self.held_item() != Some(ItemKind::PeepStone) {
+            return false;
+        }
+        let p = self.player.pos;
+        let first = self.rng.unit() * std::f32::consts::TAU;
+        let sites: Vec<GrandCastle> = (0..16).map(|i| GrandCastle::ahead((p.x, p.z), first + i as f32 * std::f32::consts::TAU / 16.0)).collect();
+        let site = sites.iter().copied().find(|c| self.world.landmarks.has_room_for(c)).unwrap_or(sites[0]);
+        self.world.add_grand_castle(site);
+        self.toasts.push("A ghostly trail winds away through the dark.".to_string());
+        true
+    }
+
     /// With a peep stone in hand, and only if the world has never had a rainbow, bring it out: an arc that begins
     /// beside the player and ends `RAINBOW_GOLD_MIN_DISTANCE` to `RAINBOW_GOLD_MAX_DISTANCE` blocks away on a pile of
     /// gold. Returns whether the rainbow appeared. If no good spot is found this frame, the next frame tries again.
     pub fn try_show_rainbow(&mut self) -> bool {
-        if self.world.landmarks.rainbow != RainbowState::Unseen || self.held_item() != Some(ItemKind::PeepStone) {
+        if self.world.landmarks.rainbow != RainbowState::Unseen || self.world.night || self.held_item() != Some(ItemKind::PeepStone) {
             return false;
         }
         let p = self.player.pos;
@@ -873,9 +954,27 @@ impl Game {
         false
     }
 
-    /// The rainbow to draw this frame: it shows only while a peep stone is in the hand, and until its gold is taken.
+    /// The rainbow to draw this frame: it shows only by day, while a peep stone is in the hand, and until its gold
+    /// is taken.
     pub fn visible_rainbow(&self) -> Option<Rainbow> {
-        if self.held_item() == Some(ItemKind::PeepStone) { self.world.active_rainbow() } else { None }
+        if self.held_item() == Some(ItemKind::PeepStone) && !self.world.night { self.world.active_rainbow() } else { None }
+    }
+
+    /// The ghostly trail a peep stone in the hand shows, as the corners of a path (x, z) that starts under the player:
+    /// by night it leads to the grand castle (to its gate, and on to the door of its keep), by day to the end of the
+    /// rainbow, even once the gold has been taken. `None` when there is no peep stone in hand or nothing to lead to.
+    pub fn trail_path(&self) -> Option<Vec<(f32, f32)>> {
+        if self.held_item() != Some(ItemKind::PeepStone) {
+            return None;
+        }
+        let start = (self.player.pos.x, self.player.pos.z);
+        if self.world.night {
+            let castle = self.world.landmarks.grand_castle?;
+            Some(vec![start, castle.gate_approach(), castle.keep_door()])
+        } else {
+            let (x, _, z) = self.world.landmarks.rainbow_end()?;
+            Some(vec![start, (x as f32 + 0.5, z as f32 + 0.5)])
+        }
     }
 
     /// Put a new animal on the ground at column (x, z). Fails when that column is not loaded, is under a river or
@@ -956,9 +1055,19 @@ impl Game {
     pub fn update_animals(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         let player = self.player.pos;
+        // Will-o-whisps are drawn to a player with a holly rod in the hotbar. One that is bonded and has been left
+        // far behind (the player ran off, or started again at the beginning) catches up at once.
+        let lure = if self.holly_rod_in_hotbar() { Some(player) } else { None };
+        for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::WillOWhisp) {
+            a.lure = lure;
+            if a.bonded && lure.is_some() && (a.pos - player).length() > WILL_O_WHISP_TELEPORT_DISTANCE {
+                a.pos = player + vec3(0.0, WILL_O_WHISP_ORBIT_HEIGHT, WILL_O_WHISP_ORBIT_RADIUS);
+            }
+        }
         let flat = |a: &Animal| vec2(a.pos.x - player.x, a.pos.z - player.z).length();
+        // Whisps go with the night, except the ones that follow the player.
         self.animals.retain(|a| {
-            flat(a) < ANIMAL_DESPAWN_DISTANCE && (self.world.night || a.kind != AnimalKind::WillOWhisp)
+            flat(a) < ANIMAL_DESPAWN_DISTANCE && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
         });
         let bears: Vec<Vec3> = self.animals.iter().filter(|a| a.kind == AnimalKind::Bear).map(|a| a.pos).collect();
         let mut strikes: Vec<(Vec3, u32, &'static str)> = Vec::new();
@@ -3188,13 +3297,16 @@ mod landmark_tests {
         assert_eq!(g.world.block_at(wx, GROUND_TOP - LAKE_DEPTH, wz), Block::Dirt);
         assert_eq!(g.world.block_at(wx, GROUND_TOP + 1, wz), Block::Air);
         assert!(g.world.is_wet_column(wx, wz));
-        // In the middle is an island of dry ground, level with the land, with a castle on it.
+        // In the middle is an island: a hill of dry ground with a flat top, and a castle on the top.
         load_column(&mut g, lake.x + 30, lake.z);
         load_column(&mut g, lake.x + CASTLE_WALL_HALF, lake.z);
         load_column(&mut g, lake.x, lake.z);
         assert!(!g.world.is_wet_column(lake.x, lake.z) && !g.world.is_wet_column(lake.x + 30, lake.z));
-        assert_eq!(g.world.ground_top(lake.x + 30, lake.z), GROUND_TOP, "the island is as high as the land");
-        assert_eq!(g.world.block_at(lake.x + CASTLE_WALL_HALF, GROUND_TOP + 1, lake.z), Block::CastleStone);
+        let top = GROUND_TOP + ISLAND_HILL_HEIGHT;
+        assert_eq!(g.world.ground_top(lake.x, lake.z), top, "the island is a hill with a flat top");
+        let slope = g.world.ground_top(lake.x + 30, lake.z);
+        assert!(slope > GROUND_TOP && slope < top, "and its side slopes down to the water: {slope}");
+        assert_eq!(g.world.block_at(lake.x + CASTLE_WALL_HALF, top + 1, lake.z), Block::CastleStone);
         // The channel leaves the column the player stood in and runs to the lake, all of it water.
         let (px, pz) = (at.0.floor() as i32, at.1.floor() as i32);
         assert!(g.world.is_wet_column(px, pz));
@@ -3237,12 +3349,12 @@ mod landmark_tests {
         let m = g.world.landmarks.mountains[0];
         assert!(m.z < at.1 as i32 - MOUNTAIN_DISTANCE, "north of the player, beyond the loaded land");
         assert!(g.toasts.contains("mountain"));
-        // Climb in a straight line from the far side to the summit: no step is taller than a jump.
+        // Along a line from the far side to the summit the ground climbs, but only in steps of a jump or a ledge.
         let mut last = g.world.ground_top(m.x + m.radius * 2, m.z);
         let mut highest = last;
         for x in (m.x..=m.x + m.radius * 2).rev() {
             let top = g.world.ground_top(x, m.z);
-            assert!((top - last).abs() <= 1, "step of {} at x={x}", top - last);
+            assert!((top - last).abs() <= MOUNTAIN_LEDGE_HEIGHT + 1, "step of {} at x={x}", top - last);
             last = top;
             highest = highest.max(top);
         }
@@ -3352,6 +3464,314 @@ mod landmark_tests {
         assert_eq!(again.world.block_at(rainbow.gold.0, rainbow.gold.1, rainbow.gold.2), Block::GoldPile);
         hold(&mut again, ItemKind::PeepStone);
         assert!(!again.try_show_rainbow(), "the same rainbow is still out there");
+    }
+
+    fn put_in_hotbar(g: &mut Game, slot: usize, kind: ItemKind) {
+        g.inventory.slots[slot] = Some(crate::item::ItemStack { kind, count: 1 });
+    }
+
+    #[test]
+    fn the_rainbow_is_a_thing_of_the_day_and_a_peep_stone_at_night_brings_no_rainbow() {
+        let mut g = game(30);
+        g.world.set_night(true);
+        hold(&mut g, ItemKind::PeepStone);
+        assert!(!g.try_show_rainbow(), "no rainbow in the dark");
+        assert_eq!(g.world.landmarks.rainbow, RainbowState::Unseen);
+        g.world.set_night(false);
+        assert!(g.try_show_rainbow());
+        assert!(g.visible_rainbow().is_some());
+        g.world.set_night(true);
+        assert_eq!(g.visible_rainbow(), None, "and it is not there at night");
+        g.world.set_night(false);
+        assert!(g.visible_rainbow().is_some(), "but it is there again by day");
+    }
+
+    #[test]
+    fn a_peep_stone_at_night_brings_one_grand_castle_beyond_the_land_and_a_trail_to_its_gate() {
+        let mut g = game(31);
+        assert!(!g.try_show_grand_castle(), "not by day");
+        g.world.set_night(true);
+        assert!(!g.try_show_grand_castle(), "no peep stone in hand");
+        assert_eq!(g.trail_path(), None);
+        hold(&mut g, ItemKind::PeepStone);
+        assert_eq!(g.trail_path(), None, "no castle yet, so nothing to lead to");
+        assert!(g.try_show_grand_castle());
+        assert!(g.toasts.contains("ghostly trail"));
+        let castle = g.world.landmarks.grand_castle.expect("a castle");
+        let p = g.player.pos;
+        let nearest = (castle.x as f32 - p.x).abs().max((castle.z as f32 - p.z).abs()) - GRAND_REACH as f32;
+        assert!(nearest >= GRAND_DISTANCE as f32 - 1.5);
+        assert!(nearest >= ((GEN_RADIUS + 1) * CHUNK_SIZE) as f32 - 1.0, "beyond the generated land: {nearest}");
+        assert!(g.world.landmarks.has_room_for(&castle));
+        assert!(!g.try_show_grand_castle(), "only one grand castle");
+        // The trail leads from the player to the gate and on to the door of the keep.
+        let path = g.trail_path().expect("a trail");
+        assert_eq!(path, vec![(p.x, p.z), castle.gate_approach(), castle.keep_door()]);
+        // It is shown only to a peep stone in the hand, and at night it leads to the castle, not to a rainbow.
+        hold(&mut g, ItemKind::Stick);
+        assert_eq!(g.trail_path(), None);
+        hold(&mut g, ItemKind::PeepStone);
+        g.world.set_night(false);
+        assert_eq!(g.trail_path(), None, "by day it leads to the end of the rainbow, and there is none yet");
+        // The castle is really there when the land round it is made, and it is kept by a save.
+        g.world.set_night(true);
+        let (wx, wz) = (castle.x + GRAND_WALL_HALF, castle.z);
+        load_column(&mut g, wx, wz);
+        assert_eq!(g.world.block_at(wx, GROUND_TOP + 1, wz), Block::CastleStone);
+        let text = crate::save::serialize_save("t", 1, &g.world, &g.player, &g.inventory, &g.items, g.health, false);
+        let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, crate::save::parse_save(&text), 9);
+        assert_eq!(again.world.landmarks.grand_castle, Some(castle));
+        hold(&mut again, ItemKind::PeepStone);
+        assert!(!again.try_show_grand_castle(), "the same castle is still out there");
+    }
+
+    #[test]
+    fn the_grand_castle_keeps_clear_of_a_lake_in_the_way() {
+        let mut g = game(32);
+        g.world.set_night(true);
+        hold(&mut g, ItemKind::PeepStone);
+        let p = g.player.pos;
+        let spot = |angle: f32| GrandCastle::ahead((p.x, p.z), angle);
+        // Lakes all along the east half of the horizon: the castle has to go to the west.
+        for i in 0..64 {
+            let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 63.0;
+            let c = spot(angle);
+            g.world.landmarks.lakes.push(Lake { x: c.x, z: c.z, radius: 20, phase: 0, from: (c.x, c.z) });
+        }
+        assert!(g.try_show_grand_castle());
+        let castle = g.world.landmarks.grand_castle.unwrap();
+        assert!(castle.x < p.x as i32 + GRAND_DISTANCE / 2, "it went west: {castle:?}");
+        assert!(g.world.landmarks.lakes.iter().all(|l| {
+            let (x0, z0, x1, z1) = l.bounds(0);
+            castle.x + GRAND_REACH < x0 || castle.x - GRAND_REACH > x1 || castle.z + GRAND_REACH < z0 || castle.z - GRAND_REACH > z1
+        }), "{castle:?} is not clear of the lakes");
+    }
+
+    #[test]
+    fn by_day_a_peep_stone_leads_to_the_end_of_the_rainbow_even_after_the_gold_is_taken() {
+        let mut g = game(33);
+        hold(&mut g, ItemKind::PeepStone);
+        assert_eq!(g.trail_path(), None, "no rainbow yet");
+        assert!(g.try_show_rainbow());
+        let (x, y, z) = g.world.active_rainbow().unwrap().gold;
+        let p = g.player.pos;
+        assert_eq!(g.trail_path(), Some(vec![(p.x, p.z), (x as f32 + 0.5, z as f32 + 0.5)]));
+        // The gold is taken and the rainbow is gone, but the trail still leads to the place.
+        g.mine(x, y, z);
+        assert_eq!(g.world.landmarks.rainbow, RainbowState::Spent);
+        assert_eq!(g.visible_rainbow(), None);
+        assert_eq!(g.trail_path(), Some(vec![(p.x, p.z), (x as f32 + 0.5, z as f32 + 0.5)]));
+        // And it still does after the world is saved and loaded.
+        let text = crate::save::serialize_save("t", 1, &g.world, &g.player, &g.inventory, &g.items, g.health, false);
+        let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, crate::save::parse_save(&text), 7);
+        hold(&mut again, ItemKind::PeepStone);
+        let q = again.player.pos;
+        assert_eq!(again.trail_path(), Some(vec![(q.x, q.z), (x as f32 + 0.5, z as f32 + 0.5)]));
+        // At night it leads to the castle instead, not to the rainbow.
+        again.world.set_night(true);
+        assert_eq!(again.trail_path(), None);
+    }
+
+    #[test]
+    fn day_and_night_change_behind_a_one_second_blackout() {
+        let mut g = game(34);
+        assert!(!g.world.night && g.blackout.is_none());
+        g.set_night(false);
+        assert!(g.blackout.is_none(), "no blackout when nothing changes");
+        g.set_night(true);
+        let b = g.blackout.expect("a blackout");
+        assert!(!g.world.night, "the sky is still the day's while the screen is clear");
+        assert_eq!(b.darkness(), 0.0);
+        // The screen fades to black, and the world changes only once it is black.
+        let mut dark_at_change = 0.0f32;
+        let mut seen_black = false;
+        let dt = 1.0 / 60.0;
+        let mut elapsed = 0.0;
+        while g.blackout.is_some() {
+            let was_night = g.world.night;
+            g.update_blackout(dt);
+            elapsed += dt;
+            if let Some(b) = g.blackout {
+                if !was_night && g.world.night {
+                    dark_at_change = b.darkness();
+                }
+                seen_black |= b.darkness() >= 1.0;
+            }
+            assert!(elapsed < DAY_NIGHT_BLACKOUT_SECONDS + 0.1, "it ends");
+        }
+        assert!(g.world.night, "and then it is night");
+        assert!(dark_at_change > 0.9, "the change happened in the dark: {dark_at_change}");
+        assert!(seen_black);
+        assert!((elapsed - DAY_NIGHT_BLACKOUT_SECONDS).abs() < 0.05, "a second in all: {elapsed}");
+        assert!(g.toasts.contains("Night falls"));
+        // The same on the way back to day.
+        g.set_night(false);
+        for _ in 0..70 {
+            g.update_blackout(dt);
+        }
+        assert!(!g.world.night && g.blackout.is_none());
+        assert!(g.toasts.contains("Day breaks"));
+    }
+
+    #[test]
+    fn the_blackout_is_black_in_the_middle_and_clear_at_both_ends() {
+        let at = |t: f32| Blackout { elapsed: t * DAY_NIGHT_BLACKOUT_SECONDS, night: true, switched: false }.darkness();
+        assert_eq!(at(0.0), 0.0);
+        assert_eq!(at(1.0), 0.0);
+        assert_eq!(at(0.5), 1.0);
+        assert!(at(0.15) > 0.4 && at(0.15) < 0.6 && at(0.85) > 0.4 && at(0.85) < 0.6);
+        assert!(at(0.2) < at(0.3) && at(0.7) > at(0.8));
+    }
+
+    #[test]
+    fn drinking_the_stews_starts_the_blackout_and_a_second_drink_during_it_wins() {
+        let mut g = game(35);
+        hold(&mut g, ItemKind::PurpleBerryStew);
+        g.health = MAX_HEALTH;
+        assert!(g.eat_held());
+        assert!(g.blackout.is_some() && !g.world.night);
+        g.update_blackout(0.4);
+        assert!(g.world.night, "dark by now, and it has become night");
+        hold(&mut g, ItemKind::RedBerryStew);
+        assert!(g.eat_held());
+        g.update_blackout(0.05);
+        assert!(!g.world.night, "the red stew turns it back at once, since the screen is still black");
+        for _ in 0..40 {
+            g.update_blackout(0.05);
+        }
+        assert!(g.blackout.is_none() && !g.world.night);
+    }
+
+    fn whisp_game(seed: u64) -> (Game, usize) {
+        let mut g = game(seed);
+        g.world.set_night(true);
+        let p = g.player.pos;
+        assert!(g.spawn_animal(AnimalKind::WillOWhisp, p.x as i32 + 10, p.z as i32));
+        let index = g.animals.iter().position(|a| a.kind == AnimalKind::WillOWhisp).unwrap();
+        (g, index)
+    }
+
+    fn whisps(g: &Game) -> Vec<&Animal> {
+        g.animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp).collect()
+    }
+
+    /// Run the animals for `seconds`, without new ones coming in.
+    fn pass(g: &mut Game, seconds: f32) {
+        for _ in 0..(seconds * 20.0) as usize {
+            g.spawn_timer = 0.0;
+            g.update_animals(0.05);
+        }
+    }
+
+    #[test]
+    fn a_whisp_flees_a_player_without_a_holly_rod_and_even_one_that_is_not_in_the_hotbar() {
+        let (mut g, _) = whisp_game(40);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        g.player.pos = g.animals[0].pos - vec3(5.0, 0.0, 0.0);
+        pass(&mut g, 2.0);
+        assert!(whisps(&g).iter().all(|a| !a.bonded && (a.pos - g.player.pos).length() > 7.0), "it keeps away");
+        // A rod in the inventory but outside the hotbar draws nothing.
+        g.inventory.slots[HOTBAR_SLOTS] = Some(crate::item::ItemStack { kind: ItemKind::HollyRod, count: 1 });
+        assert!(!g.holly_rod_in_hotbar());
+        pass(&mut g, 2.0);
+        assert!(whisps(&g).iter().all(|a| !a.bonded));
+    }
+
+    #[test]
+    fn a_whisp_is_drawn_to_a_holly_rod_in_the_hotbar_and_bonds_within_five_feet_without_the_rod_in_hand() {
+        let (mut g, _) = whisp_game(41);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        hold(&mut g, ItemKind::Stick);
+        put_in_hotbar(&mut g, 4, ItemKind::HollyRod);
+        assert_eq!(g.held_item(), Some(ItemKind::Stick), "the rod is not in the hand");
+        assert!(g.holly_rod_in_hotbar());
+        let before = (g.animals[0].pos - g.player.pos).length();
+        assert!(before > WILL_O_WHISP_FLEE_DISTANCE && before <= WILL_O_WHISP_ATTRACT_DISTANCE);
+        pass(&mut g, 1.0);
+        let a = whisps(&g)[0];
+        assert!(!a.bonded || (a.pos - g.player.pos).length() < before, "it floats towards the player");
+        assert!((a.pos - g.player.pos).length() < before - 2.0);
+        pass(&mut g, 4.0);
+        let a = whisps(&g)[0];
+        assert!(a.bonded, "within five feet it is bonded");
+        assert!((a.pos - g.player.pos).length() <= WILL_O_WHISP_ORBIT_HEIGHT + WILL_O_WHISP_ORBIT_RADIUS + 0.3, "and stays close: {}", (a.pos - g.player.pos).length());
+    }
+
+    #[test]
+    fn a_whisp_beyond_the_reach_of_the_rod_is_not_drawn() {
+        let (mut g, _) = whisp_game(42);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        put_in_hotbar(&mut g, 2, ItemKind::HollyRod);
+        let p = g.player.pos;
+        g.animals[0].pos = p + vec3(WILL_O_WHISP_ATTRACT_DISTANCE + 8.0, 3.0, 0.0);
+        let before = g.animals[0].pos;
+        pass(&mut g, 2.0);
+        assert!(whisps(&g).iter().all(|a| !a.bonded && (a.pos - before).length() < 1.0), "it stays where it is");
+    }
+
+    #[test]
+    fn a_bonded_whisp_follows_the_player_and_goes_with_them_into_the_day() {
+        let (mut g, _) = whisp_game(43);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        put_in_hotbar(&mut g, 1, ItemKind::HollyRod);
+        pass(&mut g, 5.0);
+        assert!(whisps(&g)[0].bonded);
+        // The player walks away; the whisp keeps up.
+        g.player.pos += vec3(30.0, 0.0, 0.0);
+        pass(&mut g, 5.0);
+        assert!(whisps(&g)[0].bonded && (whisps(&g)[0].pos - g.player.pos).length() < 3.0, "it followed");
+        // A drink of the red stew makes it day. The whisp is still there, and still follows.
+        hold(&mut g, ItemKind::RedBerryStew);
+        g.eat_held();
+        for _ in 0..30 {
+            g.update_blackout(0.05);
+        }
+        assert!(!g.world.night);
+        pass(&mut g, 1.0);
+        assert_eq!(whisps(&g).len(), 1, "the bonded whisp stays into the day");
+        g.player.pos += vec3(0.0, 0.0, 25.0);
+        pass(&mut g, 4.0);
+        assert!(whisps(&g)[0].bonded && (whisps(&g)[0].pos - g.player.pos).length() < 3.0, "and follows by day");
+        // No new whisp comes in by day.
+        for _ in 0..200 {
+            g.spawn_wildlife();
+        }
+        assert_eq!(whisps(&g).len(), 1);
+        // Take the rod out of the hotbar: the whisp lets go and, it being day, is gone.
+        g.inventory.slots[1] = None;
+        pass(&mut g, 0.1);
+        assert!(whisps(&g).is_empty(), "without the rod the whisp is lost with the night");
+    }
+
+    #[test]
+    fn a_bonded_whisp_lets_go_at_night_too_when_the_rod_leaves_the_hotbar_and_flees_again() {
+        let (mut g, _) = whisp_game(44);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        put_in_hotbar(&mut g, 0, ItemKind::HollyRod);
+        pass(&mut g, 5.0);
+        assert!(whisps(&g)[0].bonded);
+        g.inventory.slots[0] = None;
+        pass(&mut g, 0.1);
+        assert_eq!(whisps(&g).len(), 1, "it is night, so it stays");
+        assert!(!whisps(&g)[0].bonded);
+        let from = (whisps(&g)[0].pos - g.player.pos).length();
+        // The player is close to it, so it floats away from them.
+        pass(&mut g, 2.0);
+        assert!((whisps(&g)[0].pos - g.player.pos).length() > from + 3.0, "it flees again");
+    }
+
+    #[test]
+    fn a_bonded_whisp_left_far_behind_rejoins_the_player() {
+        let (mut g, _) = whisp_game(45);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        put_in_hotbar(&mut g, 0, ItemKind::HollyRod);
+        pass(&mut g, 5.0);
+        g.player.pos += vec3(WILL_O_WHISP_TELEPORT_DISTANCE + 20.0, 0.0, 0.0);
+        pass(&mut g, 0.1);
+        assert_eq!(whisps(&g).len(), 1);
+        assert!((whisps(&g)[0].pos - g.player.pos).length() < 5.0, "it caught up at once");
     }
 
     #[test]
