@@ -59,7 +59,7 @@ pub fn help_lines() -> Vec<Line> {
         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
         item("Stones and pebbles lie on the ground everywhere, and on the river bed under the water. Hold left mouse on one to pick it up."),
-        item("Loadstones are small dark stones that lie on the ground here and there. Hold left mouse on one to pick it up. A Loadstone and an Iron Ore make a Compass, which does nothing yet."),
+        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, and boulders a {}% chance to drop Gold Ore. Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass, which does nothing yet.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE)),
         item(format!("Clay lies on the river bed. Hold left mouse on a lump to dig {CLAY_DROP} clay out of it. Clay makes a clay forge.")),
         item(format!(
             "Boulders are big grey rocks, a little wider than a block, scattered on the ground (more on hills). Only a Bronze Mallet breaks one: hold left mouse on it for {} seconds. It drops a stone, a pebble and {BOULDER_IRON_MIN} to {BOULDER_IRON_MAX} iron ore.",

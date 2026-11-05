@@ -44,8 +44,6 @@ pub enum Block {
     /// A big rock lying on the ground, a little wider than its cell. Only a bronze mallet breaks it; it drops stone, a
     /// pebble and iron ore.
     Boulder,
-    /// A small dark lodestone lying on the ground. It is generated, never placed; broken by hand it drops a loadstone.
-    Loadstone,
     /// A forge of clay the player has put down, empty. Charcoal is put in it by right click.
     ClayForge,
     /// A clay forge with charcoal in it, ready to be lit with a bow drill.
@@ -133,12 +131,6 @@ const BOULDER_PARTS: &[Part] = &[
     part([0.88, 0.0, 0.58], [1.12, 0.26, 0.92], (0.36, 0.36, 0.39)),
     part([-0.10, 0.0, 0.08], [0.14, 0.22, 0.36], (0.37, 0.37, 0.40)),
 ];
-/// A small dark lodestone with a faint metallic glint on top.
-const LOADSTONE_PARTS: &[Part] = &[
-    part([0.27, 0.0, 0.27], [0.73, 0.20, 0.72], (0.20, 0.21, 0.26)),
-    part([0.34, 0.20, 0.34], [0.64, 0.30, 0.62], (0.27, 0.28, 0.34)),
-    part([0.44, 0.30, 0.43], [0.55, 0.33, 0.53], (0.46, 0.48, 0.58)),
-];
 /// A forge of clay: a squat block with a dark opening on top. The coal in it is a third part, black when
 /// filled and red-hot when lit (`effects.rs` draws the flames and the glow on top).
 macro_rules! forge_parts {
@@ -186,7 +178,6 @@ impl Block {
                 | Block::PlacedLog
                 | Block::PlacedPebble
                 | Block::PlacedStone
-                | Block::Loadstone
                 | Block::Charcoal
                 | Block::Planks
                 | Block::Ash
@@ -230,7 +221,6 @@ impl Block {
             Block::PlacedLog
             | Block::PlacedPebble
             | Block::PlacedStone
-            | Block::Loadstone
             | Block::Charcoal
             | Block::Ash
             | Block::WetPebble
@@ -320,7 +310,6 @@ impl Block {
             Block::WetStone => STONE_PARTS,
             Block::WetClay => CLAY_PARTS,
             Block::Boulder => BOULDER_PARTS,
-            Block::Loadstone => LOADSTONE_PARTS,
             Block::ClayForge => FORGE_PARTS,
             Block::ForgeCharged => FORGE_CHARGED_PARTS,
             Block::ForgeLit => FORGE_LIT_PARTS,
@@ -396,7 +385,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 26] = [
+    const ALL: [Block; 25] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -419,7 +408,6 @@ mod tests {
         Block::WetStone,
         Block::WetClay,
         Block::Boulder,
-        Block::Loadstone,
         Block::ClayForge,
         Block::ForgeCharged,
         Block::ForgeLit,
@@ -687,19 +675,6 @@ mod tests {
             for (cx, cz) in [(lo[0], lo[2]), (hi[0], lo[2]), (lo[0], hi[2]), (hi[0], hi[2])] {
                 assert!(!corner(cx, cz), "the corner ({cx}, {cz}) is cut");
             }
-        }
-
-        #[test]
-        fn a_loadstone_is_a_small_dark_walk_through_rock_that_breaks_by_hand() {
-            let b = Block::Loadstone;
-            assert!(b.hand_breakable() && b.breakable() && b.can_break_with(None) && b.can_break_with(Some(ItemKind::StoneAxe)));
-            assert_eq!(b.break_seconds(), BREAK_SECONDS_PLACED);
-            assert!(!b.collides() && !b.opaque() && !b.is_full_cube() && !b.is_wet() && !b.is_burning());
-            assert_eq!(b.id(), None, "it is found, not placed");
-            let (lo, hi) = b.bounds().unwrap();
-            assert!(hi[1] <= 0.45 && lo[1] == 0.0 && hi[0] - lo[0] <= 0.8);
-            let (r, g, bl) = b.base_color();
-            assert!(r < 0.3 && g < 0.3 && bl < 0.35, "dark");
         }
 
         #[test]

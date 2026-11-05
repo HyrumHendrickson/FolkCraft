@@ -162,6 +162,11 @@ pub fn ground_top(seed: i64, wx: i32, wz: i32) -> i32 {
     surface(seed, relief_for_column(seed, wx, wz), wx, wz).0
 }
 
+/// Whether the bush at a position starts with purple berries during the day.
+pub fn berry_bush_is_purple(seed: i64, wx: i32, wz: i32) -> bool {
+    hash3(seed, wx, wz, 0xB3A7) % PURPLE_BUSH_ONE_IN == 0
+}
+
 /// The highest dirt block of the column (wx, wz) and whether a river runs over it, given the relief
 /// that can touch it. Rivers keep off hills and valleys, so the two never add up.
 fn surface(seed: i64, relief: Option<Relief>, wx: i32, wz: i32) -> (i32, bool) {
@@ -354,7 +359,7 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
     }
 
     // Stones and pebbles lying about on the ground (not in a river), on hills twice as often, and among them
-    // the occasional boulder and loadstone. Pebbles and stones are the blocks a player could place themselves, so they
+    // the occasional boulder. Pebbles and stones are the blocks a player could place themselves, so they
     // can be picked up (and put back) the same way.
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
@@ -377,8 +382,6 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
                 Block::PlacedStone
             } else if band(GROUND_BOULDER_PER_MILLE) {
                 Block::Boulder
-            } else if band(GROUND_LOADSTONE_PER_MILLE) {
-                Block::Loadstone
             } else {
                 continue;
             };
@@ -1133,49 +1136,4 @@ mod tests {
         assert!(seen > 500, "{seen} clearings checked");
     }
 
-    #[test]
-    fn loadstones_lie_on_dry_ground_at_the_configured_rate_and_never_in_water() {
-        let (mut columns, mut loadstones) = (0, 0);
-        for seed in 0..3 {
-            for cz in -6..6 {
-                for cx in -6..6 {
-                    let b = generate_chunk_blocks(seed, cx, cz);
-                    for lz in 0..CHUNK_SIZE {
-                        for lx in 0..CHUNK_SIZE {
-                            let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
-                            let top = ground_top(seed, wx, wz);
-                            if top > GROUND_TOP || is_river(seed, wx, wz) {
-                                continue;
-                            }
-                            columns += 1;
-                            if b[idx(lx, top + 1, lz)] == Block::Loadstone {
-                                loadstones += 1;
-                                assert_eq!(b[idx(lx, top, lz)], Block::Dirt, "they lie on the ground");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let per_mille = loadstones as f64 / columns as f64 * 1000.0;
-        assert!((per_mille - GROUND_LOADSTONE_PER_MILLE as f64).abs() < 1.0, "loadstones {per_mille}");
-        assert!(loadstones > 0, "loadstones are to be found");
-    }
-
-    #[test]
-    fn adding_loadstones_changed_nothing_for_the_pebbles_stones_and_boulders() {
-        // The loadstone band comes last, so every other rock is where it was: still the same rates.
-        let count = |wanted: Block| {
-            let mut n = 0;
-            for cz in -4..4 {
-                for cx in -4..4 {
-                    n += generate_chunk_blocks(1, cx, cz).iter().filter(|&&b| b == wanted).count();
-                }
-            }
-            n
-        };
-        assert!(count(Block::PlacedPebble) > count(Block::PlacedStone));
-        assert!(count(Block::PlacedStone) > count(Block::Boulder) / 2);
-        assert!(count(Block::Boulder) > 0 && count(Block::Loadstone) > 0);
-    }
 }

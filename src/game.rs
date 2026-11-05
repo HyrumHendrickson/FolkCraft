@@ -10,7 +10,7 @@ use crate::config::*;
 use crate::dropped::{collect_nearby, DroppedItem};
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
-use crate::item::{drops_for, Hearth, ItemKind};
+use crate::item::{drops_for, drops_for_with_berries, Hearth, ItemKind};
 use crate::player::Player;
 use crate::river::is_river;
 use crate::rng::{clock_seed, Rng};
@@ -70,7 +70,12 @@ impl Game {
     }
 
     pub fn from_save(info: WorldInfo, data: SaveData, rng_seed: u64) -> Game {
-        let mut world = World::with_edits(info.seed, data.removed, data.placed, data.fires).with_cooking(data.cooking).with_glow(data.glow).with_pots(data.pots);
+        let mut world = World::with_edits(info.seed, data.removed, data.placed, data.fires)
+            .with_cooking(data.cooking)
+            .with_glow(data.glow)
+            .with_pots(data.pots)
+            .with_berry_picked(data.berry_picked)
+            .with_night(data.night);
         world.stream_chunks(data.player.pos);
         world.rebuild_dirty(data.player.pos, usize::MAX);
         let health = data.health;
@@ -133,11 +138,49 @@ impl Game {
             return Vec::new();
         }
         self.world.break_block(x, y, z);
-        let drops = drops_for(block, &mut self.rng);
+        let mut drops = if block == Block::Bush {
+            drops_for_with_berries(block, self.world.berry_kind_at(x, z), &mut self.rng)
+        } else {
+            drops_for(block, &mut self.rng)
+        };
+        if self.rabbit_foot_in_hotbar() {
+            if matches!(block, Block::PlacedStone | Block::WetStone)
+                && self.rng.chance(RABBIT_FOOT_LOADSTONE_CHANCE)
+            {
+                if let Some(stone) = drops.iter_mut().find(|kind| **kind == ItemKind::Stone) {
+                    *stone = ItemKind::Loadstone;
+                }
+            }
+            if block == Block::Boulder && self.rng.chance(RABBIT_FOOT_GOLD_CHANCE) {
+                for kind in &mut drops {
+                    if *kind == ItemKind::IronOre {
+                        *kind = ItemKind::GoldOre;
+                    }
+                }
+            }
+        }
         for &kind in &drops {
             self.items.push(DroppedItem::spawn(kind, (x, y, z), &mut self.rng));
         }
         drops
+    }
+
+    fn rabbit_foot_in_hotbar(&self) -> bool {
+        self.inventory.slots[..HOTBAR_SLOTS].iter().flatten().any(|stack| stack.kind == ItemKind::RabbitFoot)
+    }
+
+    /// Drop an entire inventory stack in front of the player. The distance and the normal pickup delay keep
+    /// the new drops from immediately returning to the inventory.
+    pub fn drop_inventory_stack(&mut self, slot: usize) -> bool {
+        let Some(slot) = self.inventory.slots.get_mut(slot) else { return false };
+        let Some(stack) = slot.take() else { return false };
+        let forward = vec3(self.player.yaw.cos(), 0.0, self.player.yaw.sin());
+        let spot = self.player.pos + forward * INVENTORY_DROP_DISTANCE + vec3(0.0, 1.0, 0.0);
+        for _ in 0..stack.count {
+            self.items.push(DroppedItem::spawn_at(stack.kind, spot, &mut self.rng));
+        }
+        self.toasts.push(format!("Dropped {} {}", stack.count, stack.kind.name().to_lowercase()));
+        true
     }
 
     /// Advance block breaking by `dt` seconds. `holding` is whether the break button is down and
@@ -235,15 +278,62 @@ impl Game {
         }
     }
 
-    /// Eat one held food item (berries, cooked venison or cooked poultry) if hurt. Raw meat
-    /// cannot be eaten. Returns whether something was eaten.
+    /// Eat or drink one held food item. Red food heals only while hurt; purple berries and
+    /// purple berry stew damage the player and can be consumed at any health.
     pub fn eat_held(&mut self) -> bool {
-        let Some(heal) = self.held_item().and_then(ItemKind::heal_amount) else { return false };
-        if self.health >= MAX_HEALTH {
+        let Some(kind) = self.held_item() else { return false };
+        match kind {
+            ItemKind::PurpleBerries => {
+                self.inventory.take_from_slot(self.selected);
+                self.hurt_player(PURPLE_BERRY_DAMAGE, "The purple berries hurt you");
+                true
+            }
+            ItemKind::PurpleBerryStew => {
+                self.inventory.take_from_slot(self.selected);
+                self.hurt_player(PURPLE_BERRY_STEW_DAMAGE, "The purple berry stew hurts you");
+                self.set_night(true);
+                true
+            }
+            ItemKind::RedBerryStew => {
+                self.inventory.take_from_slot(self.selected);
+                self.health = (self.health + BERRY_STEW_HEAL).min(MAX_HEALTH);
+                self.set_night(false);
+                true
+            }
+            _ => {
+                let Some(heal) = kind.heal_amount() else { return false };
+                if self.health >= MAX_HEALTH { return false; }
+                self.inventory.take_from_slot(self.selected);
+                self.health = (self.health + heal).min(MAX_HEALTH);
+                true
+            }
+        }
+    }
+
+    fn set_night(&mut self, night: bool) {
+        let changed = self.world.night != night;
+        self.world.set_night(night);
+        if changed {
+            self.toasts.push(if night { "Night falls".to_string() } else { "Day breaks".to_string() });
+        }
+    }
+
+    /// Pick all currently available berries from a bush without removing the bush.
+    fn pick_berry_bush(&mut self, pos: Pos) -> bool {
+        if !self.world.pick_berry_bush(pos) {
             return false;
         }
-        self.inventory.take_from_slot(self.selected);
-        self.health = (self.health + heal).min(MAX_HEALTH);
+        let kind = self.world.berry_kind_at(pos.0, pos.2);
+        let drops = drops_for_with_berries(Block::Bush, kind, &mut self.rng);
+        let count = drops.len();
+        for drop in drops {
+            self.give_or_drop(drop, pos);
+        }
+        self.toasts.push(if count == 0 {
+            "The bush had no ripe berries".to_string()
+        } else {
+            format!("Picked berries from the bush")
+        });
         true
     }
 
@@ -375,7 +465,7 @@ impl Game {
             return match held {
                 Some(k) if k.is_fuel() => true,
                 Some(ItemKind::WaterJar) => !pot.water,
-                Some(k) if k.stewed().is_some() => pot.water && pot.meat.is_none(),
+                Some(k) if k.stewed().is_some() => pot.meat.is_none(),
                 _ => pot.stew().is_some() || pot.meat.is_none(),
             };
         }
@@ -518,6 +608,9 @@ impl Game {
     /// (see `use_on_fire`); otherwise place the held log, pebble, stone, plank, charcoal or clay forge in the empty
     /// cell in front of the targeted block. Uses up one item. Returns whether anything happened.
     pub fn use_held(&mut self, hit: &Hit) -> bool {
+        if hit.block == Block::Bush {
+            return self.pick_berry_bush((hit.x, hit.y, hit.z));
+        }
         if hit.block == Block::ClayForge && self.held_item() == Some(ItemKind::Charcoal) {
             self.world.set_block(hit.x, hit.y, hit.z, Block::ForgeCharged);
             self.inventory.take_from_slot(self.selected);
@@ -934,7 +1027,7 @@ mod tests {
                 assert!(d.iter().all(|&k| k == ItemKind::Grass) && d.len() <= 1);
                 grass += d.len();
             } else {
-                assert!(d.iter().all(|&k| k == ItemKind::Berries) && d.len() <= 5);
+                assert!(d.iter().all(|&k| matches!(k, ItemKind::Berries | ItemKind::PurpleBerries)) && d.len() <= 5);
                 berries += d.len();
             }
             assert_eq!(g.world.block_at(x, 7, z), Block::Air);
@@ -2908,19 +3001,6 @@ mod tests {
             }
             assert!(g.animals[0].knock.z > 10.0, "{:?}", g.animals[0].knock);
         }
-    }
-
-    #[test]
-    fn a_loadstone_on_the_ground_is_picked_up_by_hand_and_stays_gone() {
-        let mut g = game(180);
-        g.world.chunks.get_mut(&(0, 0)).unwrap().blocks[idx(12, 6, 12)] = Block::Loadstone;
-        assert!(g.can_interact(Block::Loadstone));
-        let hit = Hit { x: 12, y: 6, z: 12, block: Block::Loadstone, prev: (12, 7, 12) };
-        assert!(g.update_mining(Some(hit), true, Block::Loadstone.break_seconds() - 0.1).is_empty());
-        let drops = g.update_mining(Some(hit), true, 0.2);
-        assert_eq!(drops, vec![ItemKind::Loadstone]);
-        assert_eq!(g.world.block_at(12, 6, 12), Block::Air);
-        assert!(g.world.removed.contains(&(12, 6, 12)), "a taken loadstone stays gone");
     }
 
     #[test]

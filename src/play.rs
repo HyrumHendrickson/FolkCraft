@@ -154,6 +154,20 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     if game.fill_jar(eye, dir) {
         return;
     }
+    // A bush is an explicit harvest target, even when the player happens to be holding food.
+    // This keeps right-clicking a bush from eating the held berries instead.
+    if let Some(hit) = target {
+        if hit.block == crate::block::Block::Bush {
+            game.use_held(&hit);
+            return;
+        }
+        // Raw berries are valid pot ingredients. Let the pot consume them before the generic
+        // food action gets a chance to eat them; this must work at any health level.
+        if game.can_use_fire(&hit) {
+            game.use_held(&hit);
+            return;
+        }
+    }
     if game.eat_held() {
         return;
     }
@@ -164,7 +178,11 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
 
 /// Draw the 3D scene. Returns how many chunks were drawn.
 fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
-    clear_background(Color::new(0.53, 0.81, 0.92, 1.0));
+    clear_background(if game.world.night {
+        Color::new(0.015, 0.025, 0.075, 1.0)
+    } else {
+        Color::new(0.53, 0.81, 0.92, 1.0)
+    });
     set_camera(&Camera3D {
         position: eye,
         target: eye + dir,
@@ -173,7 +191,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
         ..Default::default()
     });
     // The sun and the clouds go first, so the land is drawn over them.
-    draw_sky(game.world.seed, eye, get_time() as f32);
+    draw_sky(game.world.seed, eye, get_time() as f32, game.world.night);
     // Only chunks within the render radius (and inside the view cone) are drawn.
     let aspect = screen_width() / screen_height();
     let half_fov = ((35.0_f32).to_radians().tan() * (1.0 + aspect * aspect).sqrt()).atan();
@@ -211,7 +229,9 @@ fn render_hud(game: &mut Game, drawn: usize) {
     set_default_camera();
     let (w, h) = (screen_width(), screen_height());
     if game.inventory_open {
-        inventory_screen(&mut game.inventory, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode);
+        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
+            game.drop_inventory_stack(slot);
+        }
     } else {
         draw_line(w / 2.0 - 10.0, h / 2.0, w / 2.0 + 10.0, h / 2.0, 2.0, WHITE);
         draw_line(w / 2.0, h / 2.0 - 10.0, w / 2.0, h / 2.0 + 10.0, 2.0, WHITE);

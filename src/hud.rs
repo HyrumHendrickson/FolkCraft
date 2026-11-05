@@ -79,7 +79,7 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
                 draw_line(b.x, b.y, t.x, t.y, 3.0, c);
             }
         }
-        ItemKind::Berries => {
+        ItemKind::Berries | ItemKind::PurpleBerries => {
             for (dx, dy, rad) in [(-0.14, 0.10, 0.13), (0.14, 0.08, 0.12), (0.00, -0.12, 0.13)] {
                 draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w + 1.0, outline);
                 draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w, color);
@@ -247,7 +247,7 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_circle(cx, cy - 1.0, r.w * 0.25, color);
             draw_circle(cx - r.w * 0.08, cy - r.h * 0.08, r.w * 0.08, lighten(color, 0.16));
         }
-        ItemKind::IronOre => {
+        ItemKind::IronOre | ItemKind::GoldOre => {
             // The stone icon with three rust-coloured veins.
             let stone = ItemKind::Stone.color();
             draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
@@ -257,7 +257,8 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
                 draw_line(cx + x0 * r.w, cy + y0 * r.h, cx + x1 * r.w, cy + y1 * r.h, 3.0, color);
             }
         }
-        ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew => {
+        ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew
+        | ItemKind::RedBerryStew | ItemKind::PurpleBerryStew => {
             // A tin bowl of stew with a few lumps in it.
             let bowl = ItemKind::TinPot.color();
             draw_circle(cx, cy + 4.0, r.w * 0.31, outline);
@@ -367,7 +368,7 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_rectangle(ol.x - 1.5, ol.y - 1.5, or.x - ol.x + 3.0, or.y - ol.y + 3.0, outline);
             draw_rectangle(ol.x, ol.y, or.x - ol.x, or.y - ol.y, Color::new(0.40, 0.31, 0.26, 1.0));
         }
-        ItemKind::Copper | ItemKind::Tin | ItemKind::Iron | ItemKind::Bronze => {
+        ItemKind::Copper | ItemKind::Tin | ItemKind::Iron | ItemKind::Gold | ItemKind::Bronze => {
             let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
             // An ingot: a wide trapezoid with a bright top face.
             let (a, b, c, d) = (p(0.26, 0.46), p(0.74, 0.46), p(0.84, 0.72), p(0.16, 0.72));
@@ -522,7 +523,7 @@ fn wrap_totals(parts: &[String], max_width: f32) -> Vec<String> {
 /// - press on a stack and release over another slot to move, merge or swap stacks;
 /// - click an entry in the crafting list to craft it once.
 /// Also shows a tooltip on hover.
-pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) {
+pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
     let (w, h) = (screen_width(), screen_height());
     let lay = layout();
     let (mx, my) = mouse_position();
@@ -537,9 +538,14 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
             }
         }
     }
+    let mut dropped_outside = None;
     if is_mouse_button_released(MouseButton::Left) {
-        if let (Some(from), Some(to)) = (ui.drag_from.take(), hovered_slot) {
-            inventory.move_stack(from, to);
+        if let Some(from) = ui.drag_from.take() {
+            if let Some(to) = hovered_slot {
+                inventory.move_stack(from, to);
+            } else if !lay.panel.contains(mouse) {
+                dropped_outside = Some(from);
+            }
         }
     }
     let dragged = ui.drag_from.and_then(|s| inventory.slots[s].map(|stack| (s, stack)));
@@ -634,7 +640,7 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
         draw_text(line, lay.grid.x, panel.y + panel.h - 76.0 + i as f32 * 20.0, 20.0, LIGHTGRAY);
     }
     draw_text(
-        if dev_mode { "Drag items to move them. Click a recipe to craft, or an item to add it. E or Esc to close." } else { "Drag items to move them. Click a recipe to craft. E or Esc to close." },
+        if dev_mode { "Drag items to move or drop them outside. Click a recipe to craft, or an item to add it. E or Esc to close." } else { "Drag items to move or drop them outside. E or Esc to close." },
         lay.grid.x,
         panel.y + panel.h - 12.0,
         20.0,
@@ -651,6 +657,7 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
         draw_rectangle(tx - 6.0, ty - 20.0, d.width + 12.0, 28.0, Color::new(0.0, 0.0, 0.0, 0.85));
         draw_text(&label, tx, ty, 24.0, WHITE);
     }
+    dropped_outside
 }
 
 /// One row of the list beside the inventory: a recipe the inventory can pay for or, in dev mode, an item to take.

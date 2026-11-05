@@ -52,6 +52,8 @@ pub const PICKUP_RADIUS: f32 = 1.2;
 /// Items up to this far below the player's feet can be picked up, so an item that fell into
 /// a one-block dip beside you (a river bed, say) is still reachable.
 pub const PICKUP_BELOW: f32 = 1.6;
+/// Horizontal distance at which an item dragged out of the inventory lands in front of the player.
+pub const INVENTORY_DROP_DISTANCE: f32 = 2.2;
 /// Seconds a pickup message stays on screen.
 pub const TOAST_SECONDS: f32 = 2.5;
 
@@ -131,6 +133,8 @@ pub const GRASS_DROP_CHANCE: u64 = 70;
 pub const BUSH_BERRY_ROLLS: u32 = 5;
 /// ...each succeeding with this chance (percent).
 pub const BUSH_BERRY_CHANCE: u64 = 50;
+/// One in ten bushes starts with purple berries during the day.
+pub const PURPLE_BUSH_ONE_IN: u64 = 10;
 /// A lit log burns this long, and each log added to the fire extends it by this much (seconds).
 pub const FIRE_SECONDS: f32 = 60.0;
 
@@ -158,6 +162,12 @@ pub const FIRE_DAMAGE: u32 = 1;
 pub const FIRE_TOUCH_MARGIN: f32 = 0.1;
 /// Life restored by eating one berry.
 pub const BERRY_HEAL: u32 = 1;
+/// Damage caused by one purple berry.
+pub const PURPLE_BERRY_DAMAGE: u32 = 1;
+/// Life restored by drinking red berry stew.
+pub const BERRY_STEW_HEAL: u32 = 2;
+/// Damage caused by drinking purple berry stew.
+pub const PURPLE_BERRY_STEW_DAMAGE: u32 = 2;
 /// Life restored by eating one piece of cooked venison or cooked poultry.
 pub const VENISON_HEAL: u32 = 4;
 pub const POULTRY_HEAL: u32 = 3;
@@ -185,9 +195,6 @@ pub const HILL_ROCK_FACTOR: u64 = 2;
 /// Chance (per mille, per ground column, on top of the above and scaled by `HILL_ROCK_FACTOR` on hills) of a
 /// boulder: a big rock that only a bronze mallet breaks, and the only source of iron.
 pub const GROUND_BOULDER_PER_MILLE: u64 = 2;
-/// Chance (per mille, per ground column, after the boulders and scaled by `HILL_ROCK_FACTOR` on hills) of a
-/// loadstone: a small dark lodestone lying on the ground that makes a compass.
-pub const GROUND_LOADSTONE_PER_MILLE: u64 = 2;
 /// How far (blocks) a boulder bulges past the edge of its cell on each side: it is a little more than a block
 /// wide (`1 + 2 * BOULDER_OVERHANG`), and its collider is the one box around that. Collision and aiming look this
 /// far into the neighbouring cells.
@@ -195,6 +202,10 @@ pub const BOULDER_OVERHANG: f32 = 0.15;
 /// A broken boulder drops one stone, one pebble and this many iron ores (inclusive range).
 pub const BOULDER_IRON_MIN: i32 = 1;
 pub const BOULDER_IRON_MAX: i32 = 3;
+/// Rabbit-foot chance to turn a broken stone into a loadstone while the foot is in the hotbar.
+pub const RABBIT_FOOT_LOADSTONE_CHANCE: u64 = 20;
+/// Rabbit-foot chance for a boulder to yield gold ore instead of iron ore.
+pub const RABBIT_FOOT_GOLD_CHANCE: u64 = 20;
 /// Chances (per mille, per river column) of clay, a pebble or a stone lying on the river bed under the water.
 pub const RIVER_CLAY_PER_MILLE: u64 = 40;
 pub const RIVER_PEBBLE_PER_MILLE: u64 = 20;
@@ -347,3 +358,10 @@ pub const CLOUD_THRESHOLD: f32 = 0.56;
 pub const CLOUD_DRIFT_SPEED: f32 = 0.8;
 /// How many cells wide the cloud noise lattice is, so clouds gather in banks rather than as single cells.
 pub const CLOUD_NOISE_CELLS: f32 = 4.0;
+/// Night-sky decoration sizes and density.
+pub const STAR_COUNT: u32 = 120;
+pub const STAR_DISTANCE: f32 = 780.0;
+pub const STAR_RADIUS: f32 = 1.8;
+pub const MOON_ELEVATION_DEGREES: f32 = 44.0;
+pub const MOON_BEARING_DEGREES: f32 = 55.0;
+pub const MOON_RADIUS: f32 = 30.0;

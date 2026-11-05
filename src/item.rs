@@ -15,6 +15,7 @@ pub enum ItemKind {
     StoneAxe,
     Grass,
     Berries,
+    PurpleBerries,
     Twine,
     BowDrill,
     Charcoal,
@@ -46,10 +47,12 @@ pub enum ItemKind {
     Tin,
     /// Smelted from iron ore in a lit clay forge worked with bellows.
     Iron,
+    Gold,
     /// Dug from the river bed.
     Clay,
     /// Broken out of a boulder with a bronze mallet.
     IronOre,
+    GoldOre,
     /// Cut from a piece of leather (three to a piece).
     LeatherCord,
     /// One tin and one copper smelted together in a lit clay forge.
@@ -81,6 +84,8 @@ pub enum ItemKind {
     BearStew,
     RabbitStew,
     MooseStew,
+    RedBerryStew,
+    PurpleBerryStew,
     /// A strip of leather that slings pebbles (left click). Made of one leather.
     Sling,
     /// A small dark lodestone found lying on the ground. With an iron ore it makes a compass.
@@ -90,7 +95,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 52] = [
+    pub const ALL: [ItemKind; 57] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -98,6 +103,7 @@ impl ItemKind {
         ItemKind::StoneAxe,
         ItemKind::Grass,
         ItemKind::Berries,
+        ItemKind::PurpleBerries,
         ItemKind::Twine,
         ItemKind::BowDrill,
         ItemKind::Charcoal,
@@ -118,8 +124,10 @@ impl ItemKind {
         ItemKind::Copper,
         ItemKind::Tin,
         ItemKind::Iron,
+        ItemKind::Gold,
         ItemKind::Clay,
         ItemKind::IronOre,
+        ItemKind::GoldOre,
         ItemKind::LeatherCord,
         ItemKind::Bronze,
         ItemKind::BronzeMallet,
@@ -140,6 +148,8 @@ impl ItemKind {
         ItemKind::BearStew,
         ItemKind::RabbitStew,
         ItemKind::MooseStew,
+        ItemKind::RedBerryStew,
+        ItemKind::PurpleBerryStew,
         ItemKind::Sling,
         ItemKind::Loadstone,
         ItemKind::Compass,
@@ -155,6 +165,7 @@ impl ItemKind {
             ItemKind::StoneAxe => "Stone Axe",
             ItemKind::Grass => "Grass",
             ItemKind::Berries => "Berries",
+            ItemKind::PurpleBerries => "Purple Berries",
             ItemKind::Twine => "Twine",
             ItemKind::BowDrill => "Bow Drill",
             ItemKind::Charcoal => "Charcoal",
@@ -175,8 +186,10 @@ impl ItemKind {
             ItemKind::Copper => "Copper",
             ItemKind::Tin => "Tin",
             ItemKind::Iron => "Iron",
+            ItemKind::Gold => "Gold",
             ItemKind::Clay => "Clay",
             ItemKind::IronOre => "Iron Ore",
+            ItemKind::GoldOre => "Gold Ore",
             ItemKind::LeatherCord => "Leather Cord",
             ItemKind::Bronze => "Bronze",
             ItemKind::BronzeMallet => "Bronze Mallet",
@@ -197,6 +210,8 @@ impl ItemKind {
             ItemKind::BearStew => "Bear Stew",
             ItemKind::RabbitStew => "Rabbit Stew",
             ItemKind::MooseStew => "Moose Stew",
+            ItemKind::RedBerryStew => "Red Berry Stew",
+            ItemKind::PurpleBerryStew => "Purple Berry Stew",
             ItemKind::Sling => "Sling",
             ItemKind::Loadstone => "Loadstone",
             ItemKind::Compass => "Compass",
@@ -213,6 +228,7 @@ impl ItemKind {
             ItemKind::StoneAxe => "stone_axe",
             ItemKind::Grass => "grass",
             ItemKind::Berries => "berries",
+            ItemKind::PurpleBerries => "purple_berries",
             ItemKind::Twine => "twine",
             ItemKind::BowDrill => "bow_drill",
             ItemKind::Charcoal => "charcoal",
@@ -233,8 +249,10 @@ impl ItemKind {
             ItemKind::Copper => "copper",
             ItemKind::Tin => "tin",
             ItemKind::Iron => "iron",
+            ItemKind::Gold => "gold",
             ItemKind::Clay => "clay",
             ItemKind::IronOre => "iron_ore",
+            ItemKind::GoldOre => "gold_ore",
             ItemKind::LeatherCord => "leather_cord",
             ItemKind::Bronze => "bronze",
             ItemKind::BronzeMallet => "bronze_mallet",
@@ -255,6 +273,8 @@ impl ItemKind {
             ItemKind::BearStew => "bear_stew",
             ItemKind::RabbitStew => "rabbit_stew",
             ItemKind::MooseStew => "moose_stew",
+            ItemKind::RedBerryStew => "red_berry_stew",
+            ItemKind::PurpleBerryStew => "purple_berry_stew",
             ItemKind::Sling => "sling",
             ItemKind::Loadstone => "loadstone",
             ItemKind::Compass => "compass",
@@ -280,6 +300,7 @@ impl ItemKind {
             ItemKind::StoneAxe => Color::new(0.50, 0.50, 0.54, 1.0),
             ItemKind::Grass => Color::new(0.36, 0.66, 0.24, 1.0),
             ItemKind::Berries => Color::new(0.72, 0.14, 0.30, 1.0),
+            ItemKind::PurpleBerries => Color::new(0.48, 0.12, 0.76, 1.0),
             ItemKind::Twine => Color::new(0.80, 0.70, 0.45, 1.0),
             ItemKind::BowDrill => Color::new(0.52, 0.36, 0.20, 1.0),
             ItemKind::Charcoal => Color::new(0.14, 0.14, 0.15, 1.0),
@@ -300,8 +321,10 @@ impl ItemKind {
             ItemKind::Copper => Color::new(0.80, 0.46, 0.25, 1.0),
             ItemKind::Tin => Color::new(0.72, 0.76, 0.82, 1.0),
             ItemKind::Iron => Color::new(0.40, 0.42, 0.47, 1.0),
+            ItemKind::Gold => Color::new(0.92, 0.68, 0.18, 1.0),
             ItemKind::Clay => Color::new(0.68, 0.54, 0.45, 1.0),
             ItemKind::IronOre => Color::new(0.62, 0.24, 0.14, 1.0),
+            ItemKind::GoldOre => Color::new(0.73, 0.52, 0.13, 1.0),
             ItemKind::LeatherCord => Color::new(0.48, 0.30, 0.16, 1.0),
             ItemKind::Bronze => Color::new(0.74, 0.55, 0.22, 1.0),
             ItemKind::BronzeMallet => Color::new(0.70, 0.52, 0.24, 1.0),
@@ -322,6 +345,8 @@ impl ItemKind {
             ItemKind::BearStew => Color::new(0.42, 0.22, 0.14, 1.0),
             ItemKind::RabbitStew => Color::new(0.62, 0.42, 0.26, 1.0),
             ItemKind::MooseStew => Color::new(0.48, 0.30, 0.20, 1.0),
+            ItemKind::RedBerryStew => Color::new(0.72, 0.14, 0.30, 1.0),
+            ItemKind::PurpleBerryStew => Color::new(0.48, 0.12, 0.76, 1.0),
             ItemKind::Sling => Color::new(0.58, 0.38, 0.22, 1.0),
             ItemKind::Loadstone => Color::new(0.20, 0.21, 0.26, 1.0),
             ItemKind::Compass => Color::new(0.72, 0.55, 0.24, 1.0),
@@ -361,6 +386,8 @@ impl ItemKind {
             ItemKind::BearMeat => Some(ItemKind::BearStew),
             ItemKind::RabbitMeat => Some(ItemKind::RabbitStew),
             ItemKind::MooseMeat => Some(ItemKind::MooseStew),
+            ItemKind::Berries => Some(ItemKind::RedBerryStew),
+            ItemKind::PurpleBerries => Some(ItemKind::PurpleBerryStew),
             _ => None,
         }
     }
@@ -409,6 +436,7 @@ impl ItemKind {
             ItemKind::Pebble => Some(ItemKind::Tin),
             ItemKind::Tin => Some(ItemKind::Bronze),
             ItemKind::IronOre => Some(ItemKind::Iron),
+            ItemKind::GoldOre => Some(ItemKind::Gold),
             _ => None,
         }
     }
@@ -426,7 +454,7 @@ impl ItemKind {
         match self {
             ItemKind::Stone | ItemKind::Pebble => Some(Hearth::Embers),
             ItemKind::Tin => Some(Hearth::Forge),
-            ItemKind::IronOre => Some(Hearth::GlowingForge),
+            ItemKind::IronOre | ItemKind::GoldOre => Some(Hearth::GlowingForge),
             _ => None,
         }
     }
@@ -462,6 +490,7 @@ impl ItemKind {
     pub fn heal_amount(self) -> Option<u32> {
         match self {
             ItemKind::Berries => Some(BERRY_HEAL),
+            ItemKind::RedBerryStew => Some(BERRY_STEW_HEAL),
             ItemKind::CookedVenison => Some(VENISON_HEAL),
             ItemKind::CookedPoultry => Some(POULTRY_HEAL),
             ItemKind::CookedBearMeat => Some(BEAR_MEAT_HEAL),
@@ -502,6 +531,11 @@ pub struct ItemStack {
 /// - A boulder drops a stone, a pebble and 1 to 3 iron ore. A clay forge drops `FORGE_CLAY_DROP` clay (and the
 ///   charcoal in it, if it was filled but not lit).
 pub fn drops_for(block: Block, rng: &mut Rng) -> Vec<ItemKind> {
+    drops_for_with_berries(block, ItemKind::Berries, rng)
+}
+
+/// Roll drops using the berry colour currently visible on a bush.
+pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng) -> Vec<ItemKind> {
     let mut drops = Vec::new();
     match block {
         Block::Leaves | Block::Needles => {
@@ -535,12 +569,11 @@ pub fn drops_for(block: Block, rng: &mut Rng) -> Vec<ItemKind> {
         Block::Bush => {
             for _ in 0..BUSH_BERRY_ROLLS {
                 if rng.chance(BUSH_BERRY_CHANCE) {
-                    drops.push(ItemKind::Berries);
+                    drops.push(berry_kind);
                 }
             }
         }
         Block::Ash => drops.push(ItemKind::Ash),
-        Block::Loadstone => drops.push(ItemKind::Loadstone),
         Block::Air | Block::Dirt | Block::Stone | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
     }
     drops
@@ -704,15 +737,17 @@ mod tests {
         assert_eq!(ItemKind::Pebble.smelted(), Some(ItemKind::Tin));
         assert_eq!(ItemKind::Tin.smelted(), Some(ItemKind::Bronze));
         assert_eq!(ItemKind::IronOre.smelted(), Some(ItemKind::Iron));
+        assert_eq!(ItemKind::GoldOre.smelted(), Some(ItemKind::Gold));
         for k in ItemKind::ALL {
-            let smelts = matches!(k, ItemKind::Stone | ItemKind::Pebble | ItemKind::Tin | ItemKind::IronOre);
+            let smelts = matches!(k, ItemKind::Stone | ItemKind::Pebble | ItemKind::Tin | ItemKind::IronOre | ItemKind::GoldOre);
             assert_eq!(k.smelted().is_some(), smelts, "{k:?}");
-            assert_eq!(k.needs_glow(), k == ItemKind::IronOre, "only iron needs the bellows: {k:?}");
+            assert_eq!(k.needs_glow(), matches!(k, ItemKind::IronOre | ItemKind::GoldOre), "only deep ores need the bellows: {k:?}");
         }
         assert_eq!(ItemKind::Stone.hearth(), Some(Hearth::Embers));
         assert_eq!(ItemKind::Pebble.hearth(), Some(Hearth::Embers));
         assert_eq!(ItemKind::Tin.hearth(), Some(Hearth::Forge));
         assert_eq!(ItemKind::IronOre.hearth(), Some(Hearth::GlowingForge));
+        assert_eq!(ItemKind::GoldOre.hearth(), Some(Hearth::GlowingForge));
         assert_eq!(ItemKind::Venison.hearth(), Some(Hearth::AnyFire));
         assert_eq!(ItemKind::Copper.hearth(), None, "copper is only ever smelted along with a tin");
         assert_eq!(ItemKind::Venison.processed(), Some(ItemKind::CookedVenison));
@@ -816,8 +851,12 @@ mod tests {
             assert_eq!(stew.stewed(), None);
         }
         for k in ItemKind::ALL {
-            assert_eq!(k.stewed().is_some(), pairs.iter().any(|p| p.0 == k), "{k:?}");
+            assert_eq!(k.stewed().is_some(), pairs.iter().any(|p| p.0 == k) || matches!(k, ItemKind::Berries | ItemKind::PurpleBerries), "{k:?}");
         }
+        assert_eq!(ItemKind::Berries.stewed(), Some(ItemKind::RedBerryStew));
+        assert_eq!(ItemKind::PurpleBerries.stewed(), Some(ItemKind::PurpleBerryStew));
+        assert_eq!(ItemKind::RedBerryStew.heal_amount(), Some(BERRY_STEW_HEAL));
+        assert_eq!(ItemKind::PurpleBerryStew.heal_amount(), None);
         for k in [ItemKind::TinPot, ItemKind::ClayJar, ItemKind::WaterJar, ItemKind::RabbitFoot] {
             assert_eq!((k.heal_amount(), k.placeable_block(), k.melee_damage()), (None, None, None), "{k:?}");
         }
@@ -834,9 +873,8 @@ mod tests {
     }
 
     #[test]
-    fn a_loadstone_block_drops_a_loadstone_and_launchers_have_their_ammunition() {
+    fn loadstone_is_an_item_and_launchers_have_their_ammunition() {
         let mut rng = Rng::new(21);
-        assert_eq!(drops_for(Block::Loadstone, &mut rng), vec![ItemKind::Loadstone]);
         assert_eq!(ItemKind::Bow.ammo(), Some(ItemKind::Arrow));
         assert_eq!(ItemKind::Sling.ammo(), Some(ItemKind::Pebble));
         assert!(ItemKind::Bow.is_launcher() && ItemKind::Sling.is_launcher());

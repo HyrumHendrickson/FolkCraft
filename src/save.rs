@@ -40,6 +40,8 @@ pub struct SaveData {
     pub cooking: HashMap<Pos, Cooking>,
     pub glow: HashMap<Pos, f32>,
     pub pots: HashMap<Pos, Pot>,
+    pub berry_picked: HashSet<Pos>,
+    pub night: bool,
     pub inventory: Inventory,
     pub items: Vec<DroppedItem>,
     pub health: u32,
@@ -58,6 +60,8 @@ impl SaveData {
             cooking: HashMap::new(),
             glow: HashMap::new(),
             pots: HashMap::new(),
+            berry_picked: HashSet::new(),
+            night: false,
             inventory: Inventory::new(),
             items: Vec::new(),
             health: MAX_HEALTH,
@@ -80,6 +84,8 @@ impl SaveData {
 ///                                 with the seconds of heat still needed (0 once it is done)
 ///     "glow <x> <y> <z> <secs>"   seconds of bellows glow left on the embers at that position
 ///     "health <n>"                the player's life points (1..=MAX_HEALTH)
+///     "berry <x> <y> <z>"          a bush whose berries have been harvested
+///     "time day|night"             the saved time of day
 ///     "mode dev"                  a dev-mode world (no line: normal mode)
 /// Worlds saved before the inventory existed simply have none of the last six. Animals and arrows
 /// are not saved.
@@ -100,6 +106,10 @@ pub fn serialize_save(
     for (x, y, z) in &world.removed {
         out.push_str(&format!("{} {} {}\n", x, y, z));
     }
+    for &(x, y, z) in &world.berry_picked {
+        out.push_str(&format!("berry {} {} {}\n", x, y, z));
+    }
+    out.push_str(&format!("time {}\n", if world.night { "night" } else { "day" }));
     out.push_str(&format!("health {}\n", health));
     if dev_mode {
         out.push_str("mode dev\n");
@@ -153,6 +163,19 @@ pub fn parse_save(text: &str) -> SaveData {
                     if (1..=MAX_HEALTH).contains(&h) {
                         data.health = h;
                     }
+                }
+            }
+            Some("berry") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if v.len() == 3 {
+                    data.berry_picked.insert((v[0], v[1], v[2]));
+                }
+            }
+            Some("time") => {
+                match t.next() {
+                    Some("night") => data.night = true,
+                    Some("day") => data.night = false,
+                    _ => {}
                 }
             }
             Some("inv") => {

@@ -7,7 +7,7 @@ use crate::block::Block;
 use crate::chunk::{idx, Chunk};
 use crate::config::*;
 use crate::item::{Hearth, ItemKind};
-use crate::terrain::generate_chunk_blocks;
+use crate::terrain::{berry_bush_is_purple, generate_chunk_blocks};
 
 pub type Pos = (i32, i32, i32);
 
@@ -90,6 +90,10 @@ pub struct World {
     pub pots: HashMap<Pos, Pot>,
     /// Items left behind by fires that burnt out, for the game to drop.
     pub released: Vec<(Pos, ItemKind)>,
+    /// Natural bushes whose berries have already been harvested.
+    pub berry_picked: HashSet<Pos>,
+    /// Whether the world is currently in its night state.
+    pub night: bool,
 }
 
 /// What a ray hit: the block's cell, the block, and the empty cell the ray came from
@@ -141,7 +145,19 @@ impl World {
 
     /// A world with the player's saved changes applied as its chunks are generated.
     pub fn with_edits(seed: i64, removed: HashSet<Pos>, placed: HashMap<Pos, Block>, fires: HashMap<Pos, f32>) -> Self {
-        World { seed, chunks: HashMap::new(), removed, placed, fires, cooking: HashMap::new(), glow: HashMap::new(), pots: HashMap::new(), released: Vec::new() }
+        World {
+            seed,
+            chunks: HashMap::new(),
+            removed,
+            placed,
+            fires,
+            cooking: HashMap::new(),
+            glow: HashMap::new(),
+            pots: HashMap::new(),
+            released: Vec::new(),
+            berry_picked: HashSet::new(),
+            night: false,
+        }
     }
 
     /// Put saved meat and metal back on its fires. Anything without a burning fire under it is dropped.
@@ -154,6 +170,47 @@ impl World {
     pub fn with_pots(mut self, pots: HashMap<Pos, Pot>) -> Self {
         self.pots = pots.into_iter().filter(|(pos, _)| self.fires.contains_key(pos)).collect();
         self
+    }
+
+    /// Restore bushes that have already been harvested.
+    pub fn with_berry_picked(mut self, berry_picked: HashSet<Pos>) -> Self {
+        self.berry_picked = berry_picked;
+        self
+    }
+
+    /// Restore the saved day/night state.
+    pub fn with_night(mut self, night: bool) -> Self {
+        self.night = night;
+        self
+    }
+
+    /// Change the time of day and redraw berry colours in loaded chunks.
+    pub fn set_night(&mut self, night: bool) {
+        if self.night == night {
+            return;
+        }
+        self.night = night;
+        for chunk in self.chunks.values_mut() {
+            chunk.dirty = true;
+        }
+    }
+
+    /// The berry item currently shown by a bush at this position.
+    pub fn berry_kind_at(&self, x: i32, z: i32) -> ItemKind {
+        let purple = berry_bush_is_purple(self.seed, x, z) ^ self.night;
+        if purple { ItemKind::PurpleBerries } else { ItemKind::Berries }
+    }
+
+    /// Harvest a bush once, leaving the bush itself in place.
+    pub fn pick_berry_bush(&mut self, pos: Pos) -> bool {
+        if self.block_at(pos.0, pos.1, pos.2) != Block::Bush || !self.berry_picked.insert(pos) {
+            return false;
+        }
+        let key = Self::chunk_of(pos.0, pos.2);
+        if let Some(chunk) = self.chunks.get_mut(&key) {
+            chunk.dirty = true;
+        }
+        true
     }
 
     /// Restore the glow of saved forges. Glow without a fire burning there is dropped.
@@ -288,6 +345,7 @@ impl World {
     /// (`Block::remainder`). A block the player had placed is simply forgotten; a generated block is
     /// added to the removed set.
     pub fn break_block(&mut self, x: i32, y: i32, z: i32) {
+        self.berry_picked.remove(&(x, y, z));
         let key = Self::chunk_of(x, z);
         let (lx, lz) = (x.rem_euclid(CHUNK_SIZE), z.rem_euclid(CHUNK_SIZE));
         if let Some(c) = self.chunks.get_mut(&key) {

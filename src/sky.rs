@@ -18,6 +18,11 @@ pub fn sun_direction() -> Vec3 {
     vec3(elevation.cos() * bearing.cos(), elevation.sin(), elevation.cos() * bearing.sin())
 }
 
+pub fn moon_direction() -> Vec3 {
+    let (elevation, bearing) = (MOON_ELEVATION_DEGREES.to_radians(), MOON_BEARING_DEGREES.to_radians());
+    vec3(elevation.cos() * bearing.cos(), elevation.sin(), elevation.cos() * bearing.sin())
+}
+
 /// Quintic ease, so the noise has no creases.
 fn fade(t: f32) -> f32 {
     t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
@@ -81,9 +86,14 @@ pub fn cloud_offset(time: f32) -> f32 {
 
 /// Draw the sun and the clouds. Call right after the 3D camera is set and before the terrain, so the land hides
 /// whatever it stands in front of.
-pub fn draw_sky(seed: i64, eye: Vec3, time: f32) {
-    draw_sun(eye);
-    draw_clouds(seed, eye, time);
+pub fn draw_sky(seed: i64, eye: Vec3, time: f32, night: bool) {
+    if night {
+        draw_stars(seed, eye, time);
+        draw_moon(eye);
+    } else {
+        draw_sun(eye);
+        draw_clouds(seed, eye, time);
+    }
 }
 
 /// The sun: a bright disc with two faint halos. Drawn as spheres around a point that follows the eye, so it
@@ -95,6 +105,25 @@ fn draw_sun(eye: Vec3) {
     let halo = DrawSphereParams { rings: 20, slices: 20, ..Default::default() };
     draw_sphere_ex(centre, SUN_RADIUS * 1.35, None, Color::new(1.0, 0.95, 0.70, 0.22), halo.clone());
     draw_sphere_ex(centre, SUN_RADIUS * 1.8, None, Color::new(1.0, 0.95, 0.75, 0.10), halo);
+}
+
+fn draw_moon(eye: Vec3) {
+    let centre = eye + moon_direction() * SUN_DISTANCE;
+    let params = DrawSphereParams { rings: 24, slices: 24, ..Default::default() };
+    draw_sphere_ex(centre, MOON_RADIUS, None, Color::new(0.86, 0.89, 0.98, 1.0), params);
+    // A smaller grey disc gives the moon a little texture without needing an asset.
+    draw_sphere_ex(centre + moon_direction() * 0.3, MOON_RADIUS * 0.22, None, Color::new(0.65, 0.68, 0.78, 1.0), DrawSphereParams::default());
+}
+
+fn draw_stars(seed: i64, eye: Vec3, time: f32) {
+    for i in 0..STAR_COUNT {
+        let h = crate::rng::hash3(seed, i as i32, i as i32 * 17, 0x57A4);
+        let bearing = (h % 10_000) as f32 / 10_000.0 * std::f32::consts::TAU;
+        let elevation = 0.18 + ((h >> 16) % 8_200) as f32 / 10_000.0 * 1.0;
+        let dir = vec3(elevation.cos() * bearing.cos(), elevation.sin(), elevation.cos() * bearing.sin());
+        let twinkle = 0.75 + 0.25 * (time * 1.7 + i as f32 * 0.73).sin();
+        draw_sphere(eye + dir * STAR_DISTANCE, STAR_RADIUS, None, Color::new(twinkle, twinkle, twinkle, 1.0));
+    }
 }
 
 /// The clouds: each run is a white slab over a thinner grey underside.

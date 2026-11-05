@@ -6,7 +6,7 @@ use crate::block::Block;
 use crate::chunk::idx;
 use crate::config::*;
 use crate::rng::hash3;
-use crate::terrain::ground_top;
+use crate::terrain::{berry_bush_is_purple, ground_top};
 use crate::world::{in_render_range, World};
 
 pub struct Face {
@@ -208,6 +208,9 @@ impl World {
     /// is skipped only where it lies on the cell boundary against a solid cube.
     fn emit_parts(&self, out: &mut MeshBuilder, block: Block, wx: i32, y: i32, wz: i32) {
         for (pi, part) in block.parts().iter().enumerate() {
+            if block == Block::Bush && pi >= 2 && self.berry_picked.contains(&(wx, y, wz)) {
+                continue;
+            }
             for (fi, face) in FACES.iter().enumerate() {
                 let (dx, dy, dz) = face.dir;
                 let (axis, positive) = (fi / 2, fi % 2 == 0);
@@ -229,6 +232,10 @@ impl World {
                     Block::PlacedLog if axis == 0 => color = (0.62, 0.46, 0.26), // cut ends
                     Block::Fire if axis == 0 => color = (0.85, 0.32, 0.08), // glowing ends
                     Block::Flower if pi == 1 => color = FLOWER_COLORS[((hash3(self.seed, wx, y, wz) >> 8) % 4) as usize],
+                    Block::Bush if pi >= 2 => {
+                        let purple = berry_bush_is_purple(self.seed, wx, wz) ^ self.night;
+                        color = if purple { (0.48, 0.12, 0.76) } else { (0.75, 0.12, 0.20) };
+                    }
                     _ => {}
                 }
                 let k = face.shade * (0.94 + (h % 1000) as f32 / 1000.0 * 0.12);
