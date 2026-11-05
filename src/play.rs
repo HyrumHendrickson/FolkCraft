@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_trail};
+use crate::effects::{draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail};
 use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
@@ -64,12 +64,13 @@ pub fn play_screen(app: &mut App) {
     // With a stone axe or bronze mallet in hand, an animal under the crosshair is attacked rather than whatever
     // stands behind it.
     let melee = if game.inventory_open { None } else { game.melee_target(eye, dir) };
-    handle_attacking(game, eye, dir, melee.is_some());
+    handle_attacking(game, eye, dir, melee.is_some(), target.is_some());
     handle_breaking(game, dt, if melee.is_some() { None } else { target });
     handle_placing(game, eye, dir, target);
     game.update_items(dt);
     game.burn_fires(dt);
     game.update_animals(dt);
+    game.update_storm(dt);
     game.update_arrows(dt);
     game.update_health(dt);
     game.update_blackout(dt);
@@ -141,12 +142,14 @@ fn handle_hotbar_selection(game: &mut Game) {
 /// Left click with a bow shoots an arrow along the crosshair, and with a sling a pebble. With any axe or a bronze
 /// mallet, holding the button strikes the animal under the crosshair (`aimed`), once per swing cooldown
 /// (`ItemKind::melee_cooldown`). The rules live in `Game::attack`.
-fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool) {
+fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool, hit_something: bool) {
     if game.inventory_open {
         return;
     }
     let (clicked, held_down) = (is_mouse_button_pressed(MouseButton::Left), is_mouse_button_down(MouseButton::Left));
-    game.attack(eye, dir, clicked, held_down, aimed);
+    if !game.attack(eye, dir, clicked, held_down, aimed) && clicked {
+        game.use_holly_rod_on_target(hit_something);
+    }
 }
 
 /// Hold the left mouse button on a block until it breaks (`Block::break_seconds`). What can be
@@ -154,6 +157,12 @@ fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool) {
 /// axe for wood); breaking may drop items. With a bow drill in hand, a placed log is set on
 /// fire instead.
 fn handle_breaking(game: &mut Game, dt: f32, target: Target) {
+    // A Holly Rod is a storm tool, not a mining tool. This also lets a held rod hit a block without starting a
+    // second, unrelated break action on the same click.
+    if game.held_item() == Some(ItemKind::HollyRod) {
+        game.mining = None;
+        return;
+    }
     let holding = !game.inventory_open && is_mouse_button_down(MouseButton::Left);
     game.update_mining(target, holding, dt);
 }
@@ -210,7 +219,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     if game.in_horizen() {
         draw_horizen_sky(game.world.seed, eye, get_time() as f32, game.world.night);
     } else {
-        draw_sky(game.world.seed, eye, get_time() as f32, game.world.night);
+        draw_sky(game.world.seed, eye, get_time() as f32, game.world.night, game.storm_active);
     }
     // Only chunks within the render radius (and inside the view cone) are drawn.
     let aspect = screen_width() / screen_height();
@@ -228,7 +237,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     if let Some(tornado) = game.tornado.as_ref() {
         draw_fire_tornado(tornado, get_time() as f32, World::chunk_of_pos(eye));
     }
-    draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
+    draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye), game.world.night);
     draw_arrows(&game.arrows);
     // The water goes on last: it is translucent and the bed, the items and the animals behind it show through.
     for key in &drawn {
@@ -237,6 +246,12 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
         }
     }
     draw_ghosts(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
+    if game.storm_active {
+        draw_storm_rain(eye, get_time() as f32);
+        if let Some((pos, flash)) = game.storm_lightning() {
+            draw_storm_lightning(pos, get_time() as f32, flash);
+        }
+    }
     // The rainbow shows only by day, to a peep stone in the hand, and over everything, water included.
     if let Some(rainbow) = game.visible_rainbow() {
         draw_rainbow(&game.world, &rainbow, get_time() as f32);
@@ -256,9 +271,16 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     }
     // Apply the night reduction after every 3D layer, including animals, water, fires and the moving tornado, while
     // leaving the HUD readable.
-    if game.world.night {
+    let scene_brightness = if game.world.night {
+        NIGHT_SCENE_BRIGHTNESS
+    } else if game.storm_active {
+        WHISP_STORM_SCENE_BRIGHTNESS
+    } else {
+        1.0
+    };
+    if scene_brightness < 1.0 {
         set_default_camera();
-        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 1.0 - NIGHT_SCENE_BRIGHTNESS));
+        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 1.0 - scene_brightness));
     }
     drawn.len()
 }

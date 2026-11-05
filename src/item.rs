@@ -72,7 +72,7 @@ pub enum ItemKind {
     /// A rabbit-foot bonus drop. Held in the hand it shows the world's one rainbow by day, which ends in a pile of
     /// gold, and by night the world's one grand castle. A ghostly trail always leads to whichever of them is out there.
     PeepStone,
-    /// A rabbit-foot bonus drop. It has no use yet.
+    /// A rabbit-foot bonus drop. It lures will-o-whisps and can call storm lightning when held.
     HollyRod,
     /// Axes of metal: each hits harder than the one before (stone, copper, bronze, iron).
     CopperAxe,

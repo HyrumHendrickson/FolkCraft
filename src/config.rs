@@ -260,6 +260,10 @@ pub const HORIZEN_TORNADO_INTERVAL: f32 = 30.0;
 /// The tornado begins this far from the player and travels toward the position it recorded at spawn.
 pub const HORIZEN_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
 pub const HORIZEN_TORNADO_SPEED: f32 = 7.0;
+/// Angular speed of the tornado's visible fire layers. The tornado was originally drawn at 4 radians per second;
+/// the current value is twice as fast.
+pub const HORIZEN_TORNADO_SPIN_SPEED: f32 = 8.0;
+pub const HORIZEN_TORNADO_CAP_SPIN_SPEED: f32 = 1.4;
 pub const HORIZEN_TORNADO_RADIUS: f32 = 1.8;
 pub const HORIZEN_TORNADO_HEIGHT: f32 = 6.0;
 pub const HORIZEN_TORNADO_DAMAGE: u32 = 2;
@@ -405,6 +409,24 @@ pub const WILL_O_WHISP_ORBIT_HEIGHT: f32 = 1.3;
 pub const WILL_O_WHISP_TELEPORT_DISTANCE: f32 = 40.0;
 pub const SPAWN_WEIGHT_WILL_O_WHISP: u64 = 100;
 
+// --- Will-o-whisp storms ----------------------------------------------------------------
+
+/// Daytime storm clouds begin gathering this long after at least one bonded whisp is following the player.
+pub const WHISP_STORM_GATHER_SECONDS: f32 = 20.0;
+/// Once the last bonded whisp is gone, the storm lingers for this long before clearing.
+pub const WHISP_STORM_CLEAR_SECONDS: f32 = 20.0;
+/// A storm darkens the complete 3D scene by 20%, just like the night overlay does.
+pub const WHISP_STORM_SCENE_BRIGHTNESS: f32 = 0.80;
+pub const WHISP_STORM_LIGHTNING_MIN_INTERVAL: f32 = 4.0;
+pub const WHISP_STORM_LIGHTNING_MAX_INTERVAL: f32 = 11.0;
+pub const WHISP_STORM_LIGHTNING_FLASH_SECONDS: f32 = 0.22;
+pub const WHISP_STORM_LIGHTNING_DISTANCE: f32 = 45.0;
+pub const WHISP_STORM_RAIN_COUNT: usize = 140;
+pub const WHISP_STORM_RAIN_RADIUS: f32 = 18.0;
+pub const WHISP_STORM_RAIN_HEIGHT: f32 = 18.0;
+pub const WHISP_STORM_RAIN_LENGTH: f32 = 1.5;
+pub const WHISP_STORM_RAIN_SPEED: f32 = 26.0;
+
 // --- Rabbits, moose and stews -----------------------------------------------------------
 
 pub const RABBIT_HEALTH: i32 = 4;
@@ -474,6 +496,8 @@ pub const CLOUD_HEIGHT: f32 = 62.0;
 pub const CLOUD_THICKNESS: f32 = 4.0;
 pub const CLOUD_RADIUS_CELLS: i32 = 11;
 pub const CLOUD_THRESHOLD: f32 = 0.56;
+/// Storm clouds use the same shape and slab geometry as ordinary clouds, but this lower threshold makes them denser.
+pub const STORM_CLOUD_THRESHOLD: f32 = 0.36;
 pub const CLOUD_DRIFT_SPEED: f32 = 0.8;
 pub const CLOUD_NOISE_CELLS: f32 = 4.0;
 pub const STAR_COUNT: u32 = 120;
@@ -482,7 +506,7 @@ pub const STAR_RADIUS: f32 = 1.8;
 pub const MOON_ELEVATION_DEGREES: f32 = 44.0;
 pub const MOON_BEARING_DEGREES: f32 = 55.0;
 pub const MOON_RADIUS: f32 = 30.0;
-/// The Horizen's night stars orbit quickly instead of hanging still.
-pub const HORIZEN_STAR_ROTATION_SPEED: f32 = 2.4;
+/// The Horizen's night stars orbit quickly instead of hanging still, but 20% slower than before.
+pub const HORIZEN_STAR_ROTATION_SPEED: f32 = 1.92;
 /// A night scene receives a final 20% brightness reduction, including dynamic models and water.
 pub const NIGHT_SCENE_BRIGHTNESS: f32 = 0.80;

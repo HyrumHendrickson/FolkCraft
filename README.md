@@ -166,11 +166,11 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     chase deer or quail. At most `MAX_BEAR` (1) lives nearby; spawns are weighted by `SPAWN_WEIGHT_*` (a bear's weight is 4, about a quarter of its old 15).
   - A **will-o-whisp** appears only while the world is night. It floats about three blocks above the terrain,
     flees at `WILL_O_WHISP_FLEE_SPEED` when the player comes within `WILL_O_WHISP_FLEE_DISTANCE`, and has no
-    attacks, drops or weapon interaction. **Holly rod:** `Game::update_animals` sets `Animal::lure` (the player's position) on every whisp
+    attacks or drops. **Holly rod:** `Game::update_animals` sets `Animal::lure` (the player's position) on every whisp
     while `Game::holly_rod_in_hotbar`. A whisp within `WILL_O_WHISP_ATTRACT_DISTANCE` floats towards the player (`Animal::float_to`, no fleeing);
     within `WILL_O_WHISP_BOND_DISTANCE` (five feet) it sets `Animal::bonded` and circles the player, keeping up (a bonded whisp beyond
     `WILL_O_WHISP_TELEPORT_DISTANCE` rejoins at once). Bonded whisps survive the despawn at day. With the rod gone from the hotbar the bond
-    is dropped, and by day the whisp despawns. Animals are not saved, so bonds are not either. At most `MAX_WILL_O_WHISP` (12) live nearby and its spawn weight is `SPAWN_WEIGHT_WILL_O_WHISP` (100), so at night
+    is dropped, and by day the whisp despawns. During the day, one or more bonded whisps gather a storm after `WHISP_STORM_GATHER_SECONDS` (20) seconds: the ordinary white clouds are replaced by denser, darker versions, rain and occasional distant lightning appear, and the scene is 20% darker. While the storm is active, hold the Holly Rod and left-click a block to consume one following whisp and call harmless lightning. Once no whisps remain, the storm lingers for `WHISP_STORM_CLEAR_SECONDS` (20) seconds before clearing. Animals are not saved, so bonds are not either. At most `MAX_WILL_O_WHISP` (12) live nearby and its spawn weight is `SPAWN_WEIGHT_WILL_O_WHISP` (100), so at night
     they are common. They are drawn translucent (`animal_draw::will_o_whisp_parts`: halo, flickering body and heart, eyes, a fading
     tail) by `draw_ghosts`, after the water, since `draw_box` honours the colour's alpha.
   - Animals hop up one-block steps and turn aside from taller obstacles. They spawn out of sight

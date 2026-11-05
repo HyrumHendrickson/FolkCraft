@@ -111,6 +111,13 @@ pub struct Game {
     pub tornado: Option<FireTornado>,
     /// Seconds since the previous Horizen tornado spawned.
     pub tornado_timer: f32,
+    /// Whether the daytime will-o-whisp storm clouds have gathered.
+    pub storm_active: bool,
+    storm_gather_timer: f32,
+    storm_clear_timer: f32,
+    storm_lightning_timer: f32,
+    storm_lightning_flash: f32,
+    storm_lightning_pos: Vec3,
     /// Fade in progress after the player reaches the bottom of the well.
     pub horizen_transition: Option<f32>,
 }
@@ -184,6 +191,12 @@ impl Game {
             away,
             tornado: None,
             tornado_timer: 0.0,
+            storm_active: false,
+            storm_gather_timer: 0.0,
+            storm_clear_timer: 0.0,
+            storm_lightning_timer: 0.0,
+            storm_lightning_flash: 0.0,
+            storm_lightning_pos: Vec3::ZERO,
             horizen_transition: None,
         }
     }
@@ -280,6 +293,16 @@ impl Game {
     /// Whether a holly rod is anywhere in the hotbar (it need not be in the hand).
     pub fn holly_rod_in_hotbar(&self) -> bool {
         self.inventory.slots[..HOTBAR_SLOTS].iter().flatten().any(|stack| stack.kind == ItemKind::HollyRod)
+    }
+
+    /// Number of whisps that have bonded to the player and are currently following them.
+    pub fn following_whisp_count(&self) -> usize {
+        self.animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp && a.bonded).count()
+    }
+
+    /// The current lightning bolt, if its short flash is still visible.
+    pub fn storm_lightning(&self) -> Option<(Vec3, f32)> {
+        (self.storm_lightning_flash > 0.0).then_some((self.storm_lightning_pos, self.storm_lightning_flash))
     }
 
     fn rabbit_foot_in_hotbar(&self) -> bool {
@@ -440,6 +463,9 @@ impl Game {
             self.tornado = None;
             self.tornado_timer = 0.0;
         }
+        if night {
+            self.reset_storm();
+        }
         match self.blackout.as_mut() {
             Some(b) => {
                 b.night = night;
@@ -459,6 +485,9 @@ impl Game {
         if self.in_horizen() && night {
             self.tornado = None;
             self.tornado_timer = 0.0;
+        }
+        if night {
+            self.reset_storm();
         }
         // A gate or door that has shut where the player stands puts them beside it instead.
         self.player.eject_from_blocks(&self.world);
@@ -1198,6 +1227,7 @@ impl Game {
         self.blackout = None;
         self.tornado = None;
         self.tornado_timer = 0.0;
+        self.reset_storm();
         self.treks = Treks::new();
         self.world.stream_chunks(self.player.pos);
         self.world.rebuild_dirty(self.player.pos, usize::MAX);
@@ -1334,6 +1364,9 @@ impl Game {
         let lure = if self.holly_rod_in_hotbar() { Some(player) } else { None };
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::WillOWhisp) {
             a.lure = lure;
+            if lure.is_none() {
+                a.bonded = false;
+            }
             if a.bonded && lure.is_some() && (a.pos - player).length() > WILL_O_WHISP_TELEPORT_DISTANCE {
                 a.pos = player + vec3(0.0, WILL_O_WHISP_ORBIT_HEIGHT, WILL_O_WHISP_ORBIT_RADIUS);
             }
@@ -1377,6 +1410,95 @@ impl Game {
             self.spawn_timer = 0.0;
             self.spawn_wildlife();
         }
+    }
+
+    fn reset_storm(&mut self) {
+        self.storm_active = false;
+        self.storm_gather_timer = 0.0;
+        self.storm_clear_timer = 0.0;
+        self.storm_lightning_timer = 0.0;
+        self.storm_lightning_flash = 0.0;
+    }
+
+    fn next_storm_lightning_delay(&mut self) -> f32 {
+        WHISP_STORM_LIGHTNING_MIN_INTERVAL
+            + self.rng.unit() * (WHISP_STORM_LIGHTNING_MAX_INTERVAL - WHISP_STORM_LIGHTNING_MIN_INTERVAL)
+    }
+
+    fn trigger_storm_lightning(&mut self, pos: Vec3) {
+        self.storm_lightning_pos = pos;
+        self.storm_lightning_flash = WHISP_STORM_LIGHTNING_FLASH_SECONDS;
+    }
+
+    fn trigger_distant_storm_lightning(&mut self) {
+        let angle = self.rng.unit() * std::f32::consts::TAU;
+        let distance = WHISP_STORM_LIGHTNING_DISTANCE * (0.75 + self.rng.unit() * 0.6);
+        let x = (self.player.pos.x + angle.cos() * distance).floor() as i32;
+        let z = (self.player.pos.z + angle.sin() * distance).floor() as i32;
+        let y = (self.world.ground_top(x, z) + 1) as f32;
+        self.trigger_storm_lightning(vec3(x as f32 + 0.5, y, z as f32 + 0.5));
+    }
+
+    /// Advance the daytime storm caused by bonded will-o-whisps. It gathers after twenty seconds with a follower,
+    /// lingers for twenty seconds after the last follower leaves, and occasionally flashes lightning in the distance.
+    pub fn update_storm(&mut self, dt: f32) {
+        if self.in_horizen() || self.world.night {
+            self.reset_storm();
+            return;
+        }
+
+        let has_followers = self.following_whisp_count() > 0;
+        if has_followers {
+            self.storm_clear_timer = 0.0;
+            if !self.storm_active {
+                self.storm_gather_timer += dt;
+                if self.storm_gather_timer >= WHISP_STORM_GATHER_SECONDS {
+                    self.storm_active = true;
+                    self.storm_lightning_timer = self.next_storm_lightning_delay();
+                    self.toasts.push("Will-o-whisps have drawn in a storm.".to_string());
+                }
+            }
+        } else {
+            self.storm_gather_timer = 0.0;
+            if self.storm_active {
+                self.storm_clear_timer += dt;
+                if self.storm_clear_timer >= WHISP_STORM_CLEAR_SECONDS {
+                    self.reset_storm();
+                    self.toasts.push("The whisp storm clears.".to_string());
+                    return;
+                }
+            }
+        }
+
+        self.storm_lightning_flash = (self.storm_lightning_flash - dt).max(0.0);
+        if self.storm_active {
+            self.storm_lightning_timer -= dt;
+            if self.storm_lightning_timer <= 0.0 {
+                self.trigger_distant_storm_lightning();
+                self.storm_lightning_timer = self.next_storm_lightning_delay();
+            }
+        }
+    }
+
+    /// Call harmless lightning and dismiss one bonded whisp when a Holly Rod hits a block during a storm.
+    /// The rod is not consumed; each successful strike costs one following whisp.
+    pub fn use_holly_rod_on_target(&mut self, hit_something: bool) -> bool {
+        if !hit_something
+            || !self.storm_active
+            || self.held_item() != Some(ItemKind::HollyRod)
+            || self.following_whisp_count() == 0
+        {
+            return false;
+        }
+        let Some(index) = self.animals.iter().position(|a| a.kind == AnimalKind::WillOWhisp && a.bonded) else {
+            return false;
+        };
+        self.animals.remove(index);
+        let strike_pos = self.player.pos;
+        self.trigger_storm_lightning(strike_pos);
+        self.storm_lightning_timer = self.next_storm_lightning_delay();
+        self.toasts.push("Lightning answers the Holly Rod.".to_string());
+        true
     }
 
     /// Spawn and advance the Horizen's single daytime tornado. The target is captured at spawn time, so walking
@@ -4110,6 +4232,43 @@ mod landmark_tests {
         pass(&mut g, 0.1);
         assert_eq!(whisps(&g).len(), 1);
         assert!((whisps(&g)[0].pos - g.player.pos).length() < 5.0, "it caught up at once");
+    }
+
+    #[test]
+    fn bonded_daytime_whisps_gather_a_storm_and_it_lingers_after_the_last_one_leaves() {
+        let (mut g, _) = whisp_game(46);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        put_in_hotbar(&mut g, 0, ItemKind::HollyRod);
+        pass(&mut g, 5.0);
+        assert_eq!(g.following_whisp_count(), 1);
+        g.world.set_night(false);
+        g.update_storm(WHISP_STORM_GATHER_SECONDS - 0.1);
+        assert!(!g.storm_active, "clouds gather only after the delay");
+        g.update_storm(0.1);
+        assert!(g.storm_active);
+        g.animals.clear();
+        g.update_storm(WHISP_STORM_CLEAR_SECONDS - 0.1);
+        assert!(g.storm_active, "the storm lingers after its last whisp");
+        g.update_storm(0.1);
+        assert!(!g.storm_active, "the storm eventually clears");
+    }
+
+    #[test]
+    fn holly_rod_lightning_consumes_one_following_whisp_without_hurting_the_player() {
+        let (mut g, _) = whisp_game(47);
+        g.animals.retain(|a| a.kind == AnimalKind::WillOWhisp);
+        put_in_hotbar(&mut g, 0, ItemKind::HollyRod);
+        pass(&mut g, 5.0);
+        let extra = g.animals[0].clone();
+        g.animals.push(extra);
+        g.world.set_night(false);
+        g.storm_active = true;
+        assert_eq!(g.following_whisp_count(), 2);
+        g.health = MAX_HEALTH - 1;
+        assert!(g.use_holly_rod_on_target(true));
+        assert_eq!(g.following_whisp_count(), 1);
+        assert_eq!(g.health, MAX_HEALTH - 1, "Holly Rod lightning does not hurt the player");
+        assert!(g.toasts.contains("Lightning answers the Holly Rod"));
     }
 
     #[test]

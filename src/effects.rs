@@ -111,7 +111,7 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     for layer in 0..9 {
         let t = layer as f32 / 8.0;
         let radius = HORIZEN_TORNADO_RADIUS * (1.0 - 0.72 * t);
-        let angle = time * 4.0 + layer as f32 * 1.35;
+        let angle = time * HORIZEN_TORNADO_SPIN_SPEED + layer as f32 * 1.35;
         let centre = tornado.pos
             + vec3(angle.cos() * radius * 0.48, t * HORIZEN_TORNADO_HEIGHT + 0.35, angle.sin() * radius * 0.48);
         let fire = if layer % 2 == 0 {
@@ -133,9 +133,41 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     draw_box(
         tornado.pos + vec3(0.0, HORIZEN_TORNADO_HEIGHT + 0.35, 0.0),
         vec3(HORIZEN_TORNADO_RADIUS * 0.42, 0.32, HORIZEN_TORNADO_RADIUS * 0.42),
-        time * 0.7,
+        time * HORIZEN_TORNADO_CAP_SPIN_SPEED,
         Color::new(0.16, 0.10, 0.07, 0.42),
     );
+}
+
+/// Draw rain around the camera while a will-o-whisp storm is active. The drops are regenerated every frame from
+/// their index, so there is no particle list to maintain and the effect follows the player naturally.
+pub fn draw_storm_rain(eye: Vec3, time: f32) {
+    for i in 0..WHISP_STORM_RAIN_COUNT {
+        let n = i as f32;
+        let x = eye.x + (n * 12.9898 + 17.3).sin() * WHISP_STORM_RAIN_RADIUS;
+        let z = eye.z + (n * 78.233 + 41.7).sin() * WHISP_STORM_RAIN_RADIUS;
+        let phase = (time * WHISP_STORM_RAIN_SPEED + n * 0.91).rem_euclid(WHISP_STORM_RAIN_HEIGHT + 4.0);
+        let y = eye.y + WHISP_STORM_RAIN_HEIGHT - phase;
+        let end = y - WHISP_STORM_RAIN_LENGTH;
+        draw_line_3d(vec3(x, y, z), vec3(x, end, z), Color::new(0.62, 0.72, 0.88, 0.46));
+    }
+}
+
+/// Draw a brief distant lightning bolt. `base` is the ground position where the strike lands and `flash` is the
+/// remaining flash time, which makes the bolt disappear automatically after the strike.
+pub fn draw_storm_lightning(base: Vec3, time: f32, flash: f32) {
+    if flash <= 0.0 {
+        return;
+    }
+    let top = base + vec3(0.0, 24.0, 0.0);
+    let mut previous = top;
+    let brightness = (flash / WHISP_STORM_LIGHTNING_FLASH_SECONDS).clamp(0.0, 1.0);
+    for i in 1..=7 {
+        let t = i as f32 / 7.0;
+        let sway = (time * 17.0 + i as f32 * 4.7).sin() * (0.7 + t * 0.7);
+        let next = base + vec3(sway, 24.0 * (1.0 - t), (time * 13.0 + i as f32 * 2.9).cos() * 0.5);
+        draw_line_3d(previous, next, Color::new(0.82, 0.92, 1.0, 0.92 * brightness));
+        previous = next;
+    }
 }
 
 /// The colours of the rainbow, outermost first.

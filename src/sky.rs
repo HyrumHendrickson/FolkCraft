@@ -61,11 +61,20 @@ pub struct CloudRun {
 
 /// The cloud runs inside the square of cells within `radius` of (`cx`, `cz`).
 pub fn cloud_runs(seed: i64, cx: i32, cz: i32, radius: i32) -> Vec<CloudRun> {
+    cloud_runs_at_threshold(seed, cx, cz, radius, CLOUD_THRESHOLD)
+}
+
+/// The same cloud geometry as ordinary clouds, with a lower density threshold for storm coverage.
+fn storm_cloud_runs(seed: i64, cx: i32, cz: i32, radius: i32) -> Vec<CloudRun> {
+    cloud_runs_at_threshold(seed, cx, cz, radius, STORM_CLOUD_THRESHOLD)
+}
+
+fn cloud_runs_at_threshold(seed: i64, cx: i32, cz: i32, radius: i32, threshold: f32) -> Vec<CloudRun> {
     let mut runs = Vec::new();
     for z in cz - radius..=cz + radius {
         let mut start: Option<i32> = None;
         for x in cx - radius..=cx + radius + 1 {
-            let cloud = x <= cx + radius && is_cloud(seed, x, z);
+            let cloud = x <= cx + radius && cloud_density(seed, x, z) > threshold;
             match (cloud, start) {
                 (true, None) => start = Some(x),
                 (false, Some(x0)) => {
@@ -85,14 +94,14 @@ pub fn cloud_offset(time: f32) -> f32 {
 }
 
 /// Draw the sun and the clouds. Call right after the 3D camera is set and before the terrain, so the land hides
-/// whatever it stands in front of.
-pub fn draw_sky(seed: i64, eye: Vec3, time: f32, night: bool) {
+/// whatever it stands in front of. During a will-o-whisp storm, ordinary clouds are replaced by denser, darker ones.
+pub fn draw_sky(seed: i64, eye: Vec3, time: f32, night: bool, storm: bool) {
     if night {
         draw_stars(seed, eye, time);
         draw_moon(eye);
     } else {
         draw_sun(eye);
-        draw_clouds(seed, eye, time);
+        draw_clouds(seed, eye, time, storm);
     }
 }
 
@@ -104,7 +113,7 @@ pub fn draw_horizen_sky(seed: i64, eye: Vec3, time: f32, night: bool) {
         draw_moon(eye);
     } else {
         draw_sun(eye);
-        draw_clouds(seed, eye, time);
+        draw_clouds(seed, eye, time, false);
     }
 }
 
@@ -143,18 +152,29 @@ fn draw_stars_in(seed: i64, eye: Vec3, time: f32, rotation_speed: f32) {
     }
 }
 
-/// The clouds: each run is a white slab over a thinner grey underside.
-fn draw_clouds(seed: i64, eye: Vec3, time: f32) {
+/// The clouds: each run is a slab over a thinner underside. Storm clouds use the same geometry and movement,
+/// but a lower density threshold and darker colors replace the ordinary white cloud bank.
+fn draw_clouds(seed: i64, eye: Vec3, time: f32, storm: bool) {
     let offset = cloud_offset(time);
     let (cx, cz) = (((eye.x - offset) / CLOUD_CELL).floor() as i32, (eye.z / CLOUD_CELL).floor() as i32);
     let under = CLOUD_THICKNESS * 0.3;
     let top = CLOUD_THICKNESS - under;
-    for run in cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS) {
+    let runs = if storm {
+        storm_cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS)
+    } else {
+        cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS)
+    };
+    let (under_color, top_color) = if storm {
+        (Color::new(0.38, 0.41, 0.48, 1.0), Color::new(0.66, 0.69, 0.76, 1.0))
+    } else {
+        (Color::new(0.80, 0.83, 0.88, 1.0), Color::new(0.98, 0.98, 0.99, 1.0))
+    };
+    for run in runs {
         let width = (run.x1 - run.x0 + 1) as f32 * CLOUD_CELL;
         let x = offset + run.x0 as f32 * CLOUD_CELL + width / 2.0;
         let z = (run.z as f32 + 0.5) * CLOUD_CELL;
-        draw_cube(vec3(x, CLOUD_HEIGHT + under / 2.0, z), vec3(width, under, CLOUD_CELL), None, Color::new(0.80, 0.83, 0.88, 1.0));
-        draw_cube(vec3(x, CLOUD_HEIGHT + under + top / 2.0, z), vec3(width, top, CLOUD_CELL), None, Color::new(0.98, 0.98, 0.99, 1.0));
+        draw_cube(vec3(x, CLOUD_HEIGHT + under / 2.0, z), vec3(width, under, CLOUD_CELL), None, under_color);
+        draw_cube(vec3(x, CLOUD_HEIGHT + under + top / 2.0, z), vec3(width, top, CLOUD_CELL), None, top_color);
     }
 }
 

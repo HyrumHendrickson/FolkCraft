@@ -17,10 +17,11 @@ fn col(r: f32, g: f32, b: f32) -> Color {
 }
 
 /// The parts of a model, posed for the animal's current movement.
-fn deer_parts(a: &Animal) -> Vec<Part> {
+fn deer_parts(a: &Animal, night: bool) -> Vec<Part> {
     let hide = col(0.60, 0.40, 0.22);
     let dark = col(0.40, 0.26, 0.14);
     let belly = col(0.82, 0.70, 0.52);
+    let eye = if night { col(1.0, 0.02, 0.01) } else { belly };
     let moving = if a.vel.x.abs() + a.vel.z.abs() > 0.1 { 1.0 } else { 0.0 };
     let mut parts: Vec<Part> = vec![
         ((0.0, 0.95, 0.0), (0.55, 0.27, 0.25), hide),
@@ -28,8 +29,8 @@ fn deer_parts(a: &Animal) -> Vec<Part> {
         ((0.60, 1.20, 0.0), (0.16, 0.32, 0.12), hide),
         ((0.82, 1.48, 0.0), (0.20, 0.14, 0.12), hide),
         ((1.00, 1.42, 0.0), (0.06, 0.07, 0.07), dark),
-        ((0.74, 1.66, 0.09), (0.03, 0.10, 0.03), belly),
-        ((0.74, 1.66, -0.09), (0.03, 0.10, 0.03), belly),
+        ((0.74, 1.66, 0.09), (0.03, 0.10, 0.03), eye),
+        ((0.74, 1.66, -0.09), (0.03, 0.10, 0.03), eye),
         ((-0.58, 1.08, 0.0), (0.05, 0.09, 0.07), col(0.95, 0.92, 0.85)),
     ];
     // Antlers on the head.
@@ -45,16 +46,17 @@ fn deer_parts(a: &Animal) -> Vec<Part> {
     parts
 }
 
-fn rabbit_parts(a: &Animal) -> Vec<Part> {
+fn rabbit_parts(a: &Animal, night: bool) -> Vec<Part> {
     let fur = col(0.58, 0.48, 0.38);
     let light = col(0.86, 0.82, 0.76);
     let dark = col(0.34, 0.27, 0.20);
+    let eye = if night { col(1.0, 0.02, 0.01) } else { dark };
     let moving = if a.vel.x.abs() + a.vel.z.abs() > 0.1 { 1.0 } else { 0.0 };
     let hop = (a.phase * 3.0).sin().abs() * 0.06 * moving;
     let mut parts: Vec<Part> = vec![
         ((0.0, 0.24 + hop, 0.0), (0.20, 0.12, 0.11), fur),
         ((0.22, 0.34 + hop, 0.0), (0.09, 0.08, 0.07), fur),
-        ((0.30, 0.34 + hop, 0.0), (0.025, 0.03, 0.03), dark),
+        ((0.30, 0.34 + hop, 0.0), (0.025, 0.03, 0.03), eye),
         ((-0.21, 0.26 + hop, 0.0), (0.05, 0.05, 0.05), light),
         ((0.12, 0.30 + hop, 0.0), (0.05, 0.05, 0.08), light),
     ];
@@ -65,12 +67,13 @@ fn rabbit_parts(a: &Animal) -> Vec<Part> {
     parts
 }
 
-fn moose_parts(a: &Animal) -> Vec<Part> {
+fn moose_parts(a: &Animal, night: bool) -> Vec<Part> {
     let hide = col(0.30, 0.22, 0.16);
     let shoulder = col(0.38, 0.28, 0.20);
     let muzzle = col(0.20, 0.15, 0.11);
     let leg = col(0.22, 0.17, 0.13);
     let horn = col(0.80, 0.74, 0.60);
+    let eye = if night { col(1.0, 0.02, 0.01) } else { col(0.08, 0.05, 0.03) };
     let moving = if a.vel.x.abs() + a.vel.z.abs() > 0.1 { 1.0 } else { 0.0 };
     // An enraged moose lowers its head.
     let head_y = if a.mode == Mode::Charge { 1.55 } else { 1.85 };
@@ -80,6 +83,8 @@ fn moose_parts(a: &Animal) -> Vec<Part> {
         ((0.95, (1.45 + head_y) / 2.0, 0.0), (0.20, (head_y - 1.45) / 2.0 + 0.30, 0.18), hide),
         ((1.30, head_y, 0.0), (0.30, 0.20, 0.16), hide),
         ((1.58, head_y - 0.10, 0.0), (0.12, 0.12, 0.13), muzzle),
+        ((1.48, head_y + 0.08, 0.14), (0.025, 0.035, 0.025), eye),
+        ((1.48, head_y + 0.08, -0.14), (0.025, 0.035, 0.025), eye),
         ((-0.74, 1.45, 0.0), (0.05, 0.08, 0.06), shoulder),
     ];
     for side in [-1.0, 1.0] {
@@ -95,15 +100,16 @@ fn moose_parts(a: &Animal) -> Vec<Part> {
     parts
 }
 
-fn quail_parts(a: &Animal, time: f32) -> Vec<Part> {
+fn quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Part> {
     let feathers = col(0.56, 0.46, 0.34);
     let speckle = col(0.38, 0.30, 0.22);
+    let eye = if night { col(1.0, 0.02, 0.01) } else { col(0.15, 0.12, 0.10) };
     let mut parts: Vec<Part> = vec![
         ((0.0, 0.20, 0.0), (0.14, 0.10, 0.10), feathers),
         ((0.02, 0.27, 0.0), (0.10, 0.04, 0.08), speckle),
         ((0.17, 0.33, 0.0), (0.06, 0.06, 0.05), col(0.34, 0.26, 0.20)),
         ((0.24, 0.32, 0.0), (0.025, 0.02, 0.02), col(0.85, 0.65, 0.20)),
-        ((0.19, 0.42, 0.0), (0.02, 0.05, 0.015), col(0.15, 0.12, 0.10)),
+        ((0.19, 0.42, 0.0), (0.02, 0.05, 0.015), eye),
         ((-0.17, 0.25, 0.0), (0.06, 0.04, 0.05), speckle),
     ];
     if a.mode == Mode::Fly {
@@ -122,11 +128,12 @@ fn quail_parts(a: &Animal, time: f32) -> Vec<Part> {
     parts
 }
 
-fn bear_parts(a: &Animal) -> Vec<Part> {
+fn bear_parts(a: &Animal, night: bool) -> Vec<Part> {
     let fur = col(0.31, 0.21, 0.14);
     let shoulder = col(0.36, 0.25, 0.17);
     let snout = col(0.58, 0.45, 0.32);
     let dark = col(0.12, 0.09, 0.07);
+    let eye = if night { col(1.0, 0.02, 0.01) } else { dark };
     let moving = if a.vel.x.abs() + a.vel.z.abs() > 0.1 { 1.0 } else { 0.0 };
     // A charging bear lowers its head and its legs pump faster.
     let charging = a.mode == Mode::Charge;
@@ -137,8 +144,8 @@ fn bear_parts(a: &Animal) -> Vec<Part> {
         ((0.90, head_y, 0.0), (0.26, 0.24, 0.22), fur),
         ((1.16, head_y - 0.08, 0.0), (0.14, 0.12, 0.12), snout),
         ((1.30, head_y - 0.03, 0.0), (0.04, 0.04, 0.05), dark),
-        ((1.08, head_y + 0.07, 0.12), (0.02, 0.03, 0.02), dark),
-        ((1.08, head_y + 0.07, -0.12), (0.02, 0.03, 0.02), dark),
+        ((1.08, head_y + 0.07, 0.12), (0.02, 0.03, 0.02), eye),
+        ((1.08, head_y + 0.07, -0.12), (0.02, 0.03, 0.02), eye),
         ((-0.66, 0.92, 0.0), (0.06, 0.06, 0.06), fur),
     ];
     for side in [-1.0, 1.0] {
@@ -186,18 +193,18 @@ pub fn will_o_whisp_parts(a: &Animal, time: f32) -> Vec<Part> {
 }
 
 /// Draw every animal within the render range. Call while the 3D camera is active.
-pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
+pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), night: bool) {
     for a in animals {
         if !in_render_range(player_chunk, World::chunk_of_pos(a.pos)) {
             continue;
         }
         let parts = match a.kind {
             AnimalKind::WillOWhisp => continue, // drawn by `draw_ghosts`, over the water
-            AnimalKind::Deer => deer_parts(a),
-            AnimalKind::Quail => quail_parts(a, time),
-            AnimalKind::Bear => bear_parts(a),
-            AnimalKind::Rabbit => rabbit_parts(a),
-            AnimalKind::Moose => moose_parts(a),
+            AnimalKind::Deer => deer_parts(a, night),
+            AnimalKind::Quail => quail_parts(a, time, night),
+            AnimalKind::Bear => bear_parts(a, night),
+            AnimalKind::Rabbit => rabbit_parts(a, night),
+            AnimalKind::Moose => moose_parts(a, night),
         };
         let (s, c) = a.heading.sin_cos();
         for ((fx, fy, fz), (hx, hy, hz), color) in parts {
