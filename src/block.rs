@@ -56,6 +56,13 @@ pub enum Block {
     GoldPile,
     /// The grey stone of the castle on a lake's island: a solid cube that cannot be broken or made.
     CastleStone,
+    /// A shut gate or door of the grand castle, of dark iron-bound wood: a solid cube that cannot be broken or made. The
+    /// castle shuts its gate and the throne-room door at night and leaves them ruined by day.
+    CastleDoor,
+    /// A gravestone in the graveyard: thin, solid, and it cannot be broken or made.
+    Gravestone,
+    /// A suit of armour on a pedestal in the throne room (there at night). Taking it by hand gives the royal armour.
+    ArmorStand,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -157,6 +164,22 @@ const GOLD_PILE_PARTS: &[Part] = &[
     part([0.20, 0.22, 0.20], [0.80, 0.42, 0.80], (0.95, 0.73, 0.20)),
     part([0.34, 0.42, 0.34], [0.66, 0.58, 0.66], (1.00, 0.85, 0.36)),
 ];
+/// A low headstone on a footing, with a rounded-looking top block.
+const GRAVESTONE_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.34], [0.82, 0.10, 0.66], (0.46, 0.46, 0.48)),
+    part([0.26, 0.10, 0.42], [0.74, 0.78, 0.58], (0.58, 0.58, 0.60)),
+    part([0.32, 0.78, 0.42], [0.68, 0.90, 0.58], (0.62, 0.62, 0.64)),
+];
+/// A suit of plate on a stone pedestal: legs, a breastplate with gold trim, shoulders and a helm.
+const ARMOR_STAND_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.18, 0.82], (0.40, 0.40, 0.44)),
+    part([0.32, 0.18, 0.36], [0.68, 0.50, 0.64], (0.70, 0.72, 0.78)),
+    part([0.26, 0.50, 0.32], [0.74, 0.82, 0.68], (0.76, 0.78, 0.84)),
+    part([0.26, 0.64, 0.30], [0.74, 0.68, 0.70], (0.90, 0.68, 0.20)),
+    part([0.14, 0.72, 0.34], [0.30, 0.88, 0.66], (0.66, 0.68, 0.74)),
+    part([0.70, 0.72, 0.34], [0.86, 0.88, 0.66], (0.66, 0.68, 0.74)),
+    part([0.36, 0.82, 0.38], [0.64, 1.0, 0.62], (0.80, 0.82, 0.88)),
+];
 const CHARCOAL_PARTS: &[Part] = &[
     part([0.15, 0.0, 0.20], [0.85, 0.25, 0.75], (0.12, 0.12, 0.13)),
     part([0.30, 0.25, 0.30], [0.65, 0.38, 0.62], (0.17, 0.17, 0.18)),
@@ -200,6 +223,7 @@ impl Block {
                 | Block::ClayForge
                 | Block::ForgeCharged
                 | Block::GoldPile
+                | Block::ArmorStand
         )
     }
 
@@ -244,7 +268,18 @@ impl Block {
             Block::Boulder => BREAK_SECONDS_BOULDER,
             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
-            Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Water | Block::Fire | Block::Embers | Block::ForgeLit => 0.0,
+            Block::ArmorStand => BREAK_SECONDS_ARMOR,
+            Block::Air
+            | Block::Dirt
+            | Block::Stone
+            | Block::Snow
+            | Block::CastleStone
+            | Block::CastleDoor
+            | Block::Gravestone
+            | Block::Water
+            | Block::Fire
+            | Block::Embers
+            | Block::ForgeLit => 0.0,
         }
     }
 
@@ -273,7 +308,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Leaves | Block::Needles | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -285,6 +320,9 @@ impl Block {
                 | Block::Stone
                 | Block::Snow
                 | Block::CastleStone
+                | Block::CastleDoor
+                | Block::Gravestone
+                | Block::ArmorStand
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -306,7 +344,7 @@ impl Block {
     /// Solid, built-or-natural cubes that a plank can be attached to from the side or below,
     /// which is what lets a ceiling reach out from the top of a wall. Foliage does not count.
     pub fn anchors_planks(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Planks)
     }
 
     /// The boxes this block is drawn from. Empty for air and for plain full cubes.
@@ -331,6 +369,8 @@ impl Block {
             Block::ForgeCharged => FORGE_CHARGED_PARTS,
             Block::ForgeLit => FORGE_LIT_PARTS,
             Block::GoldPile => GOLD_PILE_PARTS,
+            Block::Gravestone => GRAVESTONE_PARTS,
+            Block::ArmorStand => ARMOR_STAND_PARTS,
             _ => &[],
         }
     }
@@ -394,6 +434,7 @@ impl Block {
             Block::Stone => (0.50, 0.50, 0.53),
             Block::Snow => (0.94, 0.96, 0.99),
             Block::CastleStone => (0.62, 0.60, 0.57),
+            Block::CastleDoor => (0.30, 0.20, 0.12),
             Block::Leaves => (0.16, 0.52, 0.17),
             Block::Needles => (0.09, 0.36, 0.22),
             Block::Planks => (0.72, 0.54, 0.31),
@@ -406,7 +447,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 28] = [
+    const ALL: [Block; 31] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -435,6 +476,9 @@ mod tests {
         Block::Snow,
         Block::GoldPile,
         Block::CastleStone,
+        Block::CastleDoor,
+        Block::Gravestone,
+        Block::ArmorStand,
     ];
 
     #[test]

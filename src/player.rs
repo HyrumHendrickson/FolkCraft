@@ -87,6 +87,24 @@ impl Player {
         }
     }
 
+    /// Move the player out of a block that has appeared where they stand (a door that shut): to the nearest free spot
+    /// beside them, or failing that straight up.
+    pub fn eject_from_blocks(&mut self, world: &World) {
+        if !Self::collides(world, self.pos) {
+            return;
+        }
+        for r in 1..=4 {
+            for (dx, dz) in [(r, 0), (-r, 0), (0, r), (0, -r)] {
+                let p = self.pos + vec3(dx as f32, 0.0, dz as f32);
+                if !Self::collides(world, p) {
+                    self.pos = p;
+                    return;
+                }
+            }
+        }
+        self.lift_out_of_blocks(world);
+    }
+
     pub fn update(&mut self, world: &World, dt: f32, input: &MoveInput) {
         // Horizontal input.
         let forward = vec3(self.yaw.cos(), 0.0, self.yaw.sin());

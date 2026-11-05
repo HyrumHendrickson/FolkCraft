@@ -69,11 +69,12 @@ pub enum ItemKind {
     CookedMoose,
     /// A rabbit sometimes leaves one. It has no use.
     RabbitFoot,
-    /// A rabbit-foot bonus drop. Held in the hand it shows the world's one rainbow, which ends in a pile of gold.
+    /// A rabbit-foot bonus drop. Held in the hand it shows the world's one rainbow by day, which ends in a pile of
+    /// gold, and by night the world's one grand castle. A ghostly trail always leads to whichever of them is out there.
     PeepStone,
     /// A rabbit-foot bonus drop. It has no use yet.
     HollyRod,
-    /// Axes of metal: each hits one harder than the one before (stone, copper, bronze, iron).
+    /// Axes of metal: each hits harder than the one before (stone, copper, bronze, iron).
     CopperAxe,
     BronzeAxe,
     IronAxe,
@@ -94,13 +95,22 @@ pub enum ItemKind {
     Sling,
     /// A small dark lodestone found lying on the ground. With an iron ore it makes a compass.
     Loadstone,
-    /// A loadstone and an iron ore. Held in the hand its needle points north; following it ten chunks leads to a
-    /// mountain.
+    /// A loadstone and an iron ore. Held in the hand its needle points north, until the world has its one mountain
+    /// (following it ten chunks north brings the mountain out); from then on it always points at the mountain.
     Compass,
+    /// Dropped by a moose. With two gold it makes a bone totem.
+    Antlers,
+    /// Antlers and two gold. Held in the hand it shows a ghostly trail: by day to the world's one well, by night to its
+    /// one graveyard.
+    BoneTotem,
+    /// A bear pelt made into a cloak. Worn, it keeps bears from attacking unless they have been hit first.
+    PeltCloak,
+    /// The armour of the throne room. Worn, it halves all the damage the player takes.
+    RoyalArmor,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 59] = [
+    pub const ALL: [ItemKind; 63] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -160,6 +170,10 @@ impl ItemKind {
         ItemKind::Sling,
         ItemKind::Loadstone,
         ItemKind::Compass,
+        ItemKind::Antlers,
+        ItemKind::BoneTotem,
+        ItemKind::PeltCloak,
+        ItemKind::RoyalArmor,
     ];
 
     /// Display name.
@@ -224,6 +238,10 @@ impl ItemKind {
             ItemKind::Sling => "Sling",
             ItemKind::Loadstone => "Loadstone",
             ItemKind::Compass => "Compass",
+            ItemKind::Antlers => "Antlers",
+            ItemKind::BoneTotem => "Bone Totem",
+            ItemKind::PeltCloak => "Pelt Cloak",
+            ItemKind::RoyalArmor => "Royal Armor",
         }
     }
 
@@ -289,6 +307,10 @@ impl ItemKind {
             ItemKind::Sling => "sling",
             ItemKind::Loadstone => "loadstone",
             ItemKind::Compass => "compass",
+            ItemKind::Antlers => "antlers",
+            ItemKind::BoneTotem => "bone_totem",
+            ItemKind::PeltCloak => "pelt_cloak",
+            ItemKind::RoyalArmor => "royal_armor",
         }
     }
 
@@ -363,6 +385,10 @@ impl ItemKind {
             ItemKind::Sling => Color::new(0.58, 0.38, 0.22, 1.0),
             ItemKind::Loadstone => Color::new(0.20, 0.21, 0.26, 1.0),
             ItemKind::Compass => Color::new(0.72, 0.55, 0.24, 1.0),
+            ItemKind::Antlers => Color::new(0.84, 0.78, 0.64, 1.0),
+            ItemKind::BoneTotem => Color::new(0.90, 0.88, 0.80, 1.0),
+            ItemKind::PeltCloak => Color::new(0.32, 0.22, 0.15, 1.0),
+            ItemKind::RoyalArmor => Color::new(0.66, 0.68, 0.74, 1.0),
         }
     }
 
@@ -420,6 +446,11 @@ impl ItemKind {
     /// Whether this is an axe: it chops trees and hurts animals.
     pub fn is_axe(self) -> bool {
         matches!(self, ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe)
+    }
+
+    /// Whether this can be worn. A player wears one thing at a time: a pelt cloak or the royal armour.
+    pub fn is_wearable(self) -> bool {
+        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor)
     }
 
     /// Whether this shoots something when the left button is clicked: a bow (arrows) or a sling (pebbles).
@@ -486,9 +517,9 @@ impl ItemKind {
     pub fn melee_damage(self) -> Option<i32> {
         match self {
             ItemKind::StoneAxe => Some(AXE_DAMAGE),
-            ItemKind::CopperAxe => Some(AXE_DAMAGE + 1),
-            ItemKind::BronzeAxe => Some(AXE_DAMAGE + 2),
-            ItemKind::IronAxe => Some(AXE_DAMAGE + 3),
+            ItemKind::CopperAxe => Some(COPPER_AXE_DAMAGE),
+            ItemKind::BronzeAxe => Some(BRONZE_AXE_DAMAGE),
+            ItemKind::IronAxe => Some(IRON_AXE_DAMAGE),
             ItemKind::BronzeMallet => Some(MALLET_DAMAGE),
             _ => None,
         }
@@ -593,6 +624,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
             }
         }
         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
+        Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
         Block::ClayForge => drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize)),
         Block::ForgeCharged => {
             drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize));
@@ -613,7 +645,18 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
             }
         }
         Block::Ash => drops.push(ItemKind::Ash),
-        Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
+        Block::Air
+        | Block::Dirt
+        | Block::Stone
+        | Block::Snow
+        | Block::CastleStone
+        | Block::CastleDoor
+        | Block::Gravestone
+        | Block::Water
+        | Block::Flower
+        | Block::Fire
+        | Block::Embers
+        | Block::ForgeLit => {}
     }
     drops
 }
@@ -919,10 +962,12 @@ mod tests {
     }
 
     #[test]
-    fn each_axe_hits_one_harder_than_the_one_before_and_all_chop() {
+    fn each_axe_hits_harder_than_the_one_before_and_all_chop() {
         let axes = [ItemKind::StoneAxe, ItemKind::CopperAxe, ItemKind::BronzeAxe, ItemKind::IronAxe];
+        let damage = [AXE_DAMAGE, COPPER_AXE_DAMAGE, BRONZE_AXE_DAMAGE, IRON_AXE_DAMAGE];
+        assert!(damage.windows(2).all(|w| w[0] < w[1]), "every kind of axe deals a different amount");
         for (i, axe) in axes.into_iter().enumerate() {
-            assert_eq!(axe.melee_damage(), Some(AXE_DAMAGE + i as i32), "{axe:?}");
+            assert_eq!(axe.melee_damage(), Some(damage[i]), "{axe:?}");
             assert!(axe.is_axe() && Block::Wood.can_break_with(Some(axe)), "{axe:?}");
         }
         assert!(!ItemKind::BronzeMallet.is_axe() && !Block::Wood.can_break_with(Some(ItemKind::BronzeMallet)));
@@ -943,11 +988,12 @@ mod tests {
     }
 
     #[test]
-    fn every_axe_and_the_mallet_have_a_melee_damage_and_each_axe_hits_one_harder() {
+    fn every_axe_and_the_mallet_have_a_melee_damage_and_each_axe_hits_harder() {
         let axes = [ItemKind::StoneAxe, ItemKind::CopperAxe, ItemKind::BronzeAxe, ItemKind::IronAxe];
+        let damage = [AXE_DAMAGE, COPPER_AXE_DAMAGE, BRONZE_AXE_DAMAGE, IRON_AXE_DAMAGE];
         for (i, axe) in axes.iter().enumerate() {
             assert!(axe.is_axe());
-            assert_eq!(axe.melee_damage(), Some(AXE_DAMAGE + i as i32), "{axe:?}");
+            assert_eq!(axe.melee_damage(), Some(damage[i]), "{axe:?}");
         }
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         for k in ItemKind::ALL {

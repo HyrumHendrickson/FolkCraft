@@ -265,8 +265,7 @@ pub fn trail_wisps(path: &[(f32, f32)], length: f32, spacing: f32, time: f32) ->
 
 /// Draw the ghostly trail of a peep stone: faint, drifting, pulsing lights floating over the ground along `path`, pale
 /// blue at night and pale gold by day. Call while the 3D camera is active, with the other translucent things.
-pub fn draw_trail(world: &World, path: &[(f32, f32)], night: bool, time: f32) {
-    let (r, g, b) = if night { (0.70, 0.86, 1.0) } else { (1.0, 0.92, 0.62) };
+pub fn draw_trail(world: &World, path: &[(f32, f32)], (r, g, b): (f32, f32, f32), time: f32) {
     for wisp in trail_wisps(path, TRAIL_LENGTH, TRAIL_SPACING, time) {
         let ground = world.ground_top(wisp.x.floor() as i32, wisp.z.floor() as i32).max(GROUND_TOP) as f32 + 1.0;
         let y = ground + TRAIL_HEIGHT + 0.12 * (time * 2.0 + wisp.along).sin();

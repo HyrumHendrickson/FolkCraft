@@ -176,6 +176,31 @@ pub const GRAND_STOREYS: i32 = 5;
 /// The grand castle rises this far beyond the generated land (the nearest part is at least this far from the player).
 pub const GRAND_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
 
+/// The bone totem's two landmarks, each of which the world has only once. The well is a square of water `WELL_SIZE`
+/// blocks across, sunk to the stone floor of the world (so `GROUND_TOP - STONE_LAYERS + 1` blocks deep) and ringed by
+/// a one-block rim; the nearest edge of the well is `WELL_DISTANCE` blocks from the player when it appears. The
+/// graveyard is a walled square (`GRAVEYARD_HALF` blocks from the centre to its wall) of gravestones, with a gate
+/// in its south side, and it appears `GRAVEYARD_DISTANCE` blocks from the player.
+pub const WELL_SIZE: i32 = 4;
+/// The rim round the well: one block high and this many blocks wide.
+pub const WELL_RIM_WIDTH: i32 = 1;
+pub const WELL_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
+pub const WELL_TREE_MARGIN: i32 = 6;
+pub const GRAVEYARD_HALF: i32 = 12;
+pub const GRAVEYARD_REACH: i32 = 14;
+pub const GRAVEYARD_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
+pub const GRAVEYARD_TREE_MARGIN: i32 = 6;
+/// Gravestones stand this many blocks apart inside the graveyard.
+pub const GRAVEYARD_SPACING: i32 = 3;
+
+/// The grand castle by day is a ruin and by night whole (see `landmarks::grand_castle_is_solid`). The throne room is on
+/// the second floor, west of a wall `THRONE_WALL_X` blocks from the keep's centre, and is entered by a door in that
+/// wall `THRONE_DOOR_HALF` blocks either side of the middle.
+pub const THRONE_WALL_X: i32 = -3;
+pub const THRONE_DOOR_HALF: i32 = 1;
+/// The ruined outer wall is no more than this many blocks high.
+pub const RUIN_WALL_MAX: i32 = 5;
+
 /// The ghostly trail a peep stone shows: how far ahead of the player it is drawn, the gap between its wisps (blocks)
 /// and how high they float above the ground.
 pub const TRAIL_LENGTH: f32 = 70.0;
@@ -197,6 +222,24 @@ pub const RAINBOW_ARC_RATIO: f32 = 0.45;
 /// Gold in the pile at the end of the rainbow.
 pub const RAINBOW_GOLD_DROP: u32 = 6;
 pub const BREAK_SECONDS_GOLD_PILE: f32 = 1.5;
+/// Taking the royal armour off its stand.
+pub const BREAK_SECONDS_ARMOR: f32 = 1.0;
+
+// --- The Horizen ------------------------------------------------------------------------
+
+/// The Horizen is empty flat land at the level of the overworld's plain, broken by many small ponds. A pond lies in
+/// each square of `HORIZEN_POND_CELL` blocks with `HORIZEN_POND_CHANCE` percent chance; it is round-ish, between the two
+/// radii, and one block deep like a river. No pond comes within `HORIZEN_SPAWN_CLEARANCE` blocks of where the player
+/// arrives.
+pub const HORIZEN_POND_CELL: i32 = 22;
+pub const HORIZEN_POND_CHANCE: u64 = 70;
+pub const HORIZEN_POND_MIN_RADIUS: f32 = 2.5;
+pub const HORIZEN_POND_MAX_RADIUS: f32 = 5.5;
+pub const HORIZEN_SPAWN_CLEARANCE: f32 = 12.0;
+/// Where the player arrives in the Horizen (and the nearest dry spot to it), as a column.
+pub const HORIZEN_SPAWN: (i32, i32) = (CHUNK_SIZE / 2, CHUNK_SIZE / 2);
+/// A player whose feet sink below this height inside the well has fallen in (the water's surface is `GROUND_TOP + 1`).
+pub const WELL_FALL_DEPTH: f32 = (GROUND_TOP + 1) as f32 - 1.2;
 
 // --- Plants, drops and fire -------------------------------------------------------------
 
@@ -231,6 +274,9 @@ pub const PURPLE_BERRY_STEW_DAMAGE: u32 = 2;
 pub const VENISON_HEAL: u32 = 4;
 pub const POULTRY_HEAL: u32 = 3;
 pub const BEAR_MEAT_HEAL: u32 = 5;
+/// Every blow the player takes is divided by this while the royal armour is worn (the result rounds up, so a blow
+/// always costs at least one life).
+pub const ARMOR_DAMAGE_DIVISOR: u32 = 2;
 
 // --- Cooking and smelting ---------------------------------------------------------------
 
@@ -358,6 +404,7 @@ pub const MOOSE_WALK_SPEED: f32 = 1.5;
 pub const MOOSE_RUN_SPEED: f32 = 5.8;
 pub const MOOSE_MEAT_DROP: u32 = 4;
 pub const MOOSE_LEATHER_DROP: u32 = 2;
+pub const MOOSE_ANTLER_DROP: u32 = 1;
 pub const MAX_MOOSE: usize = 2;
 pub const SPAWN_WEIGHT_MOOSE: u64 = 10;
 pub const MOOSE_GIVE_UP_DISTANCE: f32 = 40.0;
@@ -371,7 +418,11 @@ pub const STEW_SECONDS: f32 = 12.0;
 
 // --- Hunting and knockback --------------------------------------------------------------
 
+/// Damage of one blow of each axe: stone, copper, bronze, iron. Every kind of axe hits for a different amount.
 pub const AXE_DAMAGE: i32 = 4;
+pub const COPPER_AXE_DAMAGE: i32 = 6;
+pub const BRONZE_AXE_DAMAGE: i32 = 8;
+pub const IRON_AXE_DAMAGE: i32 = 10;
 pub const MALLET_DAMAGE: i32 = 5;
 pub const ARROW_DAMAGE: i32 = 3;
 pub const SLING_DAMAGE: i32 = 2;

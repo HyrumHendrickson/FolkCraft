@@ -50,6 +50,8 @@ pub const RECIPES: &[Recipe] = &[
     },
     Recipe { output: ItemKind::Sling, output_count: 1, inputs: &[(ItemKind::Leather, 1)] },
     Recipe { output: ItemKind::Compass, output_count: 1, inputs: &[(ItemKind::Loadstone, 1), (ItemKind::IronOre, 1)] },
+    Recipe { output: ItemKind::BoneTotem, output_count: 1, inputs: &[(ItemKind::Antlers, 1), (ItemKind::Gold, 2)] },
+    Recipe { output: ItemKind::PeltCloak, output_count: 1, inputs: &[(ItemKind::BearPelt, 1)] },
     Recipe {
         output: ItemKind::Arrow,
         output_count: 1,

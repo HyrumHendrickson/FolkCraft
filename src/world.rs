@@ -7,8 +7,9 @@ use crate::block::Block;
 use crate::chunk::{idx, Chunk};
 use crate::config::*;
 use crate::item::{Hearth, ItemKind};
-use crate::landmarks::{GrandCastle, Landmarks, Lake, Mountain, Rainbow, RainbowState};
-use crate::terrain::{berry_bush_is_purple, generate_chunk_with, ground_top_with, is_wet_column};
+use crate::horizen::{self, Dimension};
+use crate::landmarks::{GrandCastle, Graveyard, Landmarks, Lake, Mountain, Rainbow, RainbowState, Well};
+use crate::terrain::{berry_bush_is_purple, generate_chunk_for, ground_top_with, is_wet_column};
 
 pub type Pos = (i32, i32, i32);
 
@@ -97,6 +98,8 @@ pub struct World {
     pub night: bool,
     /// The lakes, mountains and rainbow the player has brought into the world (persisted to disk).
     pub landmarks: Landmarks,
+    /// Which dimension this world is. The Horizen has no landmarks, no animals and no change of day and night.
+    pub dimension: Dimension,
 }
 
 /// What a ray hit: the block's cell, the block, and the empty cell the ray came from
@@ -161,7 +164,15 @@ impl World {
             berry_picked: HashSet::new(),
             night: false,
             landmarks: Landmarks::default(),
+            dimension: Dimension::Overworld,
         }
+    }
+
+    /// An untouched Horizen with the given seed.
+    pub fn new_horizen(seed: i64) -> Self {
+        let mut w = Self::new(seed, HashSet::new());
+        w.dimension = Dimension::Horizen;
+        w
     }
 
     /// Restore the saved lakes, mountains and rainbow. Call before any chunk is generated.
@@ -173,11 +184,17 @@ impl World {
     /// y of the highest block of the ground in the column (wx, wz), as the land and its landmarks make it
     /// (trees, plants and the player's blocks stand on top of it).
     pub fn ground_top(&self, wx: i32, wz: i32) -> i32 {
+        if self.dimension == Dimension::Horizen {
+            return horizen::ground_top(self.seed, wx, wz);
+        }
         ground_top_with(self.seed, &self.landmarks, wx, wz)
     }
 
     /// Whether water (a river or a lake) covers the column (wx, wz).
     pub fn is_wet_column(&self, wx: i32, wz: i32) -> bool {
+        if self.dimension == Dimension::Horizen {
+            return horizen::is_pond(self.seed, wx, wz);
+        }
         is_wet_column(self.seed, &self.landmarks, wx, wz)
     }
 
@@ -189,9 +206,29 @@ impl World {
     }
 
     /// Bring a mountain into the world (see `add_lake`).
+    /// A world has only one mountain: a second is ignored.
     pub fn add_mountain(&mut self, mountain: Mountain) {
+        if !self.landmarks.mountains.is_empty() {
+            return;
+        }
         self.landmarks.mountains.push(mountain);
         self.regenerate_landmark_chunks();
+    }
+
+    /// Bring the well into the world (see `add_lake`). A world has only one.
+    pub fn add_well(&mut self, well: Well) {
+        if self.landmarks.well.is_none() {
+            self.landmarks.well = Some(well);
+            self.regenerate_landmark_chunks();
+        }
+    }
+
+    /// Bring the graveyard into the world (see `add_lake`). A world has only one.
+    pub fn add_graveyard(&mut self, yard: Graveyard) {
+        if self.landmarks.graveyard.is_none() {
+            self.landmarks.graveyard = Some(yard);
+            self.regenerate_landmark_chunks();
+        }
     }
 
     /// Bring the grand castle into the world (see `add_lake`). A world has only one.
@@ -260,6 +297,14 @@ impl World {
         self.night = night;
         for chunk in self.chunks.values_mut() {
             chunk.dirty = true;
+        }
+        // The grand castle is whole by night and a ruin by day: make its chunks again.
+        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| self.landmarks.castle_touches_chunk(cx, cz)).collect();
+        for key in &stale {
+            self.chunks.remove(key);
+        }
+        for &(cx, cz) in &stale {
+            self.ensure_chunk(cx, cz);
         }
     }
 
@@ -347,7 +392,11 @@ impl World {
         if self.chunks.contains_key(&(cx, cz)) {
             return;
         }
-        let mut blocks = generate_chunk_with(self.seed, cx, cz, &self.landmarks);
+        let mut blocks = if self.dimension == Dimension::Horizen {
+            horizen::generate_chunk(self.seed, cx, cz)
+        } else {
+            generate_chunk_for(self.seed, cx, cz, &self.landmarks, self.night)
+        };
         for &(x, y, z) in &self.removed {
             if Self::chunk_of(x, z) == (cx, cz) {
                 // Only breakable blocks can have been removed. This also protects

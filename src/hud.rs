@@ -401,23 +401,84 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             }
             draw_circle(cx - 0.12 * r.w, cy + 0.02 * r.h, r.w * 0.04, lighten(color, 0.30));
         }
+        ItemKind::Antlers => {
+            // Two curved beams, each with three tines.
+            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
+            for side in [-1.0_f32, 1.0] {
+                let base = p(0.5, 0.86);
+                let beam = [base, p(0.5 + side * 0.10, 0.60), p(0.5 + side * 0.20, 0.36), p(0.5 + side * 0.18, 0.14)];
+                for w in beam.windows(2) {
+                    draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 6.0, outline);
+                    draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 4.0, color);
+                }
+                for (from, to) in [(beam[1], p(0.5 + side * 0.34, 0.50)), (beam[2], p(0.5 + side * 0.38, 0.26)), (beam[2], p(0.5 + side * 0.04, 0.30))] {
+                    draw_line(from.x, from.y, to.x, to.y, 4.5, outline);
+                    draw_line(from.x, from.y, to.x, to.y, 3.0, color);
+                }
+            }
+        }
+        ItemKind::BoneTotem => {
+            // A tall post of bone with a skull-like head and two dark eyes.
+            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
+            let (tl, br) = (p(0.40, 0.40), p(0.60, 0.88));
+            draw_rectangle(tl.x - 1.5, tl.y - 1.5, br.x - tl.x + 3.0, br.y - tl.y + 3.0, outline);
+            draw_rectangle(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            let (hl, hr) = (p(0.28, 0.12), p(0.72, 0.44));
+            draw_rectangle(hl.x - 1.5, hl.y - 1.5, hr.x - hl.x + 3.0, hr.y - hl.y + 3.0, outline);
+            draw_rectangle(hl.x, hl.y, hr.x - hl.x, hr.y - hl.y, lighten(color, 0.05));
+            for ex in [0.40, 0.60] {
+                draw_circle(r.x + r.w * ex, r.y + r.h * 0.27, 3.2, Color::new(0.10, 0.09, 0.08, 1.0));
+            }
+            draw_line(p(0.30, 0.60).x, p(0.30, 0.60).y, p(0.70, 0.60).x, p(0.70, 0.60).y, 4.0, outline);
+            draw_line(p(0.30, 0.60).x, p(0.30, 0.60).y, p(0.70, 0.60).x, p(0.70, 0.60).y, 2.5, color);
+        }
+        ItemKind::PeltCloak => {
+            // A cape hanging from the shoulders, with a clasp at the neck.
+            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
+            let (a, b, c, d) = (p(0.30, 0.18), p(0.70, 0.18), p(0.86, 0.84), p(0.14, 0.84));
+            for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
+                draw_line(u.x, u.y, v.x, v.y, 3.5, outline);
+            }
+            draw_triangle(a, b, c, color);
+            draw_triangle(a, c, d, color);
+            draw_line(p(0.20, 0.78).x, p(0.20, 0.78).y, p(0.80, 0.78).x, p(0.80, 0.78).y, 4.0, lighten(color, 0.12));
+            draw_circle(r.x + r.w * 0.50, r.y + r.h * 0.20, 3.5, ItemKind::Gold.color());
+        }
+        ItemKind::RoyalArmor => {
+            // A breastplate with two pauldrons and a studded belt.
+            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
+            let (tl, br) = (p(0.28, 0.24), p(0.72, 0.84));
+            draw_rectangle(tl.x - 1.5, tl.y - 1.5, br.x - tl.x + 3.0, br.y - tl.y + 3.0, outline);
+            draw_rectangle(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            for sx in [0.14, 0.64] {
+                let (sl, sr) = (p(sx, 0.16), p(sx + 0.22, 0.38));
+                draw_rectangle(sl.x - 1.5, sl.y - 1.5, sr.x - sl.x + 3.0, sr.y - sl.y + 3.0, outline);
+                draw_rectangle(sl.x, sl.y, sr.x - sl.x, sr.y - sl.y, lighten(color, 0.08));
+            }
+            draw_rectangle(tl.x, p(0.0, 0.58).y, br.x - tl.x, 5.0, ItemKind::Gold.color());
+            draw_line(cx, tl.y + 3.0, cx, p(0.0, 0.56).y, 2.0, lighten(color, 0.2));
+        }
     }
 }
 
 /// An item icon with its stack count in the corner (no frame).
-/// The compass in hand: a dial in the top right whose red needle points north (the way to a mountain) and
+/// The compass in hand: a dial in the top right whose red needle points north (the way to a mountain) until the world's mountain is out, and at the mountain after and
 /// whose tail points south, turning as the player turns, with the blocks walked north so far below it.
-pub fn draw_compass(yaw: f32, progress: f32) {
+pub fn draw_compass(yaw: f32, bearing: f32, progress: f32, to_mountain: bool) {
     let (w, radius) = (screen_width(), 46.0);
     let (cx, cy) = (w - radius - 24.0, radius + 56.0);
     draw_circle(cx, cy, radius + 4.0, Color::new(0.0, 0.0, 0.0, 0.6));
     draw_circle(cx, cy, radius, Color::new(0.90, 0.88, 0.80, 0.95));
-    let (nx, ny) = compass_needle(yaw);
+    let (nx, ny) = compass_needle(yaw, bearing);
     draw_line(cx, cy, cx - nx * radius * 0.6, cy - ny * radius * 0.6, 5.0, Color::new(0.96, 0.96, 0.96, 1.0));
     draw_line(cx, cy, cx + nx * radius * 0.85, cy + ny * radius * 0.85, 5.0, Color::new(0.80, 0.14, 0.14, 1.0));
     draw_circle(cx, cy, 4.0, Color::new(0.05, 0.05, 0.05, 1.0));
-    draw_text("N", cx + nx * (radius + 12.0) - 6.0, cy + ny * (radius + 12.0) + 6.0, 22.0, WHITE);
-    let line = format!("North {:.0}/{} blocks", progress.min((COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32), COMPASS_TREK_CHUNKS * CHUNK_SIZE);
+    draw_text(if to_mountain { "M" } else { "N" }, cx + nx * (radius + 12.0) - 6.0, cy + ny * (radius + 12.0) + 6.0, 22.0, WHITE);
+    let line = if to_mountain {
+        "Points to the mountain".to_string()
+    } else {
+        format!("North {:.0}/{} blocks", progress.min((COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32), COMPASS_TREK_CHUNKS * CHUNK_SIZE)
+    };
     draw_text(&line, cx - radius - 12.0, cy + radius + 26.0, 20.0, WHITE);
 }
 
@@ -552,12 +613,24 @@ fn wrap_totals(parts: &[String], max_width: f32) -> Vec<String> {
 /// - press on a stack and release over another slot to move, merge or swap stacks;
 /// - click an entry in the crafting list to craft it once.
 /// Also shows a tooltip on hover.
-pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
+pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
     let (w, h) = (screen_width(), screen_height());
     let lay = layout();
     let (mx, my) = mouse_position();
     let mouse = vec2(mx, my);
     let hovered_slot = slot_at(lay.grid, mouse);
+    // The worn slot, beside the title: click it to take the garment off; drop a cloak or armour on it to put it on.
+    let worn_rect = Rect::new(lay.grid.x + 190.0, lay.panel.y + 24.0 + 4.0, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0);
+    if is_mouse_button_pressed(MouseButton::Left) && worn_rect.contains(mouse) {
+        if let Some(kind) = *worn {
+            if inventory.add(kind, 1) == 0 {
+                *worn = None;
+                toasts.push(format!("You take off the {}", kind.name()));
+            } else {
+                toasts.push("Inventory full".to_string());
+            }
+        }
+    }
 
     // --- Drag and drop input ---
     if is_mouse_button_pressed(MouseButton::Left) {
@@ -570,7 +643,17 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
     let mut dropped_outside = None;
     if is_mouse_button_released(MouseButton::Left) {
         if let Some(from) = ui.drag_from.take() {
-            if let Some(to) = hovered_slot {
+            if worn_rect.contains(mouse) {
+                if let Some(kind) = inventory.slots[from].map(|s| s.kind).filter(|k| k.is_wearable()) {
+                    inventory.take_from_slot(from);
+                    if let Some(old) = worn.replace(kind) {
+                        if inventory.add(old, 1) != 0 {
+                            *worn = Some(old);
+                            inventory.add(kind, 1);
+                        }
+                    }
+                }
+            } else if let Some(to) = hovered_slot {
                 inventory.move_stack(from, to);
             } else if !lay.panel.contains(mouse) {
                 dropped_outside = Some(from);
@@ -586,6 +669,8 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
     draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, 3.0, ACCENT);
     draw_text("Inventory", lay.grid.x, panel.y + pad + 22.0, 34.0, WHITE);
     draw_text("Crafting", lay.craft.x, panel.y + pad + 22.0, 34.0, WHITE);
+    draw_text("Worn:", lay.grid.x + 130.0, panel.y + pad + 22.0, 22.0, LIGHTGRAY);
+    draw_slot(worn_rect, worn.map(|k| ItemStack { kind: k, count: 1 }).as_ref(), worn_rect.contains(mouse));
 
     // --- Slots ---
     let mut hovered_stack: Option<ItemStack> = None;

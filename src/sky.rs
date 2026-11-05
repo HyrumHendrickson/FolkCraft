@@ -96,6 +96,64 @@ pub fn draw_sky(seed: i64, eye: Vec3, time: f32, night: bool) {
     }
 }
 
+/// The Horizen's sky is split down the middle: the half towards the sun holds the sun and the clouds under a day sky,
+/// the other half the moon and the stars under a night sky. This is the unit vector (x, z) from the eye towards the
+/// middle of the day half.
+pub fn day_half_direction() -> (f32, f32) {
+    let d = sun_direction();
+    let len = (d.x * d.x + d.z * d.z).sqrt();
+    (d.x / len, d.z / len)
+}
+
+/// Whether the horizontal direction (x, z) lies in the day half of the Horizen's sky.
+pub fn in_day_half(x: f32, z: f32) -> bool {
+    let (dx, dz) = day_half_direction();
+    x * dx + z * dz >= 0.0
+}
+
+/// The Horizen's sky: call after the camera is set, with the clear colour a day sky. The night half is a dome of dark
+/// sky (fading into the day sky at its two edges) with the moon and the stars on it; the day half has the sun and the
+/// clouds. Neither ever changes into the other.
+pub fn draw_horizen_sky(seed: i64, eye: Vec3, time: f32) {
+    draw_night_dome(eye);
+    draw_stars_in(seed, eye, time, Some(false));
+    draw_moon(eye);
+    draw_sun(eye);
+    draw_clouds_in(seed, eye, time, true);
+}
+
+/// Half a sphere of night sky round the eye: the half away from the sun, from below the horizon to straight up.
+fn draw_night_dome(eye: Vec3) {
+    const SLICES: usize = 36;
+    const RINGS: usize = 12;
+    const RADIUS: f32 = 950.0;
+    let (dx, dz) = day_half_direction();
+    let sun_bearing = dz.atan2(dx);
+    let start = sun_bearing + std::f32::consts::FRAC_PI_2;
+    let mut vertices = Vec::new();
+    for r in 0..=RINGS {
+        let elevation = -0.45 + (std::f32::consts::FRAC_PI_2 + 0.45) * r as f32 / RINGS as f32;
+        for k in 0..=SLICES {
+            let t = k as f32 / SLICES as f32;
+            let bearing = start + std::f32::consts::PI * t;
+            // Clear at both edges of the half, solid from a fifth of the way in.
+            let alpha = (t.min(1.0 - t) / 0.2).clamp(0.0, 1.0);
+            let p = eye + vec3(elevation.cos() * bearing.cos(), elevation.sin(), elevation.cos() * bearing.sin()) * RADIUS;
+            vertices.push(Vertex::new(p.x, p.y, p.z, 0.0, 0.0, Color::new(0.015, 0.025, 0.075, alpha)));
+        }
+    }
+    let mut indices: Vec<u16> = Vec::new();
+    let row = SLICES + 1;
+    for r in 0..RINGS {
+        for k in 0..SLICES {
+            let a = (r * row + k) as u16;
+            let (b, c, d) = (a + 1, a + row as u16, a + row as u16 + 1);
+            indices.extend_from_slice(&[a, b, c, b, d, c]);
+        }
+    }
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+}
+
 /// The sun: a bright disc with two faint halos. Drawn as spheres around a point that follows the eye, so it
 /// keeps its place in the sky. The smaller sphere goes first: a larger one in front of it still passes the depth test.
 fn draw_sun(eye: Vec3) {
@@ -116,11 +174,19 @@ fn draw_moon(eye: Vec3) {
 }
 
 fn draw_stars(seed: i64, eye: Vec3, time: f32) {
+    draw_stars_in(seed, eye, time, None);
+}
+
+/// The stars; with `Some(day)` only those in the day or the night half of the sky (see `in_day_half`).
+fn draw_stars_in(seed: i64, eye: Vec3, time: f32, half: Option<bool>) {
     for i in 0..STAR_COUNT {
         let h = crate::rng::hash3(seed, i as i32, i as i32 * 17, 0x57A4);
         let bearing = (h % 10_000) as f32 / 10_000.0 * std::f32::consts::TAU;
         let elevation = 0.18 + ((h >> 16) % 8_200) as f32 / 10_000.0 * 1.0;
         let dir = vec3(elevation.cos() * bearing.cos(), elevation.sin(), elevation.cos() * bearing.sin());
+        if half.map_or(false, |day| in_day_half(dir.x, dir.z) != day) {
+            continue;
+        }
         let twinkle = 0.75 + 0.25 * (time * 1.7 + i as f32 * 0.73).sin();
         draw_sphere(eye + dir * STAR_DISTANCE, STAR_RADIUS, None, Color::new(twinkle, twinkle, twinkle, 1.0));
     }
@@ -128,11 +194,36 @@ fn draw_stars(seed: i64, eye: Vec3, time: f32) {
 
 /// The clouds: each run is a white slab over a thinner grey underside.
 fn draw_clouds(seed: i64, eye: Vec3, time: f32) {
+    draw_clouds_in(seed, eye, time, false);
+}
+
+/// The clouds; with `day_half_only`, only those in the day half of the sky (see `in_day_half`), cut at its edge.
+fn draw_clouds_in(seed: i64, eye: Vec3, time: f32, day_half_only: bool) {
     let offset = cloud_offset(time);
     let (cx, cz) = (((eye.x - offset) / CLOUD_CELL).floor() as i32, (eye.z / CLOUD_CELL).floor() as i32);
     let under = CLOUD_THICKNESS * 0.3;
     let top = CLOUD_THICKNESS - under;
-    for run in cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS) {
+    let mut runs = cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS);
+    if day_half_only {
+        let keep = |x: i32, z: i32| in_day_half(offset + (x as f32 + 0.5) * CLOUD_CELL - eye.x, (z as f32 + 0.5) * CLOUD_CELL - eye.z);
+        runs = runs
+            .into_iter()
+            .flat_map(|run| {
+                let mut pieces: Vec<CloudRun> = Vec::new();
+                for x in run.x0..=run.x1 {
+                    if !keep(x, run.z) {
+                        continue;
+                    }
+                    match pieces.last_mut() {
+                        Some(p) if p.x1 == x - 1 => p.x1 = x,
+                        _ => pieces.push(CloudRun { x0: x, x1: x, z: run.z }),
+                    }
+                }
+                pieces
+            })
+            .collect();
+    }
+    for run in runs {
         let width = (run.x1 - run.x0 + 1) as f32 * CLOUD_CELL;
         let x = offset + run.x0 as f32 * CLOUD_CELL + width / 2.0;
         let z = (run.z as f32 + 0.5) * CLOUD_CELL;

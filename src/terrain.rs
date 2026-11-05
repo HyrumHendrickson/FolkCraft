@@ -185,12 +185,16 @@ pub fn berry_bush_is_purple(seed: i64, wx: i32, wz: i32) -> bool {
 /// touch it. Rivers keep off hills and valleys, so those never add up. A lake takes the place of the hills near it
 /// (`Landmarks::relief_scale`), a mountain stands over any river or lake it covers, and the island in a lake is a hill.
 fn surface(seed: i64, relief: Option<Relief>, landmarks: &Landmarks, wx: i32, wz: i32) -> (i32, bool) {
+    // The well is sunk to the stone floor of the world and full of water.
+    if landmarks.is_well(wx, wz) {
+        return (STONE_LAYERS - 1, true);
+    }
     let mountain = landmarks.mountain_rise(wx, wz);
     let island = landmarks.island_rise(wx, wz);
-    // No river runs over a mountain, an island hill or the ground round the grand castle.
+    // No river runs over a mountain, an island hill or the ground round the grand castle, the well and the graveyard.
     let wet = mountain == 0
         && island == 0
-        && !landmarks.near_grand_castle(wx, wz, 2)
+        && !landmarks.keeps_rivers_out(wx, wz)
         && (is_river(seed, wx, wz) || landmarks.is_lake(wx, wz));
     let hill = relief.map_or(0, |r| (r.rise_at(wx, wz) as f32 * landmarks.relief_scale(wx, wz)).round() as i32);
     (GROUND_TOP + hill + mountain + island - if wet { LAKE_DEPTH } else { 0 }, wet)
@@ -272,8 +276,15 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
     generate_chunk_with(seed, cx, cz, &Landmarks::default())
 }
 
-/// The blocks of chunk (cx, cz) as the land and the landmarks make them (before the player's edits).
+/// The blocks of chunk (cx, cz) as the land and the landmarks make them by day (before the player's edits).
+#[cfg(test)]
 pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec<Block> {
+    generate_chunk_for(seed, cx, cz, landmarks, false)
+}
+
+/// The blocks of chunk (cx, cz) as the land and the landmarks make them (before the player's edits), in the world's
+/// state of `night`: the grand castle is whole by night and a ruin by day.
+pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, night: bool) -> Vec<Block> {
     let mut blocks = vec![Block::Air; (CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE) as usize];
 
     // The surface of every column once: the height of its top dirt block, and whether a river covers it.
@@ -308,7 +319,7 @@ pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -
     // Things lying on the bed under the water: clay, pebbles and stones (each takes the water's place in its cell).
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
-            if !wet_at(lx, lz) {
+            if !wet_at(lx, lz) || landmarks.is_well(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz) {
                 continue;
             }
             let roll = hash3(seed, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz, 0xB3D) % 1000;
@@ -352,10 +363,8 @@ pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -
         if top_at(lx, lz) > GROUND_TOP + TREE_LINE_RISE {
             continue;
         }
-        // The castles stand in clearings.
-        if landmarks.near_castle(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz, CASTLE_TREE_MARGIN)
-            || landmarks.near_grand_castle(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz, GRAND_TREE_MARGIN)
-        {
+        // The castles, the well and the graveyard stand in clearings.
+        if landmarks.keeps_trees_out(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz) {
             continue;
         }
         if placed
@@ -459,7 +468,35 @@ pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -
                     continue;
                 }
                 for dy in 0..GRAND_HEIGHT {
-                    if let Some(block) = grand.castle_block(wx, wz, dy) {
+                    if let Some(block) = grand.castle_block(wx, wz, dy, night) {
+                        blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
+                    }
+                }
+            }
+        }
+    }
+    // The rim of the well, and the graveyard's wall, paths and gravestones, on the level ground round them.
+    if let Some(well) = landmarks.well {
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                if let Some(block) = well.block(wx, wz, 0) {
+                    if block != Block::Air {
+                        blocks[idx(lx, top_at(lx, lz) + 1, lz)] = block;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(yard) = landmarks.graveyard {
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                if !yard.near(wx, wz, 0) {
+                    continue;
+                }
+                for dy in 0..2 {
+                    if let Some(block) = yard.block(wx, wz, dy) {
                         blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
                     }
                 }

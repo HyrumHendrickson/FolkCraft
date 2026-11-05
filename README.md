@@ -232,6 +232,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `dropped.rs` | Items on the ground: spawn, physics, pickup, drawing (`draw_box` is shared with `effects.rs`). |
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
 | `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
+| `horizen.rs` | `Dimension` and the Horizen's land: empty flat ground with ponds. |
 | `landmarks.rs` | `Lake`, `Mountain`, `GrandCastle`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
 | `river.rs` | `is_river`, `river_near`: rivers as zero contours of a smooth noise field. Pure functions of seed and column. |
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG. |
@@ -439,3 +440,20 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
   no way to build walls.
 - Rivers are one block deep: you wade through them, there is no swimming, and water does not slow you down.
 - A player respawns at the spawn point, which may be where a bear is waiting if they died near it.
+
+## Update: one mountain, the bone totem, the Horizen, wearing and the day/night castle
+
+- **One mountain.** `Landmarks::mountain()`; `World::add_mountain` ignores a second. Once it is out, `compass_bearing` points the
+  compass needle at it and `Treks::mountain_found` stops the north trek. The rainbow and the grand castle were already single, and
+  a peep stone's trail already leads to them for ever. Lakes remain unlimited.
+- **Axes** deal `AXE_DAMAGE` 4, `COPPER_AXE_DAMAGE` 6, `BRONZE_AXE_DAMAGE` 8, `IRON_AXE_DAMAGE` 10.
+- **Moose** drop `Antlers`; Antlers + 2 Gold craft a `BoneTotem`. Held by day it trails to the single `Well`, by night to the
+  single `Graveyard` (`try_show_well_or_graveyard`, `trail_path`).
+- **Well:** 4x4 water sunk to the stone floor, one-block rim. Feet below `WELL_FALL_DEPTH` inside it calls `Game::enter_horizen`.
+- **Horizen** (`horizen.rs`): a second `World` (`World::dimension`), kept in `Game::away` while the player is elsewhere, with its own
+  edits and items. No wildlife, no landmarks, day/night potions ignored, split sky (`sky::draw_horizen_sky`). Dying there returns the
+  player to the overworld start. Saves: `dimension horizen` plus `h <record>` lines.
+- **Wearing:** `Game::worn` holds one `PeltCloak` or `RoyalArmor` (right click, or the Worn slot in the inventory; saved as `worn`).
+  A cloak sets `Animal::pacified` on bears that are not `provoked`; the armour halves damage, rounding up.
+- **Grand castle by day and night:** `grand_castle_cell` (night whole, gate and throne-room door shut, stair works, armour in the
+  throne room; day ruined, gate open, first stair broken, throne door open). `World::set_night` regenerates the castle's chunks.

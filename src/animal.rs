@@ -10,6 +10,8 @@
 //!   sprinting player) and keeps charging until the player is `BEAR_CALM_DISTANCE` away. A charging bear that
 //!   reaches the player hurts them (`Animal::try_attack`). A bear never chases deer or quail.
 //!
+//!   A player who wears a pelt cloak is ignored by bears (`Animal::pacified`) unless the player has hit that bear
+//!   (`Animal::provoked`).
 //! - **Rabbits** run from the player (or a bear) exactly like deer, a little slower.
 //! - **Moose** do not run. Left alone they wander; once hurt, one chases the player until one of them is dead or
 //!   they are `MOOSE_GIVE_UP_DISTANCE` apart, and hits for `MOOSE_DAMAGE` when it reaches them.
@@ -170,6 +172,7 @@ impl AnimalKind {
             AnimalKind::Moose => {
                 add(ItemKind::MooseMeat, MOOSE_MEAT_DROP);
                 add(ItemKind::Leather, MOOSE_LEATHER_DROP);
+                add(ItemKind::Antlers, MOOSE_ANTLER_DROP);
             }
             AnimalKind::WillOWhisp => {}
         }
@@ -220,6 +223,11 @@ pub struct Animal {
     pub knock: Vec3,
     /// A moose that has been hurt: it chases the player until `MOOSE_GIVE_UP_DISTANCE` lies between them.
     pub enraged: bool,
+    /// A bear that has been hit by the player. It stays hostile for good, even towards a player in a pelt cloak.
+    pub provoked: bool,
+    /// Set every frame for a bear by the game: the player wears a pelt cloak and this bear has not been hit, so it takes
+    /// no notice of them (wanders as if they were not there and never strikes).
+    pub pacified: bool,
     /// Set every frame for a will-o-whisp: where the player stands (feet) if they have a holly rod in the hotbar,
     /// which draws whisps to them, and `None` otherwise.
     pub lure: Option<Vec3>,
@@ -303,6 +311,8 @@ impl Animal {
             attack_cooldown: 0.0,
             knock: Vec3::ZERO,
             enraged: false,
+            provoked: false,
+            pacified: false,
             lure: None,
             bonded: false,
             orbit: 0.0,
@@ -329,6 +339,10 @@ impl Animal {
         self.alarm = ANIMAL_ALARM_SECONDS;
         if self.kind == AnimalKind::Moose {
             self.enraged = true;
+        }
+        if self.kind == AnimalKind::Bear {
+            self.provoked = true;
+            self.pacified = false;
         }
         self.health <= 0
     }
@@ -377,6 +391,7 @@ impl Animal {
     /// any other animal never does.
     pub fn try_attack(&mut self, player: Vec3) -> bool {
         let cooldown = match self.kind {
+            AnimalKind::Bear if self.pacified => return false,
             AnimalKind::Bear => BEAR_ATTACK_COOLDOWN,
             AnimalKind::Moose if self.enraged => MOOSE_ATTACK_COOLDOWN,
             _ => return false,
@@ -469,7 +484,12 @@ impl Animal {
                 }
             }
             AnimalKind::Bear => {
-                if self.mode == Mode::Charge {
+                if self.pacified {
+                    // A player in a pelt cloak is of no interest to a bear that has not been hit.
+                    if self.mode == Mode::Charge {
+                        self.rest(rng);
+                    }
+                } else if self.mode == Mode::Charge {
                     if dist >= BEAR_CALM_DISTANCE && self.alarm <= 0.0 {
                         self.rest(rng);
                     }
@@ -515,7 +535,7 @@ impl Animal {
         if self.kind != AnimalKind::WillOWhisp && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
             if self.mode == Mode::Idle {
                 self.mode = Mode::Wander;
-                self.heading = if self.kind == AnimalKind::Bear && dist < BEAR_NOTICE_DISTANCE {
+                self.heading = if self.kind == AnimalKind::Bear && !self.pacified && dist < BEAR_NOTICE_DISTANCE {
                     // A bear that has noticed the player strays from the straight line to them, but only so far.
                     towards + (rng.unit() * 2.0 - 1.0) * BEAR_WANDER_SPREAD
                 } else {
@@ -1149,7 +1169,8 @@ mod tests {
         let d = AnimalKind::Moose.drops(&mut Rng::new(1));
         assert_eq!(d.iter().filter(|&&k| k == ItemKind::MooseMeat).count(), MOOSE_MEAT_DROP as usize);
         assert_eq!(d.iter().filter(|&&k| k == ItemKind::Leather).count(), MOOSE_LEATHER_DROP as usize);
-        assert_eq!(d.len(), (MOOSE_MEAT_DROP + MOOSE_LEATHER_DROP) as usize);
+        assert_eq!(d.iter().filter(|&&k| k == ItemKind::Antlers).count(), MOOSE_ANTLER_DROP as usize, "a moose leaves antlers");
+        assert_eq!(d.len(), (MOOSE_MEAT_DROP + MOOSE_LEATHER_DROP + MOOSE_ANTLER_DROP) as usize);
         assert_eq!((AnimalKind::Rabbit.max_health(), AnimalKind::Moose.max_health()), (RABBIT_HEALTH, MOOSE_HEALTH));
     }
 }

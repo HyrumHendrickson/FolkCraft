@@ -6,20 +6,27 @@
 //! - A **lake** appears when the player has walked ten chunks through a river without leaving the water. It is a
 //!   large wavy basin, one block deep like a river, joined to the river by a straight channel. In the middle is a
 //!   large island: a hill with a flat top, and on the flat top stands a small castle.
-//! - A **mountain** appears when the player has followed a held compass north for ten chunks. It is tall, can be
-//!   climbed one block at a time, and is capped with snow. Rings of cliff (ledges) break its slope, each with one
-//!   gap, the gaps on alternate sides, so it has to be climbed in a zigzag.
+//! - The world's one **mountain** appears when the player has followed a held compass north for ten chunks. It is
+//!   tall, can be climbed one block at a time, and is capped with snow. Rings of cliff (ledges) break its slope, each
+//!   with one gap, the gaps on alternate sides, so it has to be climbed in a zigzag. Once it is there the compass
+//!   always points at it (`compass_bearing`), and there is never a second one.
 //! - A **rainbow** appears once, by day, when the player holds a peep stone. It ends in a pile of gold; once the gold
 //!   has been taken there is never another rainbow. The peep stone shows a ghostly trail to the end of the rainbow
 //!   for ever after.
 //! - A **grand castle** appears once, at night, when the player holds a peep stone: a large castle of five floors,
-//!   beyond the edge of the land, which the peep stone's ghostly trail leads to.
+//!   beyond the edge of the land, which the peep stone's ghostly trail leads to. It is whole and shut by night and a
+//!   ruin by day (`grand_castle_cell`): the gate, the stair to the second floor and the door of the throne room are
+//!   open or closed the opposite way round, and the royal armour lies in the throne room only at night.
+//! - A **well** (by day) and a **graveyard** (by night) each appear once, when the player holds a bone totem at that
+//!   time of day; the totem's ghostly trail leads to whichever of them is out there. The well is a deep square of
+//!   water: whoever falls in is taken to the Horizen (`horizen.rs`).
 //!
 //! This file holds the data and the rules (where the water and the slopes are, when a trek is complete). The
 //! world, the save file and the game only call into it, and none of it needs a window to be tested.
 
 use crate::block::Block;
 use crate::config::*;
+use crate::rng::hash3;
 use crate::world::Pos;
 
 /// Tallest a mountain can be: its summit and the cell above it must lie inside the world.
@@ -325,13 +332,19 @@ impl GrandCastle {
         (wx - self.x).abs() <= GRAND_REACH + margin && (wz - self.z).abs() <= GRAND_REACH + margin
     }
 
-    /// What the castle is made of in the cell `dy` blocks above the ground at the column (wx, wz): see
-    /// `Lake::castle_block`.
-    pub fn castle_block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+    /// What the castle is made of in the cell `dy` blocks above the ground at the column (wx, wz), by night or by day:
+    /// see `grand_castle_cell` and `Lake::castle_block`. `None` outside the castle's square or above its tallest tower.
+    pub fn castle_block(&self, wx: i32, wz: i32, dy: i32, night: bool) -> Option<Block> {
         if !(0..GRAND_HEIGHT).contains(&dy) || !self.near(wx, wz, 0) {
             return None;
         }
-        Some(if grand_castle_is_solid(wx - self.x, wz - self.z, dy) { Block::CastleStone } else { Block::Air })
+        Some(grand_castle_cell(self.salt(), wx - self.x, wz - self.z, dy, night))
+    }
+
+    /// A number that is the same for every cell of this castle and differs from castle to castle, so that the ruins
+    /// of one world crumble differently from another's.
+    fn salt(&self) -> i64 {
+        self.x as i64 * 7919 + self.z as i64
     }
 
     /// The spot just outside the gate, on the south side (towards +z), and the door of the keep: where the ghostly
@@ -365,66 +378,318 @@ fn keep_stair_cell(storey: i32, i: i32) -> (i32, i32) {
     }
 }
 
-/// The shape of the grand castle, in blocks from its centre (`dx`, `dz`) and above the ground (`dy`, 0 is the first
-/// layer of air). Seen from above: an outer wall `GRAND_WALL_HALF` from the centre with a gate in the south side
-/// (towards +z) five wide; a solid tower at each corner, two flanking the gate and one in the middle of each of the
-/// other three sides; and in the middle a keep of `GRAND_KEEP_HALF`, five floors of `GRAND_STOREY` blocks each, with a
-/// door in its south side, windows, a stair from each floor up to the next, and a roof with battlements to walk on.
-/// Everything ends in battlements: every other block along the top is left out.
-fn grand_castle_is_solid(dx: i32, dz: i32, dy: i32) -> bool {
-    let (ax, az) = (dx.abs(), dz.abs());
-    let merlon = (dx + dz).rem_euclid(2) == 0;
-    let (wall, keep) = (GRAND_WALL_HALF, GRAND_KEEP_HALF);
-    // Up to and including `top`, with a battlement above it.
-    let crowned = |top: i32| dy <= top || (dy == top + 1 && merlon);
+/// Which part of the grand castle's plan the column (`dx`, `dz`) belongs to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Part {
+    CornerTower,
+    /// A tower beside the gate, or in the middle of the north, east or west wall.
+    SideTower,
+    Wall,
+    Keep,
+}
 
-    // The corner towers.
+fn grand_part(dx: i32, dz: i32) -> Option<Part> {
+    let (ax, az) = (dx.abs(), dz.abs());
+    let (wall, keep) = (GRAND_WALL_HALF, GRAND_KEEP_HALF);
     if (ax - wall).abs() <= 4 && (az - wall).abs() <= 4 {
-        return crowned(25);
+        return Some(Part::CornerTower);
     }
-    // The towers beside the gate, and in the middle of the north, east and west walls.
     let gate_tower = (ax - 7).abs() <= 2 && dz > 0 && (az - wall).abs() <= 3;
     let side_tower = (az - wall).abs() <= 3 && ax <= 3 && dz < 0 || (ax - wall).abs() <= 3 && az <= 3;
     if gate_tower || side_tower {
-        return crowned(17);
+        return Some(Part::SideTower);
     }
-    // The outer wall, two blocks thick, with the gate.
     if ax.max(az) >= wall - 1 && ax.max(az) <= wall {
-        if dz > 0 && az >= wall - 1 && ax <= 2 && dy <= 5 {
-            return false;
-        }
-        return crowned(11);
+        return Some(Part::Wall);
     }
-    // The keep.
     if ax <= keep && az <= keep {
-        if ax >= keep - 1 || az >= keep - 1 {
-            // Its walls: a door, and windows on every floor.
-            if dz > 0 && az >= keep - 1 && ax <= 1 && dy <= 3 {
-                return false;
+        return Some(Part::Keep);
+    }
+    None
+}
+
+/// Whether the cell is in the opening of the gate: a doorway five wide through the two blocks of the south wall, up to
+/// the lintel.
+fn is_gate_cell(dx: i32, dz: i32, dy: i32) -> bool {
+    dz > 0 && dz.abs() >= GRAND_WALL_HALF - 1 && dz.abs() <= GRAND_WALL_HALF && dx.abs() <= 2 && dy <= 5
+}
+
+/// The shape of the grand castle as it was built, in blocks from its centre (`dx`, `dz`) and above the ground (`dy`, 0
+/// is the first layer of air). Seen from above: an outer wall `GRAND_WALL_HALF` from the centre with a gate in the south
+/// side (towards +z) five wide; a solid tower at each corner, two flanking the gate and one in the middle of each of the
+/// other three sides; and in the middle a keep of `GRAND_KEEP_HALF`, five floors of `GRAND_STOREY` blocks each, with a
+/// door in its south side, windows, a stair from each floor up to the next, and a roof with battlements to walk on.
+/// Everything ends in battlements: every other block along the top is left out. The gate is an empty doorway here;
+/// `grand_castle_cell` shuts it at night.
+fn grand_castle_is_solid(dx: i32, dz: i32, dy: i32) -> bool {
+    let (ax, az) = (dx.abs(), dz.abs());
+    let merlon = (dx + dz).rem_euclid(2) == 0;
+    let keep = GRAND_KEEP_HALF;
+    // Up to and including `top`, with a battlement above it.
+    let crowned = |top: i32| dy <= top || (dy == top + 1 && merlon);
+
+    match grand_part(dx, dz) {
+        Some(Part::CornerTower) => crowned(25),
+        Some(Part::SideTower) => crowned(17),
+        // The outer wall, two blocks thick, with the gate.
+        Some(Part::Wall) => !is_gate_cell(dx, dz, dy) && crowned(11),
+        Some(Part::Keep) => {
+            if ax >= keep - 1 || az >= keep - 1 {
+                // Its walls: a door, and windows on every floor.
+                if dz > 0 && az >= keep - 1 && ax <= 1 && dy <= 3 {
+                    return false;
+                }
+                let along = if az >= keep - 1 { dx } else { dz };
+                let storey_row = dy.rem_euclid(GRAND_STOREY);
+                if dy < GRAND_STOREY * GRAND_STOREYS - 1 && (1..=2).contains(&storey_row) && along.rem_euclid(4) == 0 && along.abs() <= 8 && (ax < keep - 1 || az < keep - 1) {
+                    return false;
+                }
+                return crowned(GRAND_STOREY * GRAND_STOREYS - 1);
             }
-            let along = if az >= keep - 1 { dx } else { dz };
-            let storey_row = dy.rem_euclid(GRAND_STOREY);
-            if dy < GRAND_STOREY * GRAND_STOREYS - 1 && (1..=2).contains(&storey_row) && along.rem_euclid(4) == 0 && along.abs() <= 8 && (ax < keep - 1 || az < keep - 1) {
-                return false;
-            }
-            return crowned(GRAND_STOREY * GRAND_STOREYS - 1);
-        }
-        // Inside: the stairs...
-        for storey in 0..GRAND_STOREYS {
-            for i in 1..=GRAND_STOREY {
-                if (dx, dz) == keep_stair_cell(storey, i) && dy >= storey * GRAND_STOREY && dy < storey * GRAND_STOREY + i {
-                    return true;
+            // Inside: the stairs...
+            for storey in 0..GRAND_STOREYS {
+                for i in 1..=GRAND_STOREY {
+                    if (dx, dz) == keep_stair_cell(storey, i) && dy >= storey * GRAND_STOREY && dy < storey * GRAND_STOREY + i {
+                        return true;
+                    }
                 }
             }
+            // ...and the floors (and the roof), each cut open above the first four steps of the stair below it.
+            if dy >= GRAND_STOREY - 1 && (dy + 1) % GRAND_STOREY == 0 {
+                let floor = (dy + 1) / GRAND_STOREY;
+                let hole = (1..GRAND_STOREY).any(|i| (dx, dz) == keep_stair_cell(floor - 1, i));
+                return !hole;
+            }
+            false
         }
-        // ...and the floors (and the roof), each cut open above the first four steps of the stair below it.
-        if dy >= GRAND_STOREY - 1 && (dy + 1) % GRAND_STOREY == 0 {
-            let floor = (dy + 1) / GRAND_STOREY;
-            let hole = (1..GRAND_STOREY).any(|i| (dx, dz) == keep_stair_cell(floor - 1, i));
-            return !hole;
+        None => false,
+    }
+}
+
+/// Whether the cell is on the first step or two of the stair from the ground floor to the second floor: the part of it
+/// that is still standing by day.
+fn is_stump_of_first_stair(dx: i32, dz: i32) -> bool {
+    (1..=2).any(|i| (dx, dz) == keep_stair_cell(0, i))
+}
+
+/// Whether the cell is on the stair from the ground floor to the second floor.
+fn is_first_stair(dx: i32, dz: i32, dy: i32) -> bool {
+    (1..=GRAND_STOREY).any(|i| (dx, dz) == keep_stair_cell(0, i) && dy < i)
+}
+
+/// The height (in blocks above the ground) to which the column (`dx`, `dz`) of a ruined part of the castle still
+/// stands by day. Neighbouring columns fall together in groups of two by two.
+fn ruined_height(salt: i64, dx: i32, dz: i32, part: Part) -> i32 {
+    let roll = (hash3(salt, dx.div_euclid(2), dz.div_euclid(2), 0xD41) % 100) as i32;
+    match part {
+        // The wall is low rubble, with a breach here and there.
+        Part::Wall => if roll % 6 == 0 { 0 } else { 1 + roll % RUIN_WALL_MAX },
+        Part::SideTower => 3 + roll % 6,
+        Part::CornerTower => 6 + roll % 9,
+        // The shell of the keep above its second floor is a broken crown.
+        Part::Keep => 10 + roll % 8,
+    }
+}
+
+/// The wall that shuts the throne room off from the rest of the second floor, the door in it, and the throne room
+/// itself. The room is on the second floor (the cells 5 to 8 above the ground), west of the wall, which runs
+/// north to south across the keep `THRONE_WALL_X` blocks from its centre.
+///
+/// By night the door is shut (`Block::CastleDoor`), the throne is whole, and the royal armour stands on a pedestal. By
+/// day the door is ruined (open), the top of the wall has crumbled in places, the throne is only its seat, there is
+/// rubble on the floor and nothing else. `None` for a cell that is not part of it.
+fn throne_room_cell(salt: i64, dx: i32, dz: i32, dy: i32, night: bool) -> Option<Block> {
+    let rel = dy - GRAND_STOREY;
+    if !(0..GRAND_STOREY - 1).contains(&rel) || dz.abs() > GRAND_KEEP_HALF - 2 || !(-(GRAND_KEEP_HALF - 2)..=THRONE_WALL_X).contains(&dx) {
+        return None;
+    }
+    let roll = hash3(salt, dx, dz, 0x7480) % 100;
+    if dx == THRONE_WALL_X {
+        if dz.abs() <= THRONE_DOOR_HALF && rel <= 2 {
+            return Some(if night { Block::CastleDoor } else { Block::Air });
+        }
+        let crumbled = !night && rel >= 2 && dz.abs() > THRONE_DOOR_HALF && roll % 3 == 0;
+        return Some(if crumbled { Block::Air } else { Block::CastleStone });
+    }
+    let throne_x = -(GRAND_KEEP_HALF - 2);
+    let armor_x = throne_x + 3;
+    let seat = dx == throne_x && dz == 0 && rel == 0;
+    let back = dx == throne_x && dz == 0 && (1..=2).contains(&rel);
+    let arms = dx == throne_x && dz.abs() == 1 && rel == 0;
+    Some(if night {
+        if seat || back || arms {
+            Block::CastleStone
+        } else if (dx, dz) == (armor_x, 0) && rel == 0 {
+            Block::ArmorStand
+        } else {
+            Block::Air
+        }
+    } else if seat || (rel == 0 && dz.abs() > 2 && roll % 17 == 0) {
+        Block::CastleStone
+    } else {
+        Block::Air
+    })
+}
+
+/// What the grand castle has in the cell (`dx`, `dz`, `dy`) at night (`night`) or by day: `Block::CastleStone` for a wall,
+/// `Block::CastleDoor` for a shut gate or door, `Block::ArmorStand` for the royal armour, and `Block::Air`.
+///
+/// - **By night** it is whole: the gate is shut (nobody outside can get in), the stair to the second floor stands, the
+///   door of the throne room is shut, and the armour is in the throne room.
+/// - **By day** it is a ruin: the gate has collapsed into a wide breach (anyone can get in), the outer wall and the
+///   towers are crumbled, the stair to the second floor is gone but for its first two steps, the keep stands to the roof
+///   of its second floor and is broken above that, the door of the throne room has fallen, and there is no armour.
+///
+/// Both the stair and the door can be used only when the other is not, so to reach the armour a player has to be in the
+/// keep when day or night changes.
+pub fn grand_castle_cell(salt: i64, dx: i32, dz: i32, dy: i32, night: bool) -> Block {
+    if let Some(block) = throne_room_cell(salt, dx, dz, dy, night) {
+        return block;
+    }
+    let solid = |dy: i32| grand_castle_is_solid(dx, dz, dy);
+    if night {
+        if grand_part(dx, dz) == Some(Part::Wall) && is_gate_cell(dx, dz, dy) {
+            return Block::CastleDoor;
+        }
+        return if solid(dy) { Block::CastleStone } else { Block::Air };
+    }
+    let Some(part) = grand_part(dx, dz) else { return Block::Air };
+    let ruin = |block_here: bool| if block_here { Block::CastleStone } else { Block::Air };
+    match part {
+        Part::Wall => {
+            // The gate has fallen in: a wide breach with a little rubble on the ground.
+            if dz > 0 && dx.abs() <= 4 && dy <= 7 {
+                let rubble = dy == 0 && hash3(salt, dx, dz, 0xB4E) % 3 == 0;
+                return ruin(rubble);
+            }
+            ruin(dy < ruined_height(salt, dx, dz, part) && solid(dy))
+        }
+        Part::SideTower | Part::CornerTower => ruin(dy < ruined_height(salt, dx, dz, part) && solid(dy)),
+        Part::Keep => {
+            let shell = dx.abs() >= GRAND_KEEP_HALF - 1 || dz.abs() >= GRAND_KEEP_HALF - 1;
+            let roof_of_second_floor = GRAND_STOREY * 2 - 1;
+            if dy > roof_of_second_floor {
+                // Above the second floor only a broken crown of wall is left: no floors, no stairs.
+                return ruin(shell && dy < ruined_height(salt, dx, dz, part) && solid(dy));
+            }
+            // The stair to the second floor is ruined but for its first two steps.
+            if is_first_stair(dx, dz, dy) && !is_stump_of_first_stair(dx, dz) {
+                return Block::Air;
+            }
+            ruin(solid(dy))
         }
     }
-    false
+}
+
+/// The well: a deep square of water `WELL_SIZE` blocks across, sunk to the stone floor of the world and ringed by a rim
+/// one block high. `x` and `z` are the corner of the water with the smallest coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Well {
+    pub x: i32,
+    pub z: i32,
+}
+
+impl Well {
+    /// How many blocks the column (wx, wz) is from the square of water, counting along either axis (as a king moves):
+    /// 0 over the water itself, 1 on the rim.
+    pub fn distance(&self, wx: i32, wz: i32) -> i32 {
+        let (dx, dz) = ((self.x - wx).max(wx - (self.x + WELL_SIZE - 1)).max(0), (self.z - wz).max(wz - (self.z + WELL_SIZE - 1)).max(0));
+        dx.max(dz)
+    }
+
+    /// Whether the column (wx, wz) is over the water of the well.
+    pub fn contains(&self, wx: i32, wz: i32) -> bool {
+        (self.x..self.x + WELL_SIZE).contains(&wx) && (self.z..self.z + WELL_SIZE).contains(&wz)
+    }
+
+    /// Whether the column is within `margin` blocks of the rim.
+    pub fn near(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.distance(wx, wz) <= WELL_RIM_WIDTH + margin
+    }
+
+    /// What stands in the cell `dy` blocks above the ground at the column (wx, wz): the rim, one block high. `None`
+    /// away from the well.
+    pub fn block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+        if !self.near(wx, wz, 0) || dy != 0 {
+            return None;
+        }
+        Some(if self.contains(wx, wz) { Block::Air } else { Block::CastleStone })
+    }
+
+    /// The columns the well can touch, widened by `margin`: (min x, min z, max x, max z).
+    pub fn bounds(&self, margin: i32) -> (i32, i32, i32, i32) {
+        let reach = WELL_RIM_WIDTH + margin;
+        (self.x - reach, self.z - reach, self.x + WELL_SIZE - 1 + reach, self.z + WELL_SIZE - 1 + reach)
+    }
+
+    /// The middle of the water, in world coordinates: where the ghostly trail ends.
+    pub fn centre(&self) -> (f32, f32) {
+        (self.x as f32 + WELL_SIZE as f32 / 2.0, self.z as f32 + WELL_SIZE as f32 / 2.0)
+    }
+
+    /// A well whose nearest edge is `WELL_DISTANCE` blocks from `at` (counting along either axis, as the chunks do),
+    /// in the direction `angle`: beyond the land that is already made.
+    pub fn ahead(at: (f32, f32), angle: f32) -> Well {
+        let (c, s) = (angle.cos(), angle.sin());
+        let gap = (WELL_DISTANCE + WELL_SIZE) as f32 / c.abs().max(s.abs());
+        Well { x: (at.0 + c * gap).round() as i32 - WELL_SIZE / 2, z: (at.1 + s * gap).round() as i32 - WELL_SIZE / 2 }
+    }
+}
+
+/// The graveyard: a walled square of gravestones. Centre in world coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Graveyard {
+    pub x: i32,
+    pub z: i32,
+}
+
+impl Graveyard {
+    /// The columns the graveyard can touch, widened by `margin`: (min x, min z, max x, max z).
+    pub fn bounds(&self, margin: i32) -> (i32, i32, i32, i32) {
+        let reach = GRAVEYARD_REACH + margin;
+        (self.x - reach, self.z - reach, self.x + reach, self.z + reach)
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the graveyard's square.
+    pub fn near(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        (wx - self.x).abs() <= GRAVEYARD_REACH + margin && (wz - self.z).abs() <= GRAVEYARD_REACH + margin
+    }
+
+    /// What stands in the cell `dy` blocks above the ground at the column (wx, wz): a low crenellated wall all round
+    /// with a gate three wide in the south side (towards +z), a path up the middle and, in rows, gravestones. Every
+    /// other cell of the square is left empty. `None` outside the square or above the wall.
+    pub fn block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+        if !self.near(wx, wz, 0) || !(0..2).contains(&dy) {
+            return None;
+        }
+        let (dx, dz) = (wx - self.x, wz - self.z);
+        let (ax, az) = (dx.abs(), dz.abs());
+        let half = GRAVEYARD_HALF;
+        if ax.max(az) == half {
+            let gate = dz == half && ax <= 1;
+            let merlon = (dx + dz).rem_euclid(2) == 0;
+            return Some(if !gate && (dy == 0 || merlon) { Block::CastleStone } else { Block::Air });
+        }
+        let in_rows = ax <= half - 3 && az <= half - 3 && ax > 1 && dx.rem_euclid(GRAVEYARD_SPACING) == 0 && dz.rem_euclid(GRAVEYARD_SPACING) == 0;
+        Some(if dy == 0 && in_rows { Block::Gravestone } else { Block::Air })
+    }
+
+    /// The spot just outside the gate, on the south side, and the middle of the graveyard: where the ghostly trail goes.
+    pub fn gate_approach(&self) -> (f32, f32) {
+        (self.x as f32 + 0.5, (self.z + GRAVEYARD_HALF + 8) as f32 + 0.5)
+    }
+
+    pub fn middle(&self) -> (f32, f32) {
+        (self.x as f32 + 0.5, self.z as f32 + 0.5)
+    }
+
+    /// A graveyard whose nearest edge is `GRAVEYARD_DISTANCE` blocks from `at` (counting along either axis), in the
+    /// direction `angle`.
+    pub fn ahead(at: (f32, f32), angle: f32) -> Graveyard {
+        let (c, s) = (angle.cos(), angle.sin());
+        let gap = (GRAVEYARD_DISTANCE + GRAVEYARD_REACH) as f32 / c.abs().max(s.abs());
+        Graveyard { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
+    }
 }
 
 /// The rainbow: an arc that rises beside the player and comes down on a pile of gold.
@@ -458,6 +723,10 @@ pub struct Landmarks {
     pub spent_gold: Option<Pos>,
     /// The world's one grand castle, once a peep stone has been held at night.
     pub grand_castle: Option<GrandCastle>,
+    /// The world's one well, once a bone totem has been held by day.
+    pub well: Option<Well>,
+    /// The world's one graveyard, once a bone totem has been held at night.
+    pub graveyard: Option<Graveyard>,
 }
 
 impl Landmarks {
@@ -476,13 +745,69 @@ impl Landmarks {
         self.lakes.iter().map(|l| l.hill_rise(wx, wz)).max().unwrap_or(0)
     }
 
-    /// Whether a grand castle at `castle` would stand clear of every lake and mountain (and of the ground they
-    /// blend into).
-    pub fn has_room_for(&self, castle: &GrandCastle) -> bool {
+    /// Whether a structure whose columns lie in `bounds` (as `GrandCastle::bounds` gives them, widened by the margin the
+    /// ground blends over) would stand clear of every lake, mountain and other site of the world.
+    fn has_room(&self, bounds: (i32, i32, i32, i32), ignoring_castle: bool) -> bool {
         let margin = LANDMARK_BLEND + 4;
-        let (cx0, cz0, cx1, cz1) = castle.bounds(margin);
+        let (cx0, cz0, cx1, cz1) = bounds;
         let overlaps = |(x0, z0, x1, z1): (i32, i32, i32, i32)| x0 <= cx1 && x1 >= cx0 && z0 <= cz1 && z1 >= cz0;
-        !self.lakes.iter().any(|l| overlaps(l.bounds(margin))) && !self.mountains.iter().any(|m| overlaps(m.bounds(margin)))
+        !self.lakes.iter().any(|l| overlaps(l.bounds(margin)))
+            && !self.mountains.iter().any(|m| overlaps(m.bounds(margin)))
+            && (ignoring_castle || !self.grand_castle.map_or(false, |c| overlaps(c.bounds(margin))))
+            && !self.well.map_or(false, |w| overlaps(w.bounds(margin)))
+            && !self.graveyard.map_or(false, |g| overlaps(g.bounds(margin)))
+    }
+
+    /// Whether a grand castle at `castle` would stand clear of every lake and mountain (and of the ground they
+    /// blend into), and of the well and the graveyard.
+    pub fn has_room_for(&self, castle: &GrandCastle) -> bool {
+        self.has_room(castle.bounds(LANDMARK_BLEND + 4), true)
+    }
+
+    /// The same for a well.
+    pub fn has_room_for_well(&self, well: &Well) -> bool {
+        self.has_room(well.bounds(LANDMARK_BLEND + 4), false)
+    }
+
+    /// The same for a graveyard.
+    pub fn has_room_for_graveyard(&self, graveyard: &Graveyard) -> bool {
+        self.has_room(graveyard.bounds(LANDMARK_BLEND + 4), false)
+    }
+
+    /// The world's one mountain, if it has come out yet. (A save made when mountains could be many holds more than
+    /// one; the first is the one the compass points at.)
+    pub fn mountain(&self) -> Option<&Mountain> {
+        self.mountains.first()
+    }
+
+    /// Whether the column (wx, wz) is over the water of the well.
+    pub fn is_well(&self, wx: i32, wz: i32) -> bool {
+        self.well.map_or(false, |w| w.contains(wx, wz))
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the rim of the well.
+    pub fn near_well(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.well.map_or(false, |w| w.near(wx, wz, margin))
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the graveyard's square.
+    pub fn near_graveyard(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.graveyard.map_or(false, |g| g.near(wx, wz, margin))
+    }
+
+    /// Whether no river may run over the column (wx, wz): the ground round the grand castle, the well and the
+    /// graveyard is kept dry and level.
+    pub fn keeps_rivers_out(&self, wx: i32, wz: i32) -> bool {
+        self.near_grand_castle(wx, wz, 2) || self.near_well(wx, wz, 3) || self.near_graveyard(wx, wz, 2)
+    }
+
+    /// Whether no tree may grow at the column (wx, wz): the castles stand in clearings, and so do the well and the
+    /// graveyard.
+    pub fn keeps_trees_out(&self, wx: i32, wz: i32) -> bool {
+        self.near_castle(wx, wz, CASTLE_TREE_MARGIN)
+            || self.near_grand_castle(wx, wz, GRAND_TREE_MARGIN)
+            || self.near_well(wx, wz, WELL_TREE_MARGIN)
+            || self.near_graveyard(wx, wz, GRAVEYARD_TREE_MARGIN)
     }
 
     /// Whether the column (wx, wz) is within `margin` blocks of the grand castle's square.
@@ -508,7 +833,10 @@ impl Landmarks {
         let mountains = self.mountains.iter().map(|m| m.edge_distance(wx, wz));
         // The grand castle stands on level ground: the hills die away round it.
         let castle = self.grand_castle.map(|c| (wx - c.x).abs().max((wz - c.z).abs()) as f32 - (GRAND_REACH + 2) as f32);
-        lakes.chain(mountains).chain(castle).map(|d| smoothstep(d / blend)).fold(1.0, f32::min)
+        // The well and the graveyard stand on level ground too.
+        let well = self.well.map(|w| w.distance(wx, wz) as f32 - (WELL_RIM_WIDTH + 2) as f32);
+        let graveyard = self.graveyard.map(|g| (wx - g.x).abs().max((wz - g.z).abs()) as f32 - (GRAVEYARD_REACH + 2) as f32);
+        lakes.chain(mountains).chain(castle).chain(well).chain(graveyard).map(|d| smoothstep(d / blend)).fold(1.0, f32::min)
     }
 
     /// Whether the column (wx, wz) is within `margin` blocks of the square a castle stands in.
@@ -524,6 +852,23 @@ impl Landmarks {
         self.lakes.iter().any(|l| overlaps(l.bounds(LANDMARK_BLEND)))
             || self.mountains.iter().any(|m| overlaps(m.bounds(LANDMARK_BLEND)))
             || self.grand_castle.map_or(false, |c| overlaps(c.bounds(LANDMARK_BLEND)))
+            || self.well.map_or(false, |w| overlaps(w.bounds(LANDMARK_BLEND)))
+            || self.graveyard.map_or(false, |g| overlaps(g.bounds(LANDMARK_BLEND)))
+    }
+
+    /// Whether the grand castle can touch the chunk (cx, cz). Only it changes between day and night.
+    pub fn castle_touches_chunk(&self, cx: i32, cz: i32) -> bool {
+        let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+        let (x1, z1) = (x0 + CHUNK_SIZE - 1, z0 + CHUNK_SIZE - 1);
+        self.grand_castle.map_or(false, |c| {
+            let (bx0, bz0, bx1, bz1) = c.bounds(0);
+            bx0 <= x1 && bx1 >= x0 && bz0 <= z1 && bz1 >= z0
+        })
+    }
+
+    /// The end of the well's trail: the middle of its water, once the well is out there.
+    pub fn well_end(&self) -> Option<(f32, f32)> {
+        self.well.map(|w| w.centre())
     }
 }
 
@@ -544,11 +889,23 @@ pub fn compass_direction() -> (f32, f32) {
     (COMPASS_NORTH_BEARING.cos(), COMPASS_NORTH_BEARING.sin())
 }
 
-/// Where the compass needle points on the screen, for a player looking along `yaw`: (right, down), so a needle
-/// pointing straight up the screen is (0, -1). North dead ahead gives (0, -1); north to the player's right
-/// gives a vector pointing right.
-pub fn compass_needle(yaw: f32) -> (f32, f32) {
-    let relative = COMPASS_NORTH_BEARING - yaw;
+/// The bearing (radians, like a yaw) the compass needle points along for a player standing at `at` (x, z): towards the
+/// world's one mountain once it has come out, and north until then.
+pub fn compass_bearing(marks: &Landmarks, at: (f32, f32)) -> f32 {
+    match marks.mountain() {
+        Some(m) => {
+            let (dx, dz) = (m.x as f32 + 0.5 - at.0, m.z as f32 + 0.5 - at.1);
+            if dx.abs() + dz.abs() < 1e-3 { COMPASS_NORTH_BEARING } else { dz.atan2(dx) }
+        }
+        None => COMPASS_NORTH_BEARING,
+    }
+}
+
+/// Where the compass needle points on the screen, for a player looking along `yaw` with the needle along `bearing`
+/// (see `compass_bearing`): (right, down), so a needle pointing straight up the screen is (0, -1). A target dead ahead
+/// gives (0, -1); one to the player's right gives a vector pointing right.
+pub fn compass_needle(yaw: f32, bearing: f32) -> (f32, f32) {
+    let relative = bearing - yaw;
     (relative.sin(), -relative.cos())
 }
 
@@ -565,6 +922,9 @@ pub struct Treks {
     compass_blocks: f32,
     /// Whether the compass was in hand at the last update.
     compass_held: bool,
+    /// Set by the game once the world's one mountain is out: the compass then leads to it and no further trek brings a
+    /// second.
+    pub mountain_found: bool,
 }
 
 impl Treks {
@@ -610,7 +970,7 @@ impl Treks {
             self.river_done = false;
         }
 
-        if compass {
+        if compass && !self.mountain_found {
             if let (true, Some(last)) = (self.compass_held, previous) {
                 let north = compass_direction();
                 self.compass_blocks = (self.compass_blocks + (at.0 - last.0) * north.0 + (at.1 - last.1) * north.1).max(0.0);
@@ -858,17 +1218,24 @@ mod tests {
         assert!(corner <= ISLAND_PLATEAU_RADIUS);
     }
 
-    /// Whether the cell is stone in the grand castle (and the ground, which is the level below it).
-    fn grand_solid(dx: i32, dz: i32, dy: i32) -> bool {
-        dy < 0 || GrandCastle { x: 0, z: 0 }.castle_block(dx, dz, dy) == Some(Block::CastleStone)
+    const SALT: i64 = 0;
+
+    fn cell(dx: i32, dz: i32, dy: i32, night: bool) -> Block {
+        if dy < 0 { Block::Dirt } else { grand_castle_cell(SALT, dx, dz, dy, night) }
+    }
+
+    /// Whether the cell is solid in the grand castle (and the ground, which is the level below it).
+    fn grand_solid(dx: i32, dz: i32, dy: i32, night: bool) -> bool {
+        cell(dx, dz, dy, night).collides()
     }
 
     /// Where a player can stand in the grand castle, found by walking: (x, z, y) is a cell whose feet are in air
     /// with stone beneath. A step up of one block is a jump; falling is allowed. Returns every spot reached from
     /// `start`.
-    fn walk_the_grand_castle(start: (i32, i32, i32)) -> std::collections::HashSet<(i32, i32, i32)> {
+    fn walk_the_grand_castle(start: (i32, i32, i32), night: bool) -> std::collections::HashSet<(i32, i32, i32)> {
         let reach = GRAND_REACH + 8;
-        let free = |x: i32, z: i32, y: i32| !grand_solid(x, z, y);
+        let free = |x: i32, z: i32, y: i32| !grand_solid(x, z, y, night);
+        let solid = |x: i32, z: i32, y: i32| grand_solid(x, z, y, night);
         let mut seen = std::collections::HashSet::from([start]);
         let mut queue = std::collections::VecDeque::from([start]);
         while let Some((x, z, y)) = queue.pop_front() {
@@ -876,18 +1243,17 @@ mod tests {
                 if nx.abs() > reach || nz.abs() > reach {
                     continue;
                 }
-                // Straight ahead, or up one block (which needs room to jump), or down a few.
                 let mut options = Vec::new();
                 if free(nx, nz, y) && free(nx, nz, y + 1) {
                     let mut ny = y;
                     while ny > y - 5 && free(nx, nz, ny - 1) {
                         ny -= 1;
                     }
-                    if grand_solid(nx, nz, ny - 1) {
+                    if solid(nx, nz, ny - 1) {
                         options.push(ny);
                     }
                 }
-                if free(x, z, y + 2) && free(nx, nz, y + 1) && free(nx, nz, y + 2) && grand_solid(nx, nz, y) {
+                if free(x, z, y + 2) && free(nx, nz, y + 1) && free(nx, nz, y + 2) && solid(nx, nz, y) {
                     options.push(y + 1);
                 }
                 for ny in options {
@@ -900,28 +1266,100 @@ mod tests {
         seen
     }
 
+    fn on_second_floor(&(x, z, y): &(i32, i32, i32)) -> bool {
+        y == GRAND_STOREY && x.abs() <= GRAND_KEEP_HALF - 2 && z.abs() <= GRAND_KEEP_HALF - 2
+    }
+
+    fn in_throne_room(&(x, z, y): &(i32, i32, i32)) -> bool {
+        y == GRAND_STOREY && x < THRONE_WALL_X && z.abs() <= GRAND_KEEP_HALF - 2
+    }
+
     #[test]
-    fn the_grand_castle_can_be_entered_by_its_gate_and_climbed_floor_by_floor_to_the_roof() {
-        let reached = walk_the_grand_castle((0, GRAND_WALL_HALF + 6, 0));
-        let inside_keep = |&&(x, z, _): &&(i32, i32, i32)| x.abs() <= GRAND_KEEP_HALF - 2 && z.abs() <= GRAND_KEEP_HALF - 2;
-        for floor in 0..=GRAND_STOREYS {
-            let y = floor * GRAND_STOREY;
-            assert!(reached.iter().filter(inside_keep).any(|&(_, _, h)| h == y), "no way to stand on floor {floor} (height {y}) inside the keep");
+    fn by_night_the_gate_is_shut_and_nobody_outside_can_get_in() {
+        let reached = walk_the_grand_castle((0, GRAND_WALL_HALF + 6, 0), true);
+        assert!(!reached.contains(&(0, GRAND_WALL_HALF - 8, 0)), "the courtyard is out of reach");
+        assert!(!reached.iter().any(|&(x, z, y)| y == 0 && x.abs() < GRAND_WALL_HALF - 1 && z.abs() < GRAND_WALL_HALF - 1), "nothing inside the wall at ground level");
+        assert_eq!(cell(0, GRAND_WALL_HALF, 0, true), Block::CastleDoor);
+        assert_eq!(cell(2, GRAND_WALL_HALF - 1, 5, true), Block::CastleDoor);
+        assert_eq!(cell(3, GRAND_WALL_HALF, 0, true), Block::CastleStone);
+    }
+
+    #[test]
+    fn by_day_the_gate_has_fallen_and_the_courtyard_and_keep_door_can_be_reached() {
+        let reached = walk_the_grand_castle((0, GRAND_WALL_HALF + 6, 0), false);
+        assert!(reached.contains(&(0, GRAND_WALL_HALF - 8, 0)), "through the breach to the courtyard");
+        assert!(reached.contains(&(0, GRAND_KEEP_HALF - 3, 0)), "and in at the door of the keep");
+        assert_eq!(cell(0, GRAND_WALL_HALF, 1, false), Block::Air);
+    }
+
+    #[test]
+    fn by_day_the_stair_to_the_second_floor_is_ruined_and_by_night_it_works() {
+        // Inside, from the door of the keep.
+        let day = walk_the_grand_castle((0, GRAND_KEEP_HALF - 3, 0), false);
+        assert!(day.iter().any(|&(x, z, y)| y == 0 && x.abs() < GRAND_KEEP_HALF - 1 && z.abs() < GRAND_KEEP_HALF - 1), "the ground floor");
+        assert!(!day.iter().any(on_second_floor), "by day no way up to the second floor");
+        let night = walk_the_grand_castle((0, GRAND_KEEP_HALF - 3, 0), true);
+        assert!(night.iter().any(on_second_floor), "by night the stair climbs to the second floor");
+        assert!(night.iter().any(|&(_, _, y)| y >= GRAND_STOREY * GRAND_STOREYS), "and on, floor by floor, to the roof");
+    }
+
+    #[test]
+    fn the_throne_room_door_is_shut_by_night_and_open_by_day_and_the_armour_is_there_only_at_night() {
+        // The second floor, east of the throne room wall (where the stair arrives).
+        let start = (GRAND_KEEP_HALF - 2, 4, GRAND_STOREY);
+        let night = walk_the_grand_castle(start, true);
+        assert!(night.iter().any(on_second_floor));
+        assert!(!night.iter().any(in_throne_room), "shut by night");
+        let day = walk_the_grand_castle(start, false);
+        assert!(day.iter().any(on_second_floor));
+        assert!(day.iter().any(in_throne_room), "ruined by day: it can be entered");
+        for dz in -THRONE_DOOR_HALF..=THRONE_DOOR_HALF {
+            assert_eq!(cell(THRONE_WALL_X, dz, GRAND_STOREY, true), Block::CastleDoor);
+            assert_eq!(cell(THRONE_WALL_X, dz, GRAND_STOREY, false), Block::Air);
         }
-        let courtyard = (0, GRAND_WALL_HALF - 8);
-        assert!(reached.contains(&(courtyard.0, courtyard.1, 0)), "the courtyard is reached through the gate");
-        let highest = reached.iter().map(|&(_, _, y)| y).max().unwrap();
-        assert!(highest >= GRAND_STOREY * GRAND_STOREYS, "the roof of the keep (and a tower, if they can) is reachable: {highest}");
+        let armour = |night: bool| {
+            (-GRAND_KEEP_HALF..=GRAND_KEEP_HALF)
+                .flat_map(|x| (-GRAND_KEEP_HALF..=GRAND_KEEP_HALF).flat_map(move |z| (0..GRAND_HEIGHT).map(move |y| (x, z, y))))
+                .filter(|&(x, z, y)| cell(x, z, y, night) == Block::ArmorStand)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(armour(true).len(), 1, "one set of armour by night");
+        let (x, z, y) = armour(true)[0];
+        assert!(in_throne_room(&(x, z, y)));
+        assert!(armour(false).is_empty(), "none by day");
+        // Little else in the room by day.
+        let stones = |night: bool| (-9..THRONE_WALL_X).flat_map(|x| (-9..=9).map(move |z| (x, z))).filter(|&(x, z)| cell(x, z, GRAND_STOREY, night).collides()).count();
+        assert!(stones(false) < stones(true) + 20, "by day the room holds only a seat and a little rubble");
+    }
+
+    #[test]
+    fn crossing_the_castle_at_the_turn_of_day_and_night_reaches_the_armour() {
+        // In the keep by day, one cannot climb; at night one can climb, and then by day the door is open.
+        let up_at_night = walk_the_grand_castle((0, GRAND_KEEP_HALF - 3, 0), true);
+        let &(x, z, y) = up_at_night.iter().find(|p| on_second_floor(p)).expect("second floor by night");
+        let then_day = walk_the_grand_castle((x, z, y), false);
+        assert!(then_day.iter().any(in_throne_room), "from the second floor, by day, the throne room is open");
+    }
+
+    #[test]
+    fn the_ruined_castle_is_lower_than_the_whole_one() {
+        let height = |night: bool| {
+            (-GRAND_REACH..=GRAND_REACH).flat_map(|x| (-GRAND_REACH..=GRAND_REACH).map(move |z| (x, z))).map(|(x, z)| (0..GRAND_HEIGHT).filter(|&y| cell(x, z, y, night).collides()).max().unwrap_or(-1)).collect::<Vec<_>>()
+        };
+        let (day, night) = (height(false), height(true));
+        assert!(day.iter().zip(&night).all(|(d, n)| d <= n), "ruins never rise above the whole castle");
+        assert!(day.iter().sum::<i32>() < night.iter().sum::<i32>() * 2 / 3, "a ruin is much lower");
+        assert!(day.iter().any(|&h| h > 4), "though some of it still stands tall");
     }
 
     #[test]
     fn the_grand_castle_is_large_walled_and_towered_with_a_gate_and_a_keep_door() {
         let c = GrandCastle { x: 100, z: -40 };
-        let at = |dx: i32, dz: i32, dy: i32| c.castle_block(c.x + dx, c.z + dz, dy);
+        let at = |dx: i32, dz: i32, dy: i32| c.castle_block(c.x + dx, c.z + dz, dy, true);
         let wall = Some(Block::CastleStone);
         assert_eq!(at(GRAND_WALL_HALF, 0, 3), wall, "the outer wall");
-        assert_eq!(at(0, GRAND_WALL_HALF, 3), Some(Block::Air), "the gate, in the south wall");
-        assert_eq!(at(2, GRAND_WALL_HALF, 5), Some(Block::Air));
+        assert_eq!(at(0, GRAND_WALL_HALF, 3), Some(Block::CastleDoor), "the gate, in the south wall, shut");
+        assert_eq!(at(2, GRAND_WALL_HALF, 5), Some(Block::CastleDoor));
         assert_eq!(at(3, GRAND_WALL_HALF, 0), wall);
         assert_eq!(at(0, GRAND_WALL_HALF, 6), wall, "and a lintel over it");
         assert_eq!(at(GRAND_WALL_HALF, GRAND_WALL_HALF, 22), wall, "a corner tower is taller than the wall");
@@ -935,9 +1373,8 @@ mod tests {
         assert_eq!(at(0, 0, GRAND_STOREY * GRAND_STOREYS - 1), wall, "the roof");
         assert_eq!(at(0, 0, GRAND_STOREY * 2), Some(Block::Air), "the room above the second floor");
         assert_eq!(at(0, 0, GRAND_HEIGHT), None, "nothing above the castle");
-        assert_eq!(c.castle_block(c.x + GRAND_REACH + 1, c.z, 0), None);
+        assert_eq!(c.castle_block(c.x + GRAND_REACH + 1, c.z, 0, true), None);
         assert!(GRAND_REACH >= GRAND_WALL_HALF + 4 && GRAND_HEIGHT > GRAND_STOREY * GRAND_STOREYS, "the keep's roof fits under the tallest tower");
-        // Far larger than the small castle, and five floors tall.
         assert!(GRAND_REACH > 2 * CASTLE_REACH && GRAND_STOREYS >= 3);
         // The trail leads to the gate and then to the keep's door, both on the south side.
         let (gx, gz) = c.gate_approach();
@@ -947,7 +1384,63 @@ mod tests {
     }
 
     fn grand_solid_at(c: &GrandCastle, wx: i32, wz: i32) -> bool {
-        c.castle_block(wx, wz, 0) == Some(Block::CastleStone)
+        c.castle_block(wx, wz, 0, true) == Some(Block::CastleStone)
+    }
+
+    #[test]
+    fn the_well_is_a_four_by_four_square_of_water_with_a_one_block_rim() {
+        let w = Well { x: 10, z: -20 };
+        let water: Vec<_> = (0..40).flat_map(|z| (0..40).map(move |x| (x, z - 30))).filter(|&(x, z)| w.contains(x, z)).collect();
+        assert_eq!(water.len(), (WELL_SIZE * WELL_SIZE) as usize);
+        assert_eq!(w.block(9, -21, 0), Some(Block::CastleStone), "the rim, a corner");
+        assert_eq!(w.block(10, -20, 0), Some(Block::Air), "no rim over the water");
+        assert_eq!(w.block(8, -20, 0), None, "nothing beyond the rim");
+        assert_eq!(w.block(9, -20, 1), None, "the rim is one block high");
+        let (cx, cz) = w.centre();
+        assert!(w.contains(cx as i32, cz as i32));
+    }
+
+    #[test]
+    fn the_graveyard_has_a_wall_a_gate_a_path_and_rows_of_gravestones() {
+        let g = Graveyard { x: 50, z: 50 };
+        let at = |dx: i32, dz: i32, dy: i32| g.block(g.x + dx, g.z + dz, dy);
+        assert_eq!(at(GRAVEYARD_HALF, 0, 0), Some(Block::CastleStone));
+        assert_eq!(at(0, GRAVEYARD_HALF, 0), Some(Block::Air), "the gate, in the south wall");
+        assert_eq!(at(1, GRAVEYARD_HALF, 1), Some(Block::Air));
+        assert_eq!(at(0, 3, 0), Some(Block::Air), "a path up the middle");
+        assert_eq!(at(3, 3, 0), Some(Block::Gravestone));
+        assert_eq!(at(-6, -9, 0), Some(Block::Gravestone));
+        assert_eq!(at(3, 3, 1), Some(Block::Air));
+        assert_eq!(at(GRAVEYARD_REACH + 1, 0, 0), None);
+        let stones = (-GRAVEYARD_REACH..=GRAVEYARD_REACH).flat_map(|z| (-GRAVEYARD_REACH..=GRAVEYARD_REACH).map(move |x| (x, z))).filter(|&(x, z)| at(x, z, 0) == Some(Block::Gravestone)).count();
+        assert!(stones >= 30, "{stones} gravestones");
+        // The way in from the gate to the middle is clear.
+        for dz in 0..=GRAVEYARD_HALF {
+            assert_ne!(at(0, dz, 0), Some(Block::CastleStone));
+            assert_ne!(at(0, dz, 0), Some(Block::Gravestone));
+        }
+    }
+
+    #[test]
+    fn the_compass_points_north_until_the_mountain_is_out_and_then_at_it() {
+        let mut marks = Landmarks::default();
+        assert_eq!(compass_bearing(&marks, (5.0, 5.0)), COMPASS_NORTH_BEARING);
+        marks.mountains.push(Mountain { x: 1000, z: 0, radius: 40, height: 10, phase: 0 });
+        let east = compass_bearing(&marks, (0.0, 0.0));
+        assert!(east.abs() < 0.01, "the mountain lies east: {east}");
+        let south = compass_bearing(&marks, (1000.0, -500.0));
+        assert!((south - std::f32::consts::FRAC_PI_2).abs() < 0.01, "from the north of it the needle points south (+z): {south}");
+        // The needle on the screen points at it however the player turns.
+        let (x, y) = compass_needle(0.0, east);
+        assert!(x.abs() < 1e-2 && (y + 1.0).abs() < 1e-2, "facing east, the mountain is dead ahead");
+    }
+
+    #[test]
+    fn once_the_mountain_is_found_no_trek_brings_a_second() {
+        let reach = (COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32;
+        let mut treks = Treks::new();
+        treks.mountain_found = true;
+        assert!(walk(&mut treks, (0.0, 0.0), (0.0, -reach * 3.0), false, true).is_empty());
     }
 
     #[test]
@@ -1109,13 +1602,13 @@ mod tests {
     #[test]
     fn the_compass_needle_points_north_on_the_screen() {
         // Facing north (yaw of the north bearing): needle straight up.
-        let (x, y) = compass_needle(COMPASS_NORTH_BEARING);
+        let (x, y) = compass_needle(COMPASS_NORTH_BEARING, COMPASS_NORTH_BEARING);
         assert!(x.abs() < 1e-5 && (y + 1.0).abs() < 1e-5);
         // Facing east (yaw 0, forward is +x): north (-z) is on the left, so the needle points left.
-        let (x, y) = compass_needle(0.0);
+        let (x, y) = compass_needle(0.0, COMPASS_NORTH_BEARING);
         assert!(x < -0.99 && y.abs() < 1e-5, "({x}, {y})");
         // Facing south: north is behind, so the needle points down.
-        let (_, y) = compass_needle(std::f32::consts::FRAC_PI_2);
+        let (_, y) = compass_needle(std::f32::consts::FRAC_PI_2, COMPASS_NORTH_BEARING);
         assert!(y > 0.99);
     }
 

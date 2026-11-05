@@ -18,7 +18,7 @@
 //!   player    - input and physics           item      - item kinds and block drops
 //!   inventory - slots, stacking, moving     dropped   - items on the ground
 //!   recipe    - crafting recipes            hud       - hotbar, inventory screen, crafting UI
-//!   help      - the how-to-play screen
+//!   help      - the how-to-play screen      horizen   - the second dimension, behind the well
 //!   game      - a running session (mining, placing, fire, held item, pickup)
 //!   save      - persistence                 app       - shared app state
 //!   sky       - the sun and the clouds
@@ -37,6 +37,7 @@ mod dropped;
 mod effects;
 mod game;
 mod help;
+mod horizen;
 mod hud;
 mod inventory;
 mod item;

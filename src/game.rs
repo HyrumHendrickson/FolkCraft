@@ -11,10 +11,11 @@ use crate::dropped::{collect_nearby, DroppedItem};
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
-use crate::landmarks::{GrandCastle, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks};
+use crate::horizen::Dimension;
+use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
-use crate::save::{parse_save, save_world, SaveData, WorldInfo};
+use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
 use crate::world::{Pot, ray_box, Hit, Pos, World};
 
 /// A block being broken. Progress resets when the target, the block or the held tool changes,
@@ -55,6 +56,13 @@ impl Blackout {
     }
 }
 
+/// The dimension the player is not in, as they left it: its world, its items on the ground and where the player stood.
+pub struct Away {
+    pub world: World,
+    pub items: Vec<DroppedItem>,
+    pub player: Player,
+}
+
 pub struct Game {
     pub info: WorldInfo,
     /// Dev mode: the inventory screen lists every item to add.
@@ -93,6 +101,11 @@ pub struct Game {
     pub skip_look_frames: u8,
     /// The blackout in progress between day and night, if any.
     pub blackout: Option<Blackout>,
+    /// The one thing the player wears: a pelt cloak (bears leave them alone unless hit first) or the royal armour (all
+    /// damage halved).
+    pub worn: Option<ItemKind>,
+    /// The other dimension, once the player has been to the Horizen (see `Away`).
+    pub away: Option<Away>,
 }
 
 impl Game {
@@ -113,15 +126,36 @@ impl Game {
         world.rebuild_dirty(data.player.pos, usize::MAX);
         let health = data.health;
         let dev_mode = data.dev_mode;
+        let worn = data.worn;
         let mut player = data.player;
         player.lift_out_of_blocks(&world);
+        let mut items = data.items;
+        let mut away = data.horizen.map(|h| {
+            let h = *h;
+            let mut hw = World::with_edits(info.seed, h.removed, h.placed, h.fires)
+                .with_cooking(h.cooking)
+                .with_glow(h.glow)
+                .with_pots(h.pots);
+            hw.dimension = Dimension::Horizen;
+            Away { world: hw, items: h.items, player: h.player }
+        });
+        if data.in_horizen {
+            let mut a = away.take().unwrap_or_else(|| Away { world: World::new_horizen(info.seed), items: Vec::new(), player: Player::new() });
+            std::mem::swap(&mut world, &mut a.world);
+            std::mem::swap(&mut player, &mut a.player);
+            std::mem::swap(&mut items, &mut a.items);
+            world.stream_chunks(player.pos);
+            world.rebuild_dirty(player.pos, usize::MAX);
+            player.lift_out_of_blocks(&world);
+            away = Some(a);
+        }
         Game {
             info,
             dev_mode,
             world,
             player,
             inventory: data.inventory,
-            items: data.items,
+            items,
             rng: Rng::new(rng_seed),
             inventory_open: false,
             inventory_ui: InventoryUi::new(),
@@ -138,11 +172,37 @@ impl Game {
             treks: Treks::new(),
             skip_look_frames: 0,
             blackout: None,
+            worn,
+            away,
         }
     }
 
+    /// The save text for this session (see `serialize_save_full`): the overworld always as the main part, the Horizen
+    /// as records starting with `h`.
+    pub fn save_text(&self) -> String {
+        let in_horizen = self.world.dimension == Dimension::Horizen;
+        let (over, over_player, over_items, hor) = if in_horizen {
+            match &self.away {
+                Some(a) => (&a.world, &a.player, &a.items[..], Some((&self.world, &self.player, &self.items[..]))),
+                None => (&self.world, &self.player, &self.items[..], None),
+            }
+        } else {
+            let hor = self.away.as_ref().map(|a| (&a.world, &a.player, &a.items[..]));
+            (&self.world, &self.player, &self.items[..], hor)
+        };
+        let extras = SaveExtras { worn: self.worn, in_horizen: in_horizen && hor.is_some(), horizen: hor };
+        serialize_save_full(&self.info.name, self.info.seed, over, over_player, &self.inventory, over_items, self.health, self.dev_mode, &extras)
+    }
+
     pub fn save(&self) {
-        save_world(&self.info, &self.world, &self.player, &self.inventory, &self.items, self.health, self.dev_mode);
+        let out = self.save_text();
+        if let Err(e) = fs::create_dir_all(SAVE_DIR).and_then(|_| fs::write(&self.info.path, out)) {
+            eprintln!("Failed to save world: {e}");
+        }
+    }
+
+    pub fn in_horizen(&self) -> bool {
+        self.world.dimension == Dimension::Horizen
     }
 
     /// The item in the selected hotbar slot, if any.
@@ -290,8 +350,14 @@ impl Game {
     /// Hurt the player for `amount` life. At zero life the player respawns at the start with full health,
     /// keeping their inventory, and `death` is shown; any enraged moose calms down. Returns whether the player died.
     fn hurt_player(&mut self, amount: u32, death: &str) -> bool {
+        // The royal armour halves every blow (rounding up: a blow always costs at least one life).
+        let amount = if self.worn == Some(ItemKind::RoyalArmor) && amount > 0 { (amount + ARMOR_DAMAGE_DIVISOR - 1) / ARMOR_DAMAGE_DIVISOR } else { amount };
         self.health = self.health.saturating_sub(amount);
         if self.health == 0 {
+            // Dying in the Horizen takes the player back to where the overworld begins.
+            if self.in_horizen() {
+                self.leave_horizen();
+            }
             self.player = Player::new();
             self.health = MAX_HEALTH;
             self.burn_timer = 0.0;
@@ -358,6 +424,10 @@ impl Game {
 
     /// Turn the world to night or to day, behind a blackout (see `Blackout`). Nothing happens if it already is.
     fn set_night(&mut self, night: bool) {
+        if self.in_horizen() {
+            self.toasts.push("The sky of the Horizen never changes".to_string());
+            return;
+        }
         match self.blackout.as_mut() {
             Some(b) => {
                 b.night = night;
@@ -374,6 +444,8 @@ impl Game {
     fn apply_night(&mut self, night: bool) {
         let changed = self.world.night != night;
         self.world.set_night(night);
+        // A gate or door that has shut where the player stands puts them beside it instead.
+        self.player.eject_from_blocks(&self.world);
         if changed {
             self.toasts.push(if night { "Night falls".to_string() } else { "Day breaks".to_string() });
         }
@@ -877,6 +949,12 @@ impl Game {
     /// `COMPASS_TREK_CHUNKS` chunks brings a mountain; holding a peep stone shows the rainbow (once).
     /// Call once a frame, after the player has moved.
     pub fn update_landmarks(&mut self) {
+        // The Horizen has no landmarks, and the compass, peep stone and totem do nothing there.
+        if self.in_horizen() {
+            self.update_dimension();
+            return;
+        }
+        self.treks.mountain_found = self.world.landmarks.mountain().is_some();
         let p = self.player.pos;
         let compass = self.held_item() == Some(ItemKind::Compass);
         let wading = self.player_in_water();
@@ -885,6 +963,8 @@ impl Game {
         }
         self.try_show_rainbow();
         self.try_show_grand_castle();
+        self.try_show_well_or_graveyard();
+        self.update_dimension();
     }
 
     /// Make the lake or mountain that a finished trek leads to, and say so.
@@ -895,9 +975,10 @@ impl Game {
                 self.world.add_lake(Lake::ahead(at, dir, phase));
                 self.toasts.push("The river opens out ahead into a great lake.".to_string());
             }
+            TrekEvent::Mountain { .. } if self.world.landmarks.mountain().is_some() => {}
             TrekEvent::Mountain { at, dir } => {
                 self.world.add_mountain(Mountain::ahead(at, dir, phase));
-                self.toasts.push("The compass has led you north: a great mountain rises ahead.".to_string());
+                self.toasts.push("The compass has led you north: a great mountain rises ahead. Its needle will point to it from now on.".to_string());
             }
         }
     }
@@ -960,21 +1041,163 @@ impl Game {
         if self.held_item() == Some(ItemKind::PeepStone) && !self.world.night { self.world.active_rainbow() } else { None }
     }
 
-    /// The ghostly trail a peep stone in the hand shows, as the corners of a path (x, z) that starts under the player:
-    /// by night it leads to the grand castle (to its gate, and on to the door of its keep), by day to the end of the
-    /// rainbow, even once the gold has been taken. `None` when there is no peep stone in hand or nothing to lead to.
+    /// The ghostly trail a peep stone or a bone totem in the hand shows, as the corners of a path (x, z) that starts under
+    /// the player. A peep stone leads by night to the grand castle (to its gate, and on to the door of its keep), by day
+    /// to the end of the rainbow, even once the gold has been taken. A bone totem leads by day to the well and by night to
+    /// the graveyard. `None` when neither is in hand, nothing is out there to lead to, or the player is in the Horizen.
     pub fn trail_path(&self) -> Option<Vec<(f32, f32)>> {
-        if self.held_item() != Some(ItemKind::PeepStone) {
+        if self.in_horizen() {
             return None;
         }
         let start = (self.player.pos.x, self.player.pos.z);
-        if self.world.night {
-            let castle = self.world.landmarks.grand_castle?;
-            Some(vec![start, castle.gate_approach(), castle.keep_door()])
-        } else {
-            let (x, _, z) = self.world.landmarks.rainbow_end()?;
-            Some(vec![start, (x as f32 + 0.5, z as f32 + 0.5)])
+        match self.held_item()? {
+            ItemKind::PeepStone if self.world.night => {
+                let castle = self.world.landmarks.grand_castle?;
+                Some(vec![start, castle.gate_approach(), castle.keep_door()])
+            }
+            ItemKind::PeepStone => {
+                let (x, _, z) = self.world.landmarks.rainbow_end()?;
+                Some(vec![start, (x as f32 + 0.5, z as f32 + 0.5)])
+            }
+            ItemKind::BoneTotem if self.world.night => {
+                let yard = self.world.landmarks.graveyard?;
+                Some(vec![start, yard.gate_approach(), yard.middle()])
+            }
+            ItemKind::BoneTotem => Some(vec![start, self.world.landmarks.well_end()?]),
+            _ => None,
         }
+    }
+
+    /// The colour of the trail: pale blue by night and pale gold by day for a peep stone, bone white by day and sickly
+    /// green by night for a bone totem.
+    pub fn trail_color(&self) -> (f32, f32, f32) {
+        match (self.held_item(), self.world.night) {
+            (Some(ItemKind::BoneTotem), false) => (0.95, 0.95, 0.88),
+            (Some(ItemKind::BoneTotem), true) => (0.55, 1.0, 0.60),
+            (_, true) => (0.70, 0.86, 1.0),
+            (_, false) => (1.0, 0.92, 0.62),
+        }
+    }
+
+    /// With a bone totem in hand by day, and only if the world has no well yet, bring the well into the world beyond the
+    /// edge of the land; by night, in the same way, the graveyard. The totem's trail then leads to it for ever.
+    pub fn try_show_well_or_graveyard(&mut self) -> bool {
+        if self.in_horizen() || self.held_item() != Some(ItemKind::BoneTotem) {
+            return false;
+        }
+        let p = self.player.pos;
+        let first = self.rng.unit() * std::f32::consts::TAU;
+        let angle = |i: usize| first + i as f32 * std::f32::consts::TAU / 16.0;
+        if self.world.night {
+            if self.world.landmarks.graveyard.is_some() {
+                return false;
+            }
+            let sites: Vec<Graveyard> = (0..16).map(|i| Graveyard::ahead((p.x, p.z), angle(i))).collect();
+            let site = sites.iter().copied().find(|g| self.world.landmarks.has_room_for_graveyard(g)).unwrap_or(sites[0]);
+            self.world.add_graveyard(site);
+            self.toasts.push("A sickly green trail winds away through the dark.".to_string());
+        } else {
+            if self.world.landmarks.well.is_some() {
+                return false;
+            }
+            let sites: Vec<Well> = (0..16).map(|i| Well::ahead((p.x, p.z), angle(i))).collect();
+            let site = sites.iter().copied().find(|w| self.world.landmarks.has_room_for_well(w)).unwrap_or(sites[0]);
+            self.world.add_well(site);
+            self.toasts.push("A pale trail leads away across the land.".to_string());
+        }
+        true
+    }
+
+    /// The bearing the compass needle points along for the player now.
+    pub fn compass_bearing(&self) -> f32 {
+        compass_bearing(&self.world.landmarks, (self.player.pos.x, self.player.pos.z))
+    }
+
+    // --- Wearing -------------------------------------------------------------------------
+
+    /// Put on the pelt cloak or royal armour in hand, taking one from the stack. Whatever was worn goes back into the
+    /// inventory (or on the ground if it is full). Returns whether something was put on.
+    pub fn wear_held(&mut self) -> bool {
+        let Some(kind) = self.held_item().filter(|k| k.is_wearable()) else { return false };
+        self.inventory.take_from_slot(self.selected);
+        if let Some(old) = self.worn.replace(kind) {
+            self.stow_or_drop(old);
+        }
+        self.toasts.push(format!("You put on the {}", kind.name()));
+        true
+    }
+
+    /// Take off what is worn, into the inventory (or onto the ground if it is full).
+    #[allow(dead_code)]
+    pub fn take_off(&mut self) -> bool {
+        let Some(old) = self.worn.take() else { return false };
+        self.stow_or_drop(old);
+        self.toasts.push(format!("You take off the {}", old.name()));
+        true
+    }
+
+    fn stow_or_drop(&mut self, kind: ItemKind) {
+        if self.inventory.add(kind, 1) != 0 {
+            let spot = self.player.pos + vec3(0.0, 1.0, 0.0);
+            self.items.push(DroppedItem::spawn_at(kind, spot, &mut self.rng));
+        }
+    }
+
+    // --- The Horizen ---------------------------------------------------------------------
+
+    /// Fall into the well and the player is taken to the Horizen: a player over the water of the well whose feet have
+    /// sunk below `WELL_FALL_DEPTH`.
+    pub fn update_dimension(&mut self) {
+        if self.in_horizen() {
+            return;
+        }
+        let p = self.player.pos;
+        if p.y < WELL_FALL_DEPTH && self.world.landmarks.is_well(p.x.floor() as i32, p.z.floor() as i32) {
+            self.enter_horizen();
+        }
+    }
+
+    /// Trade places with the other dimension: the world, the items on the ground and the player's place in it.
+    /// Creatures, arrows and the work in progress do not cross.
+    fn swap_dimension(&mut self) {
+        let seed = self.info.seed;
+        let mut other = self.away.take().unwrap_or_else(|| Away { world: World::new_horizen(seed), items: Vec::new(), player: Player::new() });
+        let (yaw, pitch) = (self.player.yaw, self.player.pitch);
+        std::mem::swap(&mut self.world, &mut other.world);
+        std::mem::swap(&mut self.items, &mut other.items);
+        std::mem::swap(&mut self.player, &mut other.player);
+        // The player keeps looking the way they were looking.
+        self.player.yaw = yaw;
+        self.player.pitch = pitch;
+        self.player.vel = Vec3::ZERO;
+        self.player.knock = Vec3::ZERO;
+        self.away = Some(other);
+        self.animals.clear();
+        self.arrows.clear();
+        self.mining = None;
+        self.blackout = None;
+        self.treks = Treks::new();
+        self.world.stream_chunks(self.player.pos);
+        self.world.rebuild_dirty(self.player.pos, usize::MAX);
+        self.player.lift_out_of_blocks(&self.world);
+    }
+
+    /// Fall into the Horizen. The player arrives on dry land near its middle.
+    pub fn enter_horizen(&mut self) {
+        if self.in_horizen() {
+            return;
+        }
+        // They arrive at the Horizen's own spot (or where they last stood there), not where they fell.
+        self.swap_dimension();
+        self.toasts.push("You fall through the water into the Horizen.".to_string());
+    }
+
+    /// Return to the overworld, to where the player left it.
+    pub fn leave_horizen(&mut self) {
+        if !self.in_horizen() {
+            return;
+        }
+        self.swap_dimension();
     }
 
     /// Put a new animal on the ground at column (x, z). Fails when that column is not loaded, is under a river or
@@ -1000,6 +1223,9 @@ impl Game {
     /// Every `ANIMAL_SPAWN_INTERVAL` seconds, bring wildlife into the world a good way from the player, unless
     /// that kind is already at its limit. Will-o-whisps are included only while the world is night.
     fn spawn_wildlife(&mut self) {
+        if self.in_horizen() {
+            return;
+        }
         let count = |k: AnimalKind| self.animals.iter().filter(|a| a.kind == k).count();
         let room = |kind: AnimalKind| match kind {
             AnimalKind::Deer => MAX_DEER,
@@ -1069,6 +1295,10 @@ impl Game {
         self.animals.retain(|a| {
             flat(a) < ANIMAL_DESPAWN_DISTANCE && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
         });
+        let cloaked = self.worn == Some(ItemKind::PeltCloak);
+        for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Bear) {
+            a.pacified = cloaked && !a.provoked;
+        }
         let bears: Vec<Vec3> = self.animals.iter().filter(|a| a.kind == AnimalKind::Bear).map(|a| a.pos).collect();
         let mut strikes: Vec<(Vec3, u32, &'static str)> = Vec::new();
         for a in &mut self.animals {
@@ -3076,7 +3306,8 @@ mod tests {
             hold(&mut g, axe, 1);
             assert!(g.can_interact(Block::Wood), "{axe:?} chops");
             assert!(g.swing_melee(eye(&g), dir));
-            assert_eq!(g.animals[0].health, BEAR_HEALTH - AXE_DAMAGE - i as i32, "{axe:?}");
+            let damage = [AXE_DAMAGE, COPPER_AXE_DAMAGE, BRONZE_AXE_DAMAGE, IRON_AXE_DAMAGE][i];
+            assert_eq!(g.animals[0].health, BEAR_HEALTH - damage, "{axe:?}");
         }
     }
 
@@ -3099,9 +3330,9 @@ mod tests {
     fn every_axe_and_the_mallet_hurt_an_animal_when_the_button_is_held_on_it() {
         for (item, damage) in [
             (ItemKind::StoneAxe, AXE_DAMAGE),
-            (ItemKind::CopperAxe, AXE_DAMAGE + 1),
-            (ItemKind::BronzeAxe, AXE_DAMAGE + 2),
-            (ItemKind::IronAxe, AXE_DAMAGE + 3),
+            (ItemKind::CopperAxe, COPPER_AXE_DAMAGE),
+            (ItemKind::BronzeAxe, BRONZE_AXE_DAMAGE),
+            (ItemKind::IronAxe, IRON_AXE_DAMAGE),
             (ItemKind::BronzeMallet, MALLET_DAMAGE),
         ] {
             let mut g = hunting_game(170);
@@ -3883,3 +4114,343 @@ mod landmark_tests {
     }
 }
 
+
+#[cfg(test)]
+mod totem_horizen_and_wear_tests {
+    use super::*;
+    use crate::item::ItemStack;
+    use crate::player::MoveInput;
+    use std::path::PathBuf;
+
+    fn game(seed: u64) -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        Game::from_save(info, SaveData::new(), seed)
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind) {
+        g.inventory.slots[0] = Some(ItemStack { kind, count: 1 });
+        g.select_slot(0);
+    }
+
+    fn give(g: &mut Game, kind: ItemKind, count: u32) {
+        assert_eq!(g.inventory.add(kind, count), 0);
+    }
+
+    #[test]
+    fn a_bone_totem_by_day_brings_one_well_and_a_trail_that_leads_there_for_ever() {
+        let mut g = game(1);
+        hold(&mut g, ItemKind::BoneTotem);
+        assert_eq!(g.trail_path(), None, "nothing out there yet");
+        assert!(g.try_show_well_or_graveyard());
+        let well = g.world.landmarks.well.expect("a well");
+        assert!(g.world.landmarks.graveyard.is_none(), "by day only the well");
+        let p = g.player.pos;
+        let nearest = (well.x as f32 - p.x).abs().max((well.z as f32 - p.z).abs());
+        assert!(nearest >= ((GEN_RADIUS + 1) * CHUNK_SIZE) as f32, "beyond the generated land: {nearest}");
+        assert!(!g.try_show_well_or_graveyard(), "only one well");
+        let path = g.trail_path().expect("a trail");
+        assert_eq!((path[0], *path.last().unwrap()), ((p.x, p.z), well.centre()));
+        // Only a totem in hand shows it; a peep stone shows its own trails.
+        hold(&mut g, ItemKind::Stick);
+        assert_eq!(g.trail_path(), None);
+        hold(&mut g, ItemKind::PeepStone);
+        assert_eq!(g.trail_path(), None, "the peep stone does not lead to the well");
+        // At night the totem leads elsewhere, and the well stays put.
+        hold(&mut g, ItemKind::BoneTotem);
+        g.world.set_night(true);
+        assert_eq!(g.trail_path(), None, "no graveyard yet");
+        assert!(g.try_show_well_or_graveyard());
+        let yard = g.world.landmarks.graveyard.expect("a graveyard");
+        assert!(!g.try_show_well_or_graveyard(), "only one graveyard");
+        let path = g.trail_path().unwrap();
+        assert_eq!(path, vec![(p.x, p.z), yard.gate_approach(), yard.middle()]);
+        g.world.set_night(false);
+        assert_eq!(g.world.landmarks.well, Some(well));
+        assert_eq!(g.trail_path().unwrap().last().copied(), Some(well.centre()), "by day it leads to the well again");
+    }
+
+    #[test]
+    fn the_well_is_deep_water_in_a_rim_and_the_graveyard_has_stones_when_generated() {
+        let mut g = game(2);
+        let well = Well { x: 40, z: 40 };
+        g.world.add_well(well);
+        g.world.add_graveyard(Graveyard { x: 40, z: 80 });
+        for (cx, cz) in [(2, 2), (1, 1), (2, 4), (1, 3)] {
+            g.world.ensure_chunk(cx, cz);
+        }
+        for y in STONE_LAYERS..=GROUND_TOP {
+            assert_eq!(g.world.block_at(41, y, 41), Block::Water, "water all the way down at {y}");
+        }
+        assert_eq!(g.world.block_at(41, 0, 41), Block::Stone);
+        assert_eq!(g.world.block_at(39, GROUND_TOP + 1, 41), Block::CastleStone, "the rim");
+        assert_eq!(g.world.block_at(41, GROUND_TOP + 1, 41), Block::Air);
+        assert!(g.world.is_wet_column(41, 41));
+        assert!(g.world.landmarks.is_well(41, 41) && !g.world.landmarks.is_well(44, 41));
+        assert_eq!(g.world.block_at(43, GROUND_TOP + 1, 83), Block::Gravestone);
+    }
+
+    fn fall_in_the_well(g: &mut Game) {
+        let well = Well { x: 40, z: 40 };
+        g.world.add_well(well);
+        for cz in 1..=3 {
+            for cx in 1..=3 {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        g.player.pos = vec3(41.5, GROUND_TOP as f32 + 2.5, 41.5);
+        g.player.vel = Vec3::ZERO;
+        for _ in 0..240 {
+            g.player.update(&g.world, 1.0 / 60.0, &MoveInput::default());
+            g.update_landmarks();
+            if g.in_horizen() {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn falling_into_the_well_takes_the_player_to_a_separate_flat_world_with_ponds_and_no_creatures() {
+        let mut g = game(3);
+        g.animals.push(Animal::new(AnimalKind::Deer, vec3(30.0, 6.01, 30.0), &mut Rng::new(1)));
+        fall_in_the_well(&mut g);
+        assert!(g.in_horizen(), "the player fell into the Horizen");
+        assert_eq!(g.world.dimension, Dimension::Horizen);
+        assert!(g.animals.is_empty(), "no creature of the overworld comes along");
+        // Land and sky of the new world: flat, with ponds; the player stands on dry ground.
+        g.world.stream_chunks(g.player.pos);
+        g.player.update(&g.world, 0.5, &MoveInput::default());
+        assert!(!g.world.is_wet_column(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32));
+        assert!((g.player.pos.y - (GROUND_TOP + 1) as f32).abs() < 0.2, "on the plain: {}", g.player.pos.y);
+        assert!(g.world.chunks.values().all(|c| !c.blocks.contains(&Block::Wood) && !c.blocks.contains(&Block::Bush)), "nothing grows there");
+        // Wildlife never spawns in the Horizen.
+        for _ in 0..50 {
+            g.spawn_timer = ANIMAL_SPAWN_INTERVAL;
+            g.update_animals(0.0);
+        }
+        assert!(g.animals.is_empty());
+        // The overworld is kept, with its landmarks, for when the player is back.
+        assert!(g.away.as_ref().unwrap().world.landmarks.well.is_some());
+    }
+
+    #[test]
+    fn in_the_horizen_potions_do_not_change_the_sky_and_the_compass_peep_stone_and_totem_do_nothing() {
+        let mut g = game(4);
+        fall_in_the_well(&mut g);
+        assert!(g.in_horizen());
+        let night = g.world.night;
+        give(&mut g, ItemKind::PurpleBerryStew, 1);
+        g.select_slot(0);
+        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::PurpleBerryStew, count: 1 });
+        g.eat_held();
+        for _ in 0..90 {
+            g.update_blackout(1.0 / 60.0);
+        }
+        assert!(g.blackout.is_none() && g.world.night == night, "the purple stew did not bring night");
+        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::RedBerryStew, count: 1 });
+        g.eat_held();
+        assert!(g.blackout.is_none() && g.world.night == night);
+        for item in [ItemKind::PeepStone, ItemKind::BoneTotem, ItemKind::Compass] {
+            hold(&mut g, item);
+            for _ in 0..3 {
+                g.update_landmarks();
+            }
+            assert_eq!(g.trail_path(), None, "{item:?}");
+        }
+        assert!(g.world.landmarks.grand_castle.is_none() && g.world.landmarks.well.is_none() && g.world.landmarks.rainbow == RainbowState::Unseen);
+        assert!(g.world.landmarks.graveyard.is_none() && g.world.landmarks.mountains.is_empty());
+    }
+
+    #[test]
+    fn dying_in_the_horizen_returns_the_player_to_the_overworld_start() {
+        let mut g = game(5);
+        fall_in_the_well(&mut g);
+        assert!(g.in_horizen());
+        g.hurt_player(MAX_HEALTH, "gone");
+        assert!(!g.in_horizen());
+        assert_eq!(g.player.pos, Player::new().pos);
+    }
+
+    #[test]
+    fn the_horizen_and_what_is_worn_survive_saving_and_loading() {
+        let mut g = game(6);
+        g.worn = Some(ItemKind::PeltCloak);
+        fall_in_the_well(&mut g);
+        assert!(g.in_horizen());
+        let (x, z) = (g.player.pos.x.floor() as i32 + 2, g.player.pos.z.floor() as i32);
+        g.world.set_block(x, GROUND_TOP + 1, z, Block::PlacedStone);
+        g.items.push(DroppedItem::at_rest(ItemKind::Stick, vec3(12.5, 6.04, 12.5)));
+        let text = g.save_text();
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, crate::save::parse_save(&text), 9);
+        assert!(again.in_horizen(), "still in the Horizen");
+        assert_eq!(again.worn, Some(ItemKind::PeltCloak));
+        assert_eq!(again.world.block_at(x, GROUND_TOP + 1, z), Block::PlacedStone, "the edit in the Horizen is kept");
+        assert_eq!(again.items.len(), 1);
+        assert!(again.away.as_ref().unwrap().world.landmarks.well.is_some(), "and the overworld with it");
+        again.leave_horizen();
+        assert_eq!(again.world.dimension, Dimension::Overworld);
+        assert!(again.items.is_empty() && again.world.landmarks.well.is_some());
+    }
+
+    #[test]
+    fn a_pelt_cloak_is_made_of_a_bear_pelt_and_antlers_and_gold_make_a_bone_totem() {
+        use crate::recipe::{craft, recipe_for};
+        let mut g = game(7);
+        give(&mut g, ItemKind::BearPelt, 1);
+        give(&mut g, ItemKind::Antlers, 1);
+        give(&mut g, ItemKind::Gold, 1);
+        assert!(craft(&mut g.inventory, recipe_for(ItemKind::PeltCloak)));
+        assert!(!recipe_for(ItemKind::BoneTotem).can_afford(&g.inventory), "one gold is not enough");
+        give(&mut g, ItemKind::Gold, 1);
+        assert!(craft(&mut g.inventory, recipe_for(ItemKind::BoneTotem)));
+        assert_eq!((g.inventory.count(ItemKind::Antlers), g.inventory.count(ItemKind::Gold), g.inventory.count(ItemKind::BoneTotem)), (0, 0, 1));
+        assert_eq!(recipe_for(ItemKind::BoneTotem).describe(), "1 Antlers + 2 Gold");
+    }
+
+    #[test]
+    fn one_garment_is_worn_at_a_time_and_putting_on_another_returns_the_first() {
+        let mut g = game(8);
+        hold(&mut g, ItemKind::PeltCloak);
+        assert!(g.wear_held());
+        assert_eq!(g.worn, Some(ItemKind::PeltCloak));
+        assert_eq!(g.inventory.count(ItemKind::PeltCloak), 0);
+        hold(&mut g, ItemKind::RoyalArmor);
+        assert!(g.wear_held());
+        assert_eq!(g.worn, Some(ItemKind::RoyalArmor));
+        assert_eq!(g.inventory.count(ItemKind::PeltCloak), 1, "the cloak is back in the inventory");
+        hold(&mut g, ItemKind::Stick);
+        assert!(!g.wear_held(), "a stick cannot be worn");
+        assert!(g.take_off());
+        assert_eq!((g.worn, g.inventory.count(ItemKind::RoyalArmor)), (None, 1));
+        assert!(!g.take_off());
+    }
+
+    #[test]
+    fn the_royal_armour_halves_every_blow_and_a_blow_still_costs_at_least_one_life() {
+        let mut g = game(9);
+        g.hurt_player(BEAR_DAMAGE, "x");
+        assert_eq!(g.health, MAX_HEALTH - BEAR_DAMAGE);
+        g.health = MAX_HEALTH;
+        g.worn = Some(ItemKind::RoyalArmor);
+        g.hurt_player(BEAR_DAMAGE, "x");
+        assert_eq!(g.health, MAX_HEALTH - BEAR_DAMAGE / 2);
+        g.health = MAX_HEALTH;
+        g.hurt_player(1, "x");
+        assert_eq!(g.health, MAX_HEALTH - 1, "never nothing");
+        g.health = MAX_HEALTH;
+        g.hurt_player(PURPLE_BERRY_STEW_DAMAGE + 2, "x");
+        assert_eq!(g.health, MAX_HEALTH - 2);
+        g.worn = Some(ItemKind::PeltCloak);
+        g.health = MAX_HEALTH;
+        g.hurt_player(BEAR_DAMAGE, "x");
+        assert_eq!(g.health, MAX_HEALTH - BEAR_DAMAGE, "the cloak does not soften blows");
+    }
+
+    fn bear_beside_the_player(g: &mut Game) {
+        g.player.pos = vec3(10.0, 6.01, 10.0);
+        g.animals.clear();
+        let spawned = (13..17).flat_map(|x| (7..14).map(move |z| (x, z))).any(|(x, z)| g.spawn_animal(AnimalKind::Bear, x, z));
+        assert!(spawned, "room for a bear beside the spawn point");
+    }
+
+    fn let_time_pass(g: &mut Game, seconds: f32) {
+        for _ in 0..(seconds * 60.0) as i32 {
+            g.spawn_timer = 0.0;
+            g.update_animals(1.0 / 60.0);
+        }
+    }
+
+    #[test]
+    fn a_bear_attacks_a_player_without_a_cloak() {
+        let mut g = game(11);
+        bear_beside_the_player(&mut g);
+        let_time_pass(&mut g, 2.5);
+        assert!(g.health < MAX_HEALTH, "an ordinary bear charges and hurts");
+    }
+
+    #[test]
+    fn a_bear_leaves_a_player_in_a_pelt_cloak_alone_until_the_player_hits_it() {
+        let mut g = game(11);
+        g.worn = Some(ItemKind::PeltCloak);
+        bear_beside_the_player(&mut g);
+        let_time_pass(&mut g, 10.0);
+        assert_eq!(g.health, MAX_HEALTH, "no blow from a bear that was not hit");
+        assert!(g.animals[0].pacified && !g.animals[0].provoked);
+        // Hit it once: from now on it is hostile, cloak or no cloak.
+        g.hurt_animals(&[(0, 1)]);
+        assert!(g.animals[0].provoked);
+        let_time_pass(&mut g, 2.5);
+        assert!(g.health < MAX_HEALTH, "a bear that has been hit attacks");
+        assert!(!g.animals[0].pacified);
+    }
+
+    #[test]
+    fn the_grand_castle_changes_between_day_and_night_in_the_loaded_world() {
+        let mut g = game(12);
+        let castle = GrandCastle { x: 40, z: 40 };
+        g.world.add_grand_castle(castle);
+        for cz in 1..=3 {
+            for cx in 1..=3 {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        let gate = (castle.x, castle.z + GRAND_WALL_HALF, GROUND_TOP + 1);
+        assert_eq!(g.world.block_at(gate.0, gate.2, gate.1), Block::Air, "by day the gate is a breach");
+        g.world.set_night(true);
+        for cz in 1..=3 {
+            for cx in 1..=3 {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        assert_eq!(g.world.block_at(gate.0, gate.2, gate.1), Block::CastleDoor, "by night it is shut");
+        g.world.set_night(false);
+        assert_eq!(g.world.block_at(gate.0, gate.2, gate.1), Block::Air);
+    }
+
+    #[test]
+    fn claiming_the_armour_gives_the_royal_armour_once_for_good() {
+        let mut g = game(13);
+        let castle = GrandCastle { x: 40, z: 40 };
+        g.world.set_night(true);
+        g.world.add_grand_castle(castle);
+        for cz in 0..=3 {
+            for cx in 0..=3 {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        let (x, z, y) = (castle.x - 6, castle.z, GROUND_TOP + 1 + GRAND_STOREY);
+        let armour_x = castle.x + (-(GRAND_KEEP_HALF - 2) + 3);
+        assert_eq!(g.world.block_at(armour_x, y, z), Block::ArmorStand, "{x}");
+        hold(&mut g, ItemKind::Stick);
+        let drops = g.mine(armour_x, y, z);
+        assert_eq!(drops, vec![ItemKind::RoyalArmor]);
+        // It is gone, night after night.
+        g.world.set_night(false);
+        g.world.set_night(true);
+        assert_eq!(g.world.block_at(armour_x, y, z), Block::Air);
+    }
+
+    #[test]
+    fn there_is_only_one_mountain_and_the_compass_leads_to_it() {
+        let mut g = game(14);
+        let at = (g.player.pos.x, g.player.pos.z);
+        g.bring_in(TrekEvent::Mountain { at, dir: (0.0, -1.0) });
+        assert_eq!(g.world.landmarks.mountains.len(), 1);
+        let first = g.world.landmarks.mountains[0];
+        g.bring_in(TrekEvent::Mountain { at: (500.0, 500.0), dir: (1.0, 0.0) });
+        g.world.add_mountain(Mountain { x: 5, z: 5, ..first });
+        assert_eq!(g.world.landmarks.mountains, vec![first], "a second mountain never comes");
+        // The needle now points at it from wherever the player stands.
+        g.player.pos = vec3(300.0, 6.0, 300.0);
+        let b = g.compass_bearing();
+        let want = (first.z as f32 + 0.5 - 300.0).atan2(first.x as f32 + 0.5 - 300.0);
+        assert!((b - want).abs() < 1e-4);
+        // And walking north with the compass in hand brings no further mountain.
+        hold(&mut g, ItemKind::Compass);
+        for i in 0..400 {
+            g.player.pos = vec3(300.0, 6.0, 300.0 - i as f32 * 2.0);
+            g.update_landmarks();
+        }
+        assert_eq!(g.world.landmarks.mountains.len(), 1);
+    }
+}

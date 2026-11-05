@@ -10,7 +10,7 @@ use crate::config::*;
 use crate::dropped::DroppedItem;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
-use crate::landmarks::{GrandCastle, Lake, Landmarks, Mountain, Rainbow, RainbowState, MAX_LANDMARK_RADIUS, MOUNTAIN_MAX_HEIGHT};
+use crate::landmarks::{GrandCastle, Graveyard, Lake, Landmarks, Mountain, Rainbow, RainbowState, Well, MAX_LANDMARK_RADIUS, MOUNTAIN_MAX_HEIGHT};
 use crate::player::Player;
 use crate::rng::clock_seed;
 use crate::world::{Cooking, Pos, Pot, World};
@@ -50,6 +50,12 @@ pub struct SaveData {
     pub health: u32,
     /// Dev mode: the inventory lists every item to take. Chosen when the world is created.
     pub dev_mode: bool,
+    /// The one thing the player wears (a pelt cloak or the royal armour).
+    pub worn: Option<ItemKind>,
+    /// Whether the player is in the Horizen. The fields above then describe the overworld, where they fell in.
+    pub in_horizen: bool,
+    /// The Horizen's own edits, items on the ground and the player's place in it, once the player has been there.
+    pub horizen: Option<Box<SaveData>>,
 }
 
 impl SaveData {
@@ -70,6 +76,9 @@ impl SaveData {
             items: Vec::new(),
             health: MAX_HEALTH,
             dev_mode: false,
+            worn: None,
+            in_horizen: false,
+            horizen: None,
         }
     }
 }
@@ -97,6 +106,12 @@ impl SaveData {
 ///     "rainbow <from x> <from z> <x> <y> <z>"  the rainbow is out there, its gold at (x, y, z)
 ///     "rainbowend <x> <y> <z>"   where the gold of a spent rainbow lay (the peep stone still leads there)
 ///     "grandcastle <x> <z>"      the grand castle, centred on that column
+///     "well <x> <z>"            the well (its water's corner with the smallest coordinates)
+///     "graveyard <x> <z>"       the graveyard, centred on that column
+///     "worn <item>"             what the player wears
+///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
+///     "h <record>"              a record of the Horizen: any of the above that makes sense there (blocks, fires,
+///                                items, \"pos <x> <y> <z> <yaw> <pitch>\" for the player's place in it)
 /// Worlds saved before the inventory existed simply have none of the last six, and worlds saved before the
 /// landmarks existed have none of the last three. Animals, arrows and treks in progress are not saved.
 pub fn serialize_save(
@@ -108,6 +123,55 @@ pub fn serialize_save(
     items: &[DroppedItem],
     health: u32,
     dev_mode: bool,
+) -> String {
+    serialize_save_full(name, seed, world, player, inventory, items, health, dev_mode, &SaveExtras::default())
+}
+
+/// What `serialize_save` leaves out: what is worn, and the Horizen (with the player in it, if they are).
+#[derive(Default)]
+pub struct SaveExtras<'a> {
+    pub worn: Option<ItemKind>,
+    pub in_horizen: bool,
+    pub horizen: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
+}
+
+/// The records that describe a world's edits, each starting with `prefix`.
+fn world_lines(world: &World, prefix: &str, out: &mut String) {
+    for (x, y, z) in &world.removed {
+        out.push_str(&format!("{prefix}{} {} {}\n", x, y, z));
+    }
+    for &(x, y, z) in &world.berry_picked {
+        out.push_str(&format!("{prefix}berry {} {} {}\n", x, y, z));
+    }
+    for (&(x, y, z), block) in &world.placed {
+        if let Some(id) = block.id() {
+            out.push_str(&format!("{prefix}place {} {} {} {}\n", x, y, z, id));
+        }
+    }
+    for (&(x, y, z), secs) in &world.fires {
+        out.push_str(&format!("{prefix}fire {} {} {} {}\n", x, y, z, secs));
+    }
+    for (&(x, y, z), secs) in &world.glow {
+        out.push_str(&format!("{prefix}glow {} {} {} {}\n", x, y, z, secs));
+    }
+    for (&(x, y, z), pot) in &world.pots {
+        out.push_str(&format!("{prefix}pot {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left));
+    }
+    for (&(x, y, z), meat) in &world.cooking {
+        out.push_str(&format!("{prefix}cook {} {} {} {} {}\n", x, y, z, meat.raw.id(), meat.left));
+    }
+}
+
+pub fn serialize_save_full(
+    name: &str,
+    seed: i64,
+    world: &World,
+    player: &Player,
+    inventory: &Inventory,
+    items: &[DroppedItem],
+    health: u32,
+    dev_mode: bool,
+    extras: &SaveExtras,
 ) -> String {
     let mut out = format!(
         "{}\n{}\n{} {} {} {} {}\n",
@@ -123,6 +187,12 @@ pub fn serialize_save(
     out.push_str(&format!("health {}\n", health));
     if dev_mode {
         out.push_str("mode dev\n");
+    }
+    if let Some(worn) = extras.worn {
+        out.push_str(&format!("worn {}\n", worn.id()));
+    }
+    if extras.in_horizen {
+        out.push_str("dimension horizen\n");
     }
     for l in &world.landmarks.lakes {
         out.push_str(&format!("lake {} {} {} {} {} {}\n", l.x, l.z, l.radius, l.phase, l.from.0, l.from.1));
@@ -142,6 +212,12 @@ pub fn serialize_save(
     }
     if let Some(c) = world.landmarks.grand_castle {
         out.push_str(&format!("grandcastle {} {}\n", c.x, c.z));
+    }
+    if let Some(w) = world.landmarks.well {
+        out.push_str(&format!("well {} {}\n", w.x, w.z));
+    }
+    if let Some(g) = world.landmarks.graveyard {
+        out.push_str(&format!("graveyard {} {}\n", g.x, g.z));
     }
     for (slot, stack) in inventory.slots.iter().enumerate() {
         if let Some(s) = stack {
@@ -168,6 +244,13 @@ pub fn serialize_save(
     for (&(x, y, z), meat) in &world.cooking {
         out.push_str(&format!("cook {} {} {} {} {}\n", x, y, z, meat.raw.id(), meat.left));
     }
+    if let Some((hw, hp, hitems)) = extras.horizen {
+        out.push_str(&format!("h pos {} {} {} {} {}\n", hp.pos.x, hp.pos.y, hp.pos.z, hp.yaw, hp.pitch));
+        world_lines(hw, "h ", &mut out);
+        for item in hitems {
+            out.push_str(&format!("h item {} {} {} {}\n", item.kind.id(), item.pos.x, item.pos.y, item.pos.z));
+        }
+    }
     out
 }
 
@@ -184,8 +267,42 @@ pub fn parse_save(text: &str) -> SaveData {
         }
     }
     for line in lines {
+        apply_line(&mut data, line);
+    }
+    data
+}
+
+/// Apply one record of a world file to `data`.
+fn apply_line(data: &mut SaveData, line: &str) {
         let mut t = line.split_whitespace();
         match t.next() {
+            Some("h") => {
+                let rest = line.trim_start().strip_prefix('h').unwrap_or("");
+                let horizen = data.horizen.get_or_insert_with(|| Box::new(SaveData::new()));
+                apply_line(horizen, rest);
+            }
+            Some("pos") => {
+                let v: Vec<f32> = t.filter_map(|s| s.parse().ok()).collect();
+                if v.len() == 5 {
+                    data.player.pos = vec3(v[0], v[1], v[2]);
+                    data.player.yaw = v[3];
+                    data.player.pitch = v[4];
+                }
+            }
+            Some("worn") => data.worn = t.next().and_then(ItemKind::from_id).filter(|k| k.is_wearable()),
+            Some("dimension") => data.in_horizen = t.next() == Some("horizen"),
+            Some("well") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.well = Some(Well { x, z });
+                }
+            }
+            Some("graveyard") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.graveyard = Some(Graveyard { x, z });
+                }
+            }
             Some("mode") => data.dev_mode = t.next() == Some("dev"),
             Some("health") => {
                 if let Some(h) = t.next().and_then(|s| s.parse::<u32>().ok()) {
@@ -324,8 +441,6 @@ pub fn parse_save(text: &str) -> SaveData {
             }
             None => {}
         }
-    }
-    data
 }
 
 pub fn save_world(

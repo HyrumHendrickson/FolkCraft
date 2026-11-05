@@ -12,7 +12,7 @@ use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
 use crate::player::MoveInput;
-use crate::sky::draw_sky;
+use crate::sky::{draw_horizen_sky, draw_sky};
 use crate::world::{Hit, World};
 
 type Target = Option<Hit>;
@@ -180,6 +180,9 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
             return;
         }
     }
+    if game.wear_held() {
+        return;
+    }
     if game.eat_held() {
         return;
     }
@@ -190,7 +193,8 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
 
 /// Draw the 3D scene. Returns how many chunks were drawn.
 fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
-    clear_background(if game.world.night {
+    // The Horizen's sky is half day and half night, whatever the overworld's time of day (`draw_horizen_sky`).
+    clear_background(if game.world.night && !game.in_horizen() {
         Color::new(0.015, 0.025, 0.075, 1.0)
     } else {
         Color::new(0.53, 0.81, 0.92, 1.0)
@@ -203,7 +207,11 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
         ..Default::default()
     });
     // The sun and the clouds go first, so the land is drawn over them.
-    draw_sky(game.world.seed, eye, get_time() as f32, game.world.night);
+    if game.in_horizen() {
+        draw_horizen_sky(game.world.seed, eye, get_time() as f32);
+    } else {
+        draw_sky(game.world.seed, eye, get_time() as f32, game.world.night);
+    }
     // Only chunks within the render radius (and inside the view cone) are drawn.
     let aspect = screen_width() / screen_height();
     let half_fov = ((35.0_f32).to_radians().tan() * (1.0 + aspect * aspect).sqrt()).atan();
@@ -232,7 +240,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     }
     // A peep stone in the hand also shows a ghostly trail: to the grand castle by night, to the end of the rainbow by day.
     if let Some(path) = game.trail_path() {
-        draw_trail(&game.world, &path, game.world.night, get_time() as f32);
+        draw_trail(&game.world, &path, game.trail_color(), get_time() as f32);
     }
     if let Some(hit) = target {
         // Outline the block's actual shape, so a pebble gets a small box and a trunk a thin one.
@@ -250,7 +258,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
     set_default_camera();
     let (w, h) = (screen_width(), screen_height());
     if game.inventory_open {
-        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
+        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.worn, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
             game.drop_inventory_stack(slot);
         }
     } else {
@@ -261,8 +269,8 @@ fn render_hud(game: &mut Game, drawn: usize) {
             draw_break_bar(progress);
         }
         draw_health(game.health);
-        if game.held_item() == Some(ItemKind::Compass) {
-            draw_compass(game.player.yaw, game.treks.compass_progress());
+        if game.held_item() == Some(ItemKind::Compass) && !game.in_horizen() {
+            draw_compass(game.player.yaw, game.compass_bearing(), game.treks.compass_progress(), game.world.landmarks.mountain().is_some());
         }
     }
     game.toasts.draw();

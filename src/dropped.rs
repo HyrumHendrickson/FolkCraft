@@ -64,6 +64,10 @@ impl ItemKind {
             ItemKind::Sling => 0.03,
             ItemKind::Loadstone => 0.08,
             ItemKind::Compass => 0.05,
+            ItemKind::Antlers => 0.06,
+            ItemKind::BoneTotem => 0.07,
+            ItemKind::PeltCloak => 0.03,
+            ItemKind::RoyalArmor => 0.06,
         }
     }
 
@@ -108,6 +112,10 @@ impl ItemKind {
             ItemKind::Sling => vec3(0.14, 0.03, 0.08),
             ItemKind::Loadstone => vec3(0.10, 0.08, 0.09),
             ItemKind::Compass => vec3(0.10, 0.05, 0.10),
+            ItemKind::Antlers => vec3(0.18, 0.06, 0.12),
+            ItemKind::BoneTotem => vec3(0.20, 0.07, 0.07),
+            ItemKind::PeltCloak => vec3(0.20, 0.03, 0.15),
+            ItemKind::RoyalArmor => vec3(0.16, 0.06, 0.12),
         }
     }
 }
