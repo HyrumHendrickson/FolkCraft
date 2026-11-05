@@ -222,7 +222,9 @@ mod tests {
 
     #[test]
     fn the_clouds_float_above_the_tallest_tree() {
-        assert!(CLOUD_HEIGHT > WORLD_HEIGHT as f32 + 10.0);
+        // The tallest tree stands on the tallest hill. (The mountain is taller than the clouds and rises through them.)
+        let tallest_tree = (GROUND_TOP + TREE_LINE_RISE + 1 + 10) as f32;
+        assert!(CLOUD_HEIGHT > tallest_tree + 10.0);
         assert!(SUN_DISTANCE > CLOUD_CELL * CLOUD_RADIUS_CELLS as f32, "the sun lies behind the clouds");
     }
 }

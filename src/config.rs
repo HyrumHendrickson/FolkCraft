@@ -3,7 +3,8 @@
 // --- World and rendering --------------------------------------------------------------
 
 pub const CHUNK_SIZE: i32 = 20;
-pub const WORLD_HEIGHT: i32 = 24;
+/// Tall enough for the mountain (`MOUNTAIN_HEIGHT`) and the sky above its summit.
+pub const WORLD_HEIGHT: i32 = 180;
 pub const STONE_LAYERS: i32 = 1;
 pub const DIRT_LAYERS: i32 = 5;
 /// Y of the highest dirt block; players stand at `GROUND_TOP + 1`.
@@ -102,11 +103,14 @@ pub const RELIEF_PLACEMENT_TRIES: i32 = 8;
 
 /// A walk this many chunks long through a river, without leaving the water, ends at a lake.
 pub const LAKE_TREK_CHUNKS: i32 = 10;
-/// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter).
-pub const LAKE_RADIUS: i32 = 34;
+/// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter). The lake
+/// is large: about a hundred blocks from shore to shore each way.
+pub const LAKE_RADIUS: i32 = 130;
 /// Gap in blocks between the player and the near shore of a new lake. It is more than `GEN_RADIUS` chunks, so
 /// the lake appears beyond the edge of the generated land instead of in front of the player.
 pub const LAKE_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
+/// The island in the middle of a lake has this share of the lake's radius (about 39 blocks for a big lake).
+pub const LAKE_ISLAND_SHARE: f32 = 0.3;
 /// Half the width of the stretch of water that joins the river to the lake.
 pub const LAKE_CHANNEL_HALF_WIDTH: f32 = 2.5;
 /// Lakes are one block deep, like rivers.
@@ -116,17 +120,27 @@ pub const LAKE_DEPTH: i32 = RIVER_DEPTH;
 pub const COMPASS_TREK_CHUNKS: i32 = 10;
 /// The compass needle points this way: north, which is towards smaller z.
 pub const COMPASS_NORTH_BEARING: f32 = -std::f32::consts::FRAC_PI_2;
-pub const MOUNTAIN_RADIUS: i32 = 46;
-/// Blocks the ground is raised at the summit. Hills are at most `HILL_MAX_HEIGHT`.
-pub const MOUNTAIN_HEIGHT: i32 = 17;
+/// Wide enough that the slope never exceeds one block per column, so the summit can be climbed by jumping.
+pub const MOUNTAIN_RADIUS: i32 = 400;
+/// Blocks the ground is raised at the summit: ten times what it once was (17). Hills are at most `HILL_MAX_HEIGHT`.
+pub const MOUNTAIN_HEIGHT: i32 = 170;
 /// Gap in blocks between the player and the foot of a new mountain (see `LAKE_DISTANCE`).
 pub const MOUNTAIN_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
 /// Ground this many blocks above the plain is covered in snow.
-pub const SNOW_LINE_RISE: i32 = 12;
+pub const SNOW_LINE_RISE: i32 = 120;
 /// No trees grow where the ground is more than this many blocks above the plain (a pine is ten tall).
 pub const TREE_LINE_RISE: i32 = 6;
 /// Hills and valleys fade out over this many blocks beside a lake or a mountain, so no cliff is left behind.
 pub const LANDMARK_BLEND: i32 = 16;
+
+/// The castle in the middle of a lake's island: its walls are `Block::CastleStone`. These are its half-width
+/// (the outer wall stands this many blocks from the centre), the farthest any part of it reaches from the centre
+/// (the corner towers) and its height in blocks.
+pub const CASTLE_WALL_HALF: i32 = 8;
+pub const CASTLE_REACH: i32 = 10;
+pub const CASTLE_HEIGHT: i32 = 11;
+/// No tree grows within this many blocks of the castle's outer edge.
+pub const CASTLE_TREE_MARGIN: i32 = 6;
 
 /// Holding a peep stone shows a rainbow once. Its gold lies this far from the player (min, max), in blocks.
 pub const RAINBOW_GOLD_MIN_DISTANCE: f32 = 26.0;
@@ -270,8 +284,9 @@ pub const WILL_O_WHISP_HEIGHT: f32 = 0.55;
 pub const WILL_O_WHISP_SPAWN_HEIGHT: f32 = 3.0;
 pub const WILL_O_WHISP_BOB_AMPLITUDE: f32 = 0.18;
 pub const WILL_O_WHISP_BOB_SPEED: f32 = 2.4;
-pub const MAX_WILL_O_WHISP: usize = 4;
-pub const SPAWN_WEIGHT_WILL_O_WHISP: u64 = 20;
+/// Many more of them, and much more often, than there once were (4 at most, weight 20).
+pub const MAX_WILL_O_WHISP: usize = 12;
+pub const SPAWN_WEIGHT_WILL_O_WHISP: u64 = 100;
 
 // --- Rabbits, moose and stews -----------------------------------------------------------
 
@@ -318,6 +333,9 @@ pub const PLAYER_KNOCKBACK_SPEED: f32 = 6.0;
 pub const KNOCKBACK_HOP: f32 = 5.0;
 pub const KNOCKBACK_DECAY: f32 = 7.0;
 pub const ARROW_DROP_BACKOFF: f32 = 0.3;
+
+/// Items lying on the ground (dropped, thrown or fallen): above this many, the oldest disappear.
+pub const MAX_DROPPED_ITEMS: usize = 100;
 
 // --- Persistence -------------------------------------------------------------------------
 

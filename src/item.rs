@@ -613,7 +613,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
             }
         }
         Block::Ash => drops.push(ItemKind::Ash),
-        Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
+        Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
     }
     drops
 }
@@ -663,7 +663,7 @@ mod tests {
     #[test]
     fn unbreakable_air_flower_and_fire_blocks_drop_nothing() {
         let mut rng = Rng::new(13);
-        for block in [Block::Air, Block::Dirt, Block::Stone, Block::Snow, Block::Water, Block::Flower, Block::Fire] {
+        for block in [Block::Air, Block::Dirt, Block::Stone, Block::Snow, Block::CastleStone, Block::Water, Block::Flower, Block::Fire] {
             for _ in 0..1000 {
                 assert!(drops_for(block, &mut rng).is_empty());
             }

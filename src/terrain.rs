@@ -347,6 +347,10 @@ pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -
         if top_at(lx, lz) > GROUND_TOP + TREE_LINE_RISE {
             continue;
         }
+        // The castle on a lake's island stands in a clearing.
+        if landmarks.near_castle(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz, CASTLE_TREE_MARGIN) {
+            continue;
+        }
         if placed
             .iter()
             .any(|&(px, pz)| (px - lx).abs() < 4 && (pz - lz).abs() < 4)
@@ -418,6 +422,24 @@ pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -
             let i = idx(lx, top + 1, lz);
             if blocks[i] == Block::Air {
                 blocks[i] = rock;
+            }
+        }
+    }
+
+    // The castles of the lakes that reach this chunk. The square each stands in is cleared first (plants, rocks), then
+    // the walls are put up. The island is flat ground, so the castle stands on the ground level of the world.
+    for lake in landmarks.lakes.iter().filter(|l| l.has_castle()) {
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                if !lake.near_castle(wx, wz, 0) {
+                    continue;
+                }
+                for dy in 0..CASTLE_HEIGHT {
+                    if let Some(block) = lake.castle_block(wx, wz, dy) {
+                        blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
+                    }
+                }
             }
         }
     }
@@ -1172,11 +1194,14 @@ mod tests {
         let mut marks = Landmarks::default();
         marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: 30, phase: 3, from: (0, 0) });
         let b = generate_chunk_with(9, 0, 0, &marks);
-        assert_eq!(b[idx(0, GROUND_TOP, 0)], Block::Water);
-        assert_eq!(b[idx(0, GROUND_TOP - LAKE_DEPTH, 0)], Block::Dirt);
-        assert_eq!(b[idx(0, GROUND_TOP + 1, 0)], Block::Air);
-        assert_eq!(ground_top_with(9, &marks, 0, 0), GROUND_TOP - LAKE_DEPTH);
-        assert!(is_wet_column(9, &marks, 0, 0));
+        // Water between the island and the shore, one block deep; the island in the middle is dry and level with the land.
+        assert_eq!(b[idx(16, GROUND_TOP, 0)], Block::Water);
+        assert_eq!(b[idx(16, GROUND_TOP - LAKE_DEPTH, 0)], Block::Dirt);
+        assert_eq!(b[idx(16, GROUND_TOP + 1, 0)], Block::Air);
+        assert_eq!(ground_top_with(9, &marks, 16, 0), GROUND_TOP - LAKE_DEPTH);
+        assert!(is_wet_column(9, &marks, 16, 0) && !is_wet_column(9, &marks, 0, 0));
+        assert_eq!(ground_top_with(9, &marks, 0, 0), GROUND_TOP);
+        assert_eq!(b[idx(0, GROUND_TOP, 0)], Block::Dirt);
 
         let mut marks = Landmarks::default();
         marks.mountains.push(crate::landmarks::Mountain { x: 10, z: 10, radius: 40, height: MOUNTAIN_HEIGHT, phase: 0 });
@@ -1188,5 +1213,57 @@ mod tests {
         assert_eq!(b[idx(10, summit + 1, 10)], Block::Air);
         assert_eq!(b[idx(10, 0, 10)], Block::Stone);
         assert!(!generate_chunk_with(9, 0, 0, &Landmarks::default()).contains(&Block::Snow), "no snow without a mountain");
+    }
+
+    #[test]
+    fn a_big_lake_has_a_castle_on_its_island_in_a_cleared_square() {
+        let mut marks = Landmarks::default();
+        marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 4, from: (0, 0) });
+        let y0 = GROUND_TOP + 1;
+        let b = generate_chunk_with(11, 0, 0, &marks);
+        assert_eq!(b[idx(CASTLE_WALL_HALF, y0, 0)], Block::CastleStone, "the east wall");
+        assert_eq!(b[idx(0, y0, CASTLE_WALL_HALF)], Block::Air, "the gate");
+        assert_eq!(b[idx(0, y0 + 4, CASTLE_WALL_HALF)], Block::CastleStone, "and the lintel over it");
+        assert_eq!(b[idx(0, y0, 3)], Block::Air, "the keep's door");
+        assert_eq!(b[idx(3, y0, 0)], Block::CastleStone, "the keep");
+        assert_eq!(b[idx(CASTLE_WALL_HALF, y0 + 9, CASTLE_WALL_HALF)], Block::CastleStone, "a tower");
+        assert_eq!(b[idx(0, 0, 0)], Block::Stone, "the island stands on the usual stone");
+        // The ground under and around it is dry dirt, and no tree or plant stands in the castle's square.
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                assert_eq!(b[idx(lx, GROUND_TOP, lz)], Block::Dirt, "island ground at {lx},{lz}");
+                if lx <= CASTLE_REACH && lz <= CASTLE_REACH {
+                    for y in y0 + CASTLE_HEIGHT..WORLD_HEIGHT {
+                        assert_eq!(b[idx(lx, y, lz)], Block::Air, "nothing above the castle at {lx},{lz},{y}");
+                    }
+                }
+                if lx <= CASTLE_REACH + CASTLE_TREE_MARGIN && lz <= CASTLE_REACH + CASTLE_TREE_MARGIN {
+                    assert!(!(0..WORLD_HEIGHT).any(|y| b[idx(lx, y, lz)] == Block::Wood), "a trunk near the castle at {lx},{lz}");
+                }
+            }
+        }
+        // The castle stone is part of the world's solid ground: it blocks, is opaque and cannot be broken.
+        assert!(Block::CastleStone.collides() && Block::CastleStone.opaque() && !Block::CastleStone.breakable());
+        // Without the lake there is no castle.
+        assert!(!generate_chunk_with(11, 0, 0, &Landmarks::default()).contains(&Block::CastleStone));
+    }
+
+    #[test]
+    fn the_island_has_trees_outside_the_castle_square_like_the_forest() {
+        let mut marks = Landmarks::default();
+        marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 4, from: (0, 0) });
+        let trunks: usize = (-2..2).flat_map(|cz| (-2..2).map(move |cx| (cx, cz))).map(|(cx, cz)| generate_chunk_with(11, cx, cz, &marks).iter().filter(|&&b| b == Block::Wood).count()).sum();
+        assert!(trunks > 10, "the island is wooded: {trunks} trunk blocks");
+    }
+
+    #[test]
+    fn a_tall_chunk_is_meshed_only_as_high_as_something_stands() {
+        let b = generate_chunk_with(11, 5, 5, &Landmarks::default());
+        let h = crate::chunk::used_height(&b);
+        assert!(h > GROUND_TOP && h < 30, "{h}");
+        assert_eq!(crate::chunk::used_height(&vec![Block::Air; b.len()]), 0);
+        let mut marks = Landmarks::default();
+        marks.mountains.push(crate::landmarks::Mountain { x: 10, z: 10, radius: 40, height: MOUNTAIN_HEIGHT, phase: 0 });
+        assert_eq!(crate::chunk::used_height(&generate_chunk_with(9, 0, 0, &marks)), GROUND_TOP + MOUNTAIN_HEIGHT + 1);
     }
 }

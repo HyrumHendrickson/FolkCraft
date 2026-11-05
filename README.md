@@ -60,7 +60,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 
 - World: `y = 0` bedrock stone (unbreakable), `y = 1..=5` dirt (more on hills, less in valleys and river beds),
   a forest of oaks and pines above. **Dirt cannot be broken**: the land stays as generated. Tree trunks are thin (0.7 block wide, `TRUNK_INSET`); leaves next to a trunk reach in
-  to meet it. `WORLD_HEIGHT` is 24 so the tallest pine on the tallest hill still fits.
+  to meet it. `WORLD_HEIGHT` is 180 so the 170-block mountain fits. The mesher only scans a chunk up to its highest block (`chunk::used_height`), and view culling treats a chunk as a column (`culling::chunk_visible`).
 - **Stones and pebbles** lie about on the ground everywhere (forest floor, clearings, hills; hills are
   twice as rocky): about 2% of columns hold a pebble and 0.8% a stone (`GROUND_PEBBLE_PER_MILLE`,
   `GROUND_STONE_PER_MILLE`, `HILL_ROCK_FACTOR`). They are ordinary `PlacedPebble`/`PlacedStone` blocks in the
@@ -166,7 +166,9 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     chase deer or quail. At most `MAX_BEAR` (1) lives nearby; spawns are weighted by `SPAWN_WEIGHT_*` (a bear's weight is 4, about a quarter of its old 15).
   - A **will-o-whisp** appears only while the world is night. It floats about three blocks above the terrain,
     flees at `WILL_O_WHISP_FLEE_SPEED` when the player comes within `WILL_O_WHISP_FLEE_DISTANCE`, and has no
-    attacks, drops or weapon interaction yet. At most `MAX_WILL_O_WHISP` live nearby.
+    attacks, drops or weapon interaction yet. At most `MAX_WILL_O_WHISP` (12) live nearby and its spawn weight is `SPAWN_WEIGHT_WILL_O_WHISP` (100), so at night
+    they are common. They are drawn translucent (`animal_draw::will_o_whisp_parts`: halo, flickering body and heart, eyes, a fading
+    tail) by `draw_ghosts`, after the water, since `draw_box` honours the colour's alpha.
   - Animals hop up one-block steps and turn aside from taller obstacles. They spawn out of sight
     (`ANIMAL_SPAWN_MIN_DISTANCE`..`MAX`) up to each `MAX_*` limit, are simulated within
     `ANIMAL_UPDATE_DISTANCE`, and vanish beyond `ANIMAL_DESPAWN_DISTANCE`. They are not saved.
@@ -240,6 +242,10 @@ meshing -> player physics -> raycast -> `handle_attacking` (axe swing, bow shot)
 target outline) -> `render_hud`.
 
 ## Conventions and invariants
+
+- **Dropped items are capped** at `MAX_DROPPED_ITEMS` (100) by `Game::limit_items`, called from `update_items`. The oldest go first, judged by
+  `DroppedItem::age` (not by list position: `collect_nearby` uses `swap_remove`, so the list is not in order of age). Items of equal age,
+  such as those just loaded from a save, go in list order.
 
 - **Logic vs. UI.** Rules live in `Block`, `ItemKind`, `Inventory`, `Recipe`, `World` and `Game`
   methods, each with unit tests beside the code (`#[cfg(test)] mod tests`). UI code is immediate-mode:
@@ -328,12 +334,16 @@ applied to them again as usual. Every number is in the "Landmarks" section of `c
 - **Lake.** `Treks::step` is called every frame (`Game::update_landmarks`). Wading (`Game::player_in_water`: water in the
   feet cell or the two below, so a jump does not count) until the player is `LAKE_TREK_CHUNKS` (10) chunks from where they
   entered, along either axis, makes a `Lake` ahead of them, beyond `GEN_RADIUS` so it does not pop in. It is a wavy basin of
-  radius about 34, one block deep (`LAKE_DEPTH`), plus a straight channel from the player's column so the water is continuous.
+  radius about 130 (`LAKE_RADIUS`), one block deep (`LAKE_DEPTH`), plus a straight channel from the player's column so the water is
+  continuous. In the middle is a dry island (`LAKE_ISLAND_SHARE` of the radius, so about 39 blocks) as high as the land, with the
+  usual forest, and on it a castle of `Block::CastleStone` (`Lake::castle_block`, shape in `castle_is_solid`: an outer wall with a gate in
+  the south side, four corner towers, a keep with a door and roof, all with battlements). The castle square is cleared of
+  plants and rocks and kept free of trees (`CASTLE_TREE_MARGIN`). A lake with too small an island has no castle (`Lake::has_castle`).
   Hills fade out beside it (`Landmarks::relief_scale`), so no cliff is left.
 - **Mountain.** Holding a Compass, `Treks` adds the distance walked north (`COMPASS_NORTH_BEARING`, towards smaller z); putting it
-  away resets the count, walking south subtracts. At `COMPASS_TREK_CHUNKS` (10) a `Mountain` of `MOUNTAIN_HEIGHT` 17 appears
+  away resets the count, walking south subtracts. At `COMPASS_TREK_CHUNKS` (10) a `Mountain` of `MOUNTAIN_HEIGHT` 170 (ten times the first version) and `MOUNTAIN_RADIUS` 400 appears
   ahead. Its slope never exceeds one block per column (a test checks this), so it can be climbed by jumping. From
-  `SNOW_LINE_RISE` up the ground is `Block::Snow`: solid, opaque and unbreakable. No trees grow above `TREE_LINE_RISE`.
+  `SNOW_LINE_RISE` up the ground is `Block::Snow`: solid, opaque and unbreakable. No trees grow above `TREE_LINE_RISE`, and the exposed ground above it is drawn as grey rock instead of grass (`mesh.rs`).
   A mountain stands over any river or lake beneath it.
 - **Rainbow.** With a Peep Stone in hand and `RainbowState::Unseen`, `Game::try_show_rainbow` places a `Block::GoldPile`
   26 to 36 blocks away on dry bare ground (saved like any placed block) and sets `RainbowState::Active`. The arc is drawn
@@ -372,7 +382,7 @@ Old item ids `copper_ore` and `tin_ore` load as `stone` and `pebble` (what smelt
 Item ids come from `ItemKind::id()`: `stick`, `pebble`, `stone`, `log`, `stone_axe`, `grass`, `berries`,
 `twine`, `bow_drill`, `charcoal`, `plank`, `feather`, `bow`, `arrow`, `venison`, `poultry`, `cooked_venison`,
 `cooked_poultry`, `leather`, `bear_meat`, `cooked_bear_meat`, `bear_pelt`, `bellows`, `ash`, `copper`, `tin`, `iron`, `clay`, `iron_ore`, `leather_cord`, `bronze`, `bronze_mallet`, `clay_forge`, `rabbit_meat`, `cooked_rabbit`, `moose_meat`, `cooked_moose`, `rabbit_foot`, `peep_stone`, `holly_rod`, `copper_axe`, `bronze_axe`, `iron_axe`, `tin_pot`, `clay_jar`, `water_jar`, `venison_stew`, `poultry_stew`, `bear_stew`, `rabbit_stew`, `moose_stew`, `red_berry_stew`, `purple_berry_stew`, `sling`, `loadstone`, `compass`. Block ids come from `Block::id()`: `placed_log`,
-`placed_pebble`, `placed_stone`, `fire`, `charcoal`, `planks`, `embers`, `ash`, `clay_forge`, `forge_charged`, `forge_lit`, `gold_pile`. `Snow` is never saved (it is generated). Animals, arrows and treks in progress are not saved. The selected hotbar slot is not saved (it resets to slot 1 on load).
+`placed_pebble`, `placed_stone`, `fire`, `charcoal`, `planks`, `embers`, `ash`, `clay_forge`, `forge_charged`, `forge_lit`, `gold_pile`. `Snow` and `CastleStone` are never saved (they are generated). Animals, arrows and treks in progress are not saved. The selected hotbar slot is not saved (it resets to slot 1 on load).
 
 ## How to extend
 

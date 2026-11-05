@@ -4,7 +4,7 @@ use macroquad::prelude::*;
 
 use crate::app::{App, Mode};
 use crate::config::*;
-use crate::animal_draw::{draw_animals, draw_arrows};
+use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
 use crate::effects::{draw_flames, draw_meat, draw_pots, draw_rainbow};
@@ -215,6 +215,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
             draw_mesh(mesh);
         }
     }
+    draw_ghosts(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
     // The rainbow shows only to a peep stone in the hand, and over everything, water included.
     if let Some(rainbow) = game.visible_rainbow() {
         draw_rainbow(&game.world, &rainbow, get_time() as f32);

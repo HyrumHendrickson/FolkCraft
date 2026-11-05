@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn a_spent_rainbow_stays_spent_and_damaged_landmark_lines_are_ignored() {
-        let text = "W\n1\n0 6 0 0 0\nrainbow spent\nrainbow 1 2 3 4 5\nlake 1 2\nlake 0 0 0 0 0 0\nlake 0 0 9999 0 0 0\nmountain 0 0 40 99 0\nmountain a b c d e\nrainbow x\n";
+        let text = "W\n1\n0 6 0 0 0\nrainbow spent\nrainbow 1 2 3 4 5\nlake 1 2\nlake 0 0 0 0 0 0\nlake 0 0 9999 0 0 0\nmountain 0 0 40 9999 0\nmountain a b c d e\nrainbow x\n";
         let data = parse_save(text);
         assert_eq!(data.landmarks.rainbow, RainbowState::Spent);
         assert!(data.landmarks.lakes.is_empty() && data.landmarks.mountains.is_empty());

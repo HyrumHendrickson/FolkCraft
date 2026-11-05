@@ -3,7 +3,7 @@
 use macroquad::prelude::*;
 
 use crate::block::Block;
-use crate::chunk::idx;
+use crate::chunk::{idx, used_height};
 use crate::config::*;
 use crate::rng::hash3;
 use crate::terrain::berry_bush_is_purple;
@@ -73,7 +73,7 @@ impl World {
     pub fn build_meshes(&self, cx: i32, cz: i32) -> Vec<Mesh> {
         let chunk = &self.chunks[&(cx, cz)];
         let mut out = MeshBuilder::new();
-        for y in 0..WORLD_HEIGHT {
+        for y in 0..used_height(&chunk.blocks) {
             for lz in 0..CHUNK_SIZE {
                 for lx in 0..CHUNK_SIZE {
                     let block = chunk.blocks[idx(lx, y, lz)];
@@ -97,7 +97,7 @@ impl World {
     pub fn build_water_meshes(&self, cx: i32, cz: i32) -> Vec<Mesh> {
         let chunk = &self.chunks[&(cx, cz)];
         let mut out = MeshBuilder::new();
-        for y in 0..WORLD_HEIGHT {
+        for y in 0..used_height(&chunk.blocks) {
             for lz in 0..CHUNK_SIZE {
                 for lx in 0..CHUNK_SIZE {
                     if chunk.blocks[idx(lx, y, lz)].is_wet() {
@@ -165,6 +165,8 @@ impl World {
                 // (Dirt is never covered by anything but air, plants, items and water, so its exposed top is
                 // always the top of the ground.)
                 Block::Dirt if fi == 2 && self.block_at(wx, y + 1, wz).is_wet() => (r, g, b) = (0.40, 0.31, 0.22),
+                // Above the tree line the mountain is bare rock, not grass.
+                Block::Dirt if fi == 2 && y > GROUND_TOP + TREE_LINE_RISE => (r, g, b) = (0.46, 0.43, 0.40),
                 Block::Dirt if fi == 2 => (r, g, b) = (0.28, 0.58, 0.20),
                 Block::Leaves if (h >> 20) % 100 < 30 => (r, g, b) = (0.24, 0.62, 0.20),
                 Block::Needles if (h >> 20) % 100 < 30 => (r, g, b) = (0.12, 0.44, 0.27),

@@ -54,6 +54,8 @@ pub enum Block {
     Snow,
     /// The pile of gold at the end of the rainbow. Taking it by hand drops gold and ends the rainbow for good.
     GoldPile,
+    /// The grey stone of the castle on a lake's island: a solid cube that cannot be broken or made.
+    CastleStone,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -242,7 +244,7 @@ impl Block {
             Block::Boulder => BREAK_SECONDS_BOULDER,
             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
-            Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::Water | Block::Fire | Block::Embers | Block::ForgeLit => 0.0,
+            Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Water | Block::Fire | Block::Embers | Block::ForgeLit => 0.0,
         }
     }
 
@@ -271,7 +273,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::Leaves | Block::Needles | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Leaves | Block::Needles | Block::Planks)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -282,6 +284,7 @@ impl Block {
             Block::Dirt
                 | Block::Stone
                 | Block::Snow
+                | Block::CastleStone
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -303,7 +306,7 @@ impl Block {
     /// Solid, built-or-natural cubes that a plank can be attached to from the side or below,
     /// which is what lets a ceiling reach out from the top of a wall. Foliage does not count.
     pub fn anchors_planks(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::Planks)
     }
 
     /// The boxes this block is drawn from. Empty for air and for plain full cubes.
@@ -390,6 +393,7 @@ impl Block {
             Block::Dirt => (0.50, 0.34, 0.20),
             Block::Stone => (0.50, 0.50, 0.53),
             Block::Snow => (0.94, 0.96, 0.99),
+            Block::CastleStone => (0.62, 0.60, 0.57),
             Block::Leaves => (0.16, 0.52, 0.17),
             Block::Needles => (0.09, 0.36, 0.22),
             Block::Planks => (0.72, 0.54, 0.31),
@@ -402,7 +406,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 27] = [
+    const ALL: [Block; 28] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -430,6 +434,7 @@ mod tests {
         Block::ForgeLit,
         Block::Snow,
         Block::GoldPile,
+        Block::CastleStone,
     ];
 
     #[test]

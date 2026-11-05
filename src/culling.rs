@@ -5,11 +5,13 @@ use macroquad::prelude::*;
 use crate::config::*;
 use crate::world::{in_render_range, World};
 
-/// Conservative sphere-vs-view-cone test for a chunk.
+/// Conservative sphere-vs-view-cone test for a chunk. A chunk is a tall column (the world is `WORLD_HEIGHT` high,
+/// for the mountain), so the sphere is centred on the point of the column level with the eye, the nearest part of
+/// it, and a column is never dropped for being far above or below.
 pub fn chunk_visible(eye: Vec3, dir: Vec3, half_fov: f32, cx: i32, cz: i32) -> bool {
     let centre = vec3(
         (cx * CHUNK_SIZE + CHUNK_SIZE / 2) as f32,
-        WORLD_HEIGHT as f32 / 2.0,
+        eye.y.clamp(0.0, WORLD_HEIGHT as f32),
         (cz * CHUNK_SIZE + CHUNK_SIZE / 2) as f32,
     );
     let radius = 19.0;

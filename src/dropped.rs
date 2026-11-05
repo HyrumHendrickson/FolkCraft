@@ -210,7 +210,7 @@ pub fn collect_nearby(items: &mut Vec<DroppedItem>, inventory: &mut Inventory, p
     picked
 }
 
-/// Draw a rotated, flat-shaded box. Call while the 3D camera is active.
+/// Draw a rotated, flat-shaded box (translucent if the colour's alpha is below 1). Call while the 3D camera is active.
 pub fn draw_box(centre: Vec3, half: Vec3, yaw: f32, color: Color) {
     let (s, c) = yaw.sin_cos();
     let mut vertices = Vec::with_capacity(24);
@@ -218,7 +218,7 @@ pub fn draw_box(centre: Vec3, half: Vec3, yaw: f32, color: Color) {
     for face in FACES.iter() {
         let base = vertices.len() as u16;
         let shade = face.shade;
-        let col = Color::new(color.r * shade, color.g * shade, color.b * shade, 1.0);
+        let col = Color::new(color.r * shade, color.g * shade, color.b * shade, color.a);
         for &(ox, oy, oz) in &face.corners {
             let (lx, ly, lz) = ((ox - 0.5) * 2.0 * half.x, (oy - 0.5) * 2.0 * half.y, (oz - 0.5) * 2.0 * half.z);
             let (rx, rz) = (lx * c - lz * s, lx * s + lz * c);

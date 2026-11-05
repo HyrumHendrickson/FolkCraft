@@ -1000,7 +1000,26 @@ impl Game {
         for kind in collect_nearby(&mut self.items, &mut self.inventory, self.player.pos) {
             self.toasts.push(format!("+1 {}", kind.name()));
         }
+        self.limit_items();
         self.toasts.update(dt);
+    }
+
+    /// Keep at most `MAX_DROPPED_ITEMS` items on the ground: when there are more, the oldest vanish first, judged by
+    /// `DroppedItem::age` (the list itself is not in order of age, because picking an item up moves the last one into its
+    /// place). Items of equal age, such as those just loaded from a save, go in list order.
+    pub fn limit_items(&mut self) {
+        let excess = self.items.len().saturating_sub(MAX_DROPPED_ITEMS);
+        if excess == 0 {
+            return;
+        }
+        let mut by_age: Vec<usize> = (0..self.items.len()).collect();
+        by_age.sort_by(|&a, &b| self.items[b].age.partial_cmp(&self.items[a].age).unwrap_or(std::cmp::Ordering::Equal));
+        let doomed: std::collections::HashSet<usize> = by_age.into_iter().take(excess).collect();
+        let mut index = 0;
+        self.items.retain(|_| {
+            index += 1;
+            !doomed.contains(&(index - 1))
+        });
     }
 }
 
@@ -3161,16 +3180,25 @@ mod landmark_tests {
         assert_eq!(g.world.landmarks.lakes.len(), 1);
         let lake = g.world.landmarks.lakes[0];
         assert!(lake.x as f32 - at.0 >= LAKE_DISTANCE as f32, "beyond the generated land");
-        load_column(&mut g, lake.x, lake.z);
+        // A point in the water between the island and the shore.
+        let (wx, wz) = (lake.x + (lake.radius as f32 * 0.55) as i32, lake.z);
+        load_column(&mut g, wx, wz);
         // The surface of the lake lies at the level of the river: a bed one block down, water above it.
-        assert_eq!(g.world.block_at(lake.x, GROUND_TOP, lake.z), Block::Water);
-        assert_eq!(g.world.block_at(lake.x, GROUND_TOP - LAKE_DEPTH, lake.z), Block::Dirt);
-        assert_eq!(g.world.block_at(lake.x, GROUND_TOP + 1, lake.z), Block::Air);
-        assert!(g.world.is_wet_column(lake.x, lake.z));
+        assert_eq!(g.world.block_at(wx, GROUND_TOP, wz), Block::Water);
+        assert_eq!(g.world.block_at(wx, GROUND_TOP - LAKE_DEPTH, wz), Block::Dirt);
+        assert_eq!(g.world.block_at(wx, GROUND_TOP + 1, wz), Block::Air);
+        assert!(g.world.is_wet_column(wx, wz));
+        // In the middle is an island of dry ground, level with the land, with a castle on it.
+        load_column(&mut g, lake.x + 30, lake.z);
+        load_column(&mut g, lake.x + CASTLE_WALL_HALF, lake.z);
+        load_column(&mut g, lake.x, lake.z);
+        assert!(!g.world.is_wet_column(lake.x, lake.z) && !g.world.is_wet_column(lake.x + 30, lake.z));
+        assert_eq!(g.world.ground_top(lake.x + 30, lake.z), GROUND_TOP, "the island is as high as the land");
+        assert_eq!(g.world.block_at(lake.x + CASTLE_WALL_HALF, GROUND_TOP + 1, lake.z), Block::CastleStone);
         // The channel leaves the column the player stood in and runs to the lake, all of it water.
         let (px, pz) = (at.0.floor() as i32, at.1.floor() as i32);
         assert!(g.world.is_wet_column(px, pz));
-        let mid = ((px + lake.x) / 2, (pz + lake.z) / 2);
+        let mid = ((px + lake.x - lake.radius) / 2, (pz + lake.z) / 2);
         assert!(g.world.is_wet_column(mid.0, mid.1), "the middle of the channel is wet");
         assert!(g.toasts.contains("great lake"));
         // The chunk the player stands in was generated again, and they still stand on something.
@@ -3184,9 +3212,10 @@ mod landmark_tests {
         let at = (g.player.pos.x, g.player.pos.z);
         g.bring_in(TrekEvent::Lake { at, dir: (0.0, 1.0) });
         let lake = g.world.landmarks.lakes[0];
-        load_column(&mut g, lake.x, lake.z);
-        assert!(!g.spawn_animal(AnimalKind::Deer, lake.x, lake.z), "no deer on the water");
-        let (cx, cz) = World::chunk_of(lake.x, lake.z);
+        let (wx, wz) = (lake.x + (lake.radius as f32 * 0.55) as i32, lake.z);
+        load_column(&mut g, wx, wz);
+        assert!(!g.spawn_animal(AnimalKind::Deer, wx, wz), "no deer on the water");
+        let (cx, cz) = World::chunk_of(wx, wz);
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
@@ -3352,4 +3381,85 @@ mod landmark_tests {
         let ratio = share(SPAWN_WEIGHT_BEAR) / share(15);
         assert!((0.2..=0.3).contains(&ratio), "about a quarter of the old chance to be picked, got {ratio:.2}");
     }
+
+    #[test]
+    fn above_a_hundred_items_on_the_ground_the_oldest_vanish_first() {
+        let mut g = game(11);
+        // 130 items far from the player. Item n is n tenths of a second old, and lies at x = 40 + n / 100, so which
+        // ones survive can be told from where they are. They are shuffled in the list, as picking things up shuffles it.
+        let mut order: Vec<usize> = (0..130).collect();
+        order.reverse();
+        order.swap(0, 77);
+        order.swap(5, 120);
+        for &n in &order {
+            let mut item = DroppedItem::at_rest(ItemKind::Stick, vec3(40.0 + n as f32 * 0.01, 6.05, 40.0));
+            item.age = 100.0 - n as f32 * 0.1; // n = 0 is the oldest
+            g.items.push(item);
+        }
+        assert_eq!(g.items.len(), 130);
+        g.update_items(0.01);
+        assert_eq!(g.items.len(), MAX_DROPPED_ITEMS, "exactly a hundred are left");
+        let mut left: Vec<i32> = g.items.iter().map(|i| ((i.pos.x - 40.0) * 100.0).round() as i32).collect();
+        left.sort_unstable();
+        assert_eq!(left, (30..130).collect::<Vec<i32>>(), "the thirty oldest went, whatever their place in the list");
+        // At or below the limit nothing goes.
+        g.limit_items();
+        assert_eq!(g.items.len(), MAX_DROPPED_ITEMS);
+        g.items.truncate(40);
+        g.limit_items();
+        assert_eq!(g.items.len(), 40);
+    }
+
+    #[test]
+    fn picking_up_an_item_does_not_make_a_newer_one_look_old() {
+        let mut g = game(14);
+        for n in 0..MAX_DROPPED_ITEMS {
+            g.items.push(DroppedItem::at_rest(ItemKind::Stick, vec3(60.0 + n as f32 * 0.01, 6.05, 60.0)));
+        }
+        g.update_items(0.5);
+        // The player picks up the very first item: the last one moves into its place in the list.
+        g.player.pos = vec3(60.0, 6.01, 60.0);
+        g.update_items(0.01);
+        assert!(g.items.len() < MAX_DROPPED_ITEMS);
+        // A fresh item arrives, and enough more to pass the limit by one.
+        while g.items.len() <= MAX_DROPPED_ITEMS {
+            g.items.push(DroppedItem::at_rest(ItemKind::Pebble, vec3(90.0, 6.05, 90.0)));
+        }
+        let newest = g.items.last().map(|i| i.pos);
+        g.items.last_mut().unwrap().age = 0.0;
+        g.player.pos = vec3(0.0, 6.01, 0.0);
+        g.limit_items();
+        assert_eq!(g.items.len(), MAX_DROPPED_ITEMS);
+        assert_eq!(g.items.last().map(|i| i.pos), newest, "the newest item stays");
+    }
+
+    #[test]
+    fn items_fallen_while_mining_also_count_towards_the_limit() {
+        let mut g = game(12);
+        for _ in 0..MAX_DROPPED_ITEMS + 25 {
+            g.items.push(DroppedItem::spawn_at(ItemKind::Pebble, vec3(60.0, 8.0, 60.0), &mut Rng::new(3)));
+        }
+        g.update_items(0.016);
+        assert_eq!(g.items.len(), MAX_DROPPED_ITEMS);
+    }
+
+    #[test]
+    fn will_o_whisps_come_a_lot_more_often_than_they_did() {
+        assert!(MAX_WILL_O_WHISP >= 3 * 4 && SPAWN_WEIGHT_WILL_O_WHISP >= 5 * 20, "at least 3x as many and 5x the weight they had");
+        // At night, with nothing else at its limit, a whisp is the most likely thing to appear.
+        let day: u64 = SPAWN_WEIGHT_DEER + SPAWN_WEIGHT_QUAIL + SPAWN_WEIGHT_BEAR + SPAWN_WEIGHT_RABBIT + SPAWN_WEIGHT_MOOSE;
+        assert!(SPAWN_WEIGHT_WILL_O_WHISP as f64 / (day + SPAWN_WEIGHT_WILL_O_WHISP) as f64 > 0.3);
+        let mut g = game(13);
+        g.world.set_night(true);
+        g.player.pos = vec3(10.0, 6.01, 10.0);
+        let mut whisps = 0;
+        for _ in 0..200 {
+            g.animals.clear();
+            g.spawn_timer = ANIMAL_SPAWN_INTERVAL;
+            g.update_animals(0.0);
+            whisps += g.animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp).count();
+        }
+        assert!(whisps > 20, "plenty of whisps over 200 spawn attempts at night, got {whisps}");
+    }
 }
+

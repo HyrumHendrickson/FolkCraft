@@ -152,15 +152,37 @@ fn bear_parts(a: &Animal) -> Vec<Part> {
     parts
 }
 
-fn will_o_whisp_parts(a: &Animal, time: f32) -> Vec<Part> {
-    let pulse = 0.9 + 0.1 * (time * 4.0 + a.phase).sin();
-    let glow = col(0.42 * pulse, 0.85 * pulse, 0.96 * pulse);
-    let flame = col(0.70 * pulse, 0.96 * pulse, 1.0);
-    vec![
-        ((0.0, 0.32, 0.0), (WILL_O_WHISP_HALF_WIDTH, 0.24, WILL_O_WHISP_HALF_WIDTH), glow),
-        ((0.0, 0.02, 0.0), (0.10, 0.18, 0.10), flame),
-        ((0.0, -0.20, 0.0), (0.06, 0.12, 0.06), glow),
-    ]
+/// A colour with transparency, for the ghostly parts of a will-o-whisp.
+fn ghost(r: f32, g: f32, b: f32, alpha: f32) -> Color {
+    Color::new(r, g, b, alpha)
+}
+
+/// The parts of a will-o-whisp, all of them translucent: a faint pale halo, a brighter core that flickers, two
+/// dark hollows for eyes on the side it faces, and a tail of ever smaller, ever fainter wisps trailing down and
+/// behind it, swaying as it drifts.
+pub fn will_o_whisp_parts(a: &Animal, time: f32) -> Vec<Part> {
+    let flicker = 0.5 + 0.5 * (time * 5.0 + a.phase).sin();
+    let slow = (time * 1.6 + a.phase * 1.3).sin();
+    let w = WILL_O_WHISP_HALF_WIDTH;
+    let mut parts: Vec<Part> = vec![
+        // The halo.
+        ((0.0, 0.32, 0.0), (w * 1.9, 0.40, w * 1.9), ghost(0.55, 0.85, 1.0, 0.10 + 0.05 * flicker)),
+        // The body.
+        ((0.0, 0.32, 0.0), (w, 0.24, w), ghost(0.78, 0.95, 1.0, 0.34 + 0.16 * flicker)),
+        // The bright heart.
+        ((0.0, 0.34, 0.0), (w * 0.5, 0.12, w * 0.5), ghost(0.95, 1.0, 1.0, 0.55 + 0.25 * flicker)),
+        // Eyes: two dark hollows on the front.
+        ((w * 0.95, 0.40, 0.09), (0.02, 0.04, 0.03), ghost(0.05, 0.10, 0.20, 0.75)),
+        ((w * 0.95, 0.40, -0.09), (0.02, 0.04, 0.03), ghost(0.05, 0.10, 0.20, 0.75)),
+    ];
+    // The tail.
+    for i in 1..=4 {
+        let t = i as f32;
+        let sway = 0.10 * t * (slow + t * 0.7).sin();
+        let size = w * (1.0 - 0.17 * t);
+        parts.push(((-0.07 * t, 0.32 - 0.17 * t, sway), (size, 0.10, size), ghost(0.70, 0.92, 1.0, (0.26 - 0.055 * t).max(0.03))));
+    }
+    parts
 }
 
 /// Draw every animal within the render range. Call while the 3D camera is active.
@@ -170,16 +192,31 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
             continue;
         }
         let parts = match a.kind {
+            AnimalKind::WillOWhisp => continue, // drawn by `draw_ghosts`, over the water
             AnimalKind::Deer => deer_parts(a),
             AnimalKind::Quail => quail_parts(a, time),
             AnimalKind::Bear => bear_parts(a),
             AnimalKind::Rabbit => rabbit_parts(a),
             AnimalKind::Moose => moose_parts(a),
-            AnimalKind::WillOWhisp => will_o_whisp_parts(a, time),
         };
         let (s, c) = a.heading.sin_cos();
         for ((fx, fy, fz), (hx, hy, hz), color) in parts {
             // Turn the model to face the heading: local x runs along it.
+            let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
+            draw_box(a.pos + offset, vec3(hx, hy, hz), a.heading, color);
+        }
+    }
+}
+
+/// Draw the will-o-whisps in range, translucent. They go on after the water, with the other translucent things, so
+/// that the water and the world behind them show through. Call while the 3D camera is active.
+pub fn draw_ghosts(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
+    for a in animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp) {
+        if !in_render_range(player_chunk, World::chunk_of_pos(a.pos)) {
+            continue;
+        }
+        let (s, c) = a.heading.sin_cos();
+        for ((fx, fy, fz), (hx, hy, hz), color) in will_o_whisp_parts(a, time) {
             let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
             draw_box(a.pos + offset, vec3(hx, hy, hz), a.heading, color);
         }
@@ -192,5 +229,39 @@ pub fn draw_arrows(arrows: &[Arrow]) {
         let dir = arrow.vel.normalize_or_zero();
         draw_line_3d(arrow.pos - dir * 0.7, arrow.pos, col(0.62, 0.50, 0.30));
         draw_cube(arrow.pos, Vec3::splat(0.07), None, col(0.45, 0.45, 0.50));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rng::Rng;
+
+    fn whisp() -> Animal {
+        Animal::new(AnimalKind::WillOWhisp, vec3(5.5, 9.0, 5.5), &mut Rng::new(1))
+    }
+
+    #[test]
+    fn a_will_o_whisp_is_see_through_with_a_halo_a_tail_and_eyes() {
+        let a = whisp();
+        for time in [0.0, 0.7, 2.3, 9.1] {
+            let parts = will_o_whisp_parts(&a, time);
+            assert!(parts.len() >= 9, "halo, body, heart, two eyes and a tail: {} parts", parts.len());
+            assert!(parts.iter().all(|&(_, _, c)| c.a < 0.9), "every part is translucent at {time}");
+            assert!(parts.iter().filter(|&&(_, _, c)| c.a <= 0.2).count() >= 4, "a faint halo and a fading tail");
+            assert!(parts.iter().any(|&(_, _, c)| c.a >= 0.55), "a brighter heart");
+            // The tail fades: each wisp is fainter and lower than the one before.
+            let tail: Vec<_> = parts.iter().skip(5).collect();
+            assert!(tail.windows(2).all(|w| w[1].2.a < w[0].2.a && w[1].0 .1 < w[0].0 .1), "the tail thins out and sinks");
+        }
+    }
+
+    #[test]
+    fn a_will_o_whisp_flickers_over_time() {
+        let a = whisp();
+        let alpha = |t: f32| will_o_whisp_parts(&a, t)[1].2.a;
+        let samples: Vec<f32> = (0..20).map(|i| alpha(i as f32 * 0.13)).collect();
+        let (lo, hi) = (samples.iter().cloned().fold(f32::MAX, f32::min), samples.iter().cloned().fold(f32::MIN, f32::max));
+        assert!(hi - lo > 0.05, "the glow flickers ({lo}..{hi})");
     }
 }

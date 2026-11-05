@@ -4,7 +4,8 @@
 //! added while the game runs and saved with the world, and the terrain generator consults them.
 //!
 //! - A **lake** appears when the player has walked ten chunks through a river without leaving the water. It is a
-//!   wavy round basin, one block deep like a river, joined to the river by a straight channel.
+//!   large wavy basin, one block deep like a river, joined to the river by a straight channel. In the middle is a
+//!   large island of dry land, and on the island stands a small castle.
 //! - A **mountain** appears when the player has followed a held compass north for ten chunks. It is tall, can be
 //!   climbed one block at a time, and is capped with snow.
 //! - A **rainbow** appears once, when the player holds a peep stone. It ends in a pile of gold; once the gold
@@ -13,13 +14,14 @@
 //! This file holds the data and the rules (where the water and the slopes are, when a trek is complete). The
 //! world, the save file and the game only call into it, and none of it needs a window to be tested.
 
+use crate::block::Block;
 use crate::config::*;
 use crate::world::Pos;
 
 /// Tallest a mountain can be: its summit and the cell above it must lie inside the world.
 pub const MOUNTAIN_MAX_HEIGHT: i32 = WORLD_HEIGHT - 2 - GROUND_TOP;
 /// Largest radius a saved landmark may have, so a damaged save cannot ask for an absurd amount of work.
-pub const MAX_LANDMARK_RADIUS: i32 = 200;
+pub const MAX_LANDMARK_RADIUS: i32 = 600;
 
 fn smoothstep(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -46,11 +48,11 @@ fn distance_to_segment(px: f32, pz: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
     ((px - (a.0 + t * dx)).powi(2) + (pz - (a.1 + t * dz)).powi(2)).sqrt()
 }
 
-/// A lake: a wavy round basin of shallow water and, running out of it, the channel that joins it to the river
-/// the player walked up.
+/// A lake: a large wavy basin of shallow water with a large island in the middle (and a castle on the island) and,
+/// running out of it, the channel that joins it to the river the player walked up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lake {
-    /// Centre of the basin, in world coordinates.
+    /// Centre of the basin and of the island, in world coordinates.
     pub x: i32,
     pub z: i32,
     pub radius: i32,
@@ -74,19 +76,45 @@ impl Lake {
         }
     }
 
-    /// Blocks from the column (wx, wz) to the edge of the water: negative inside the basin or the channel.
-    pub fn edge_distance(&self, wx: i32, wz: i32) -> f32 {
+    /// The nominal radius of the island.
+    pub fn island_radius(&self) -> f32 {
+        self.radius as f32 * LAKE_ISLAND_SHARE
+    }
+
+    /// Whether the island is big enough, even at its narrowest, to hold the castle with room to spare. Small
+    /// lakes (there are none in play, but a saved or hand-made one can be small) have an island and no castle.
+    pub fn has_castle(&self) -> bool {
+        self.island_radius() * 0.75 >= CASTLE_REACH as f32 * std::f32::consts::SQRT_2 + 2.0
+    }
+
+    /// Blocks from the column (wx, wz) to the outer shore of the lake, island included: negative inside it
+    /// (so it is flat all the way across, and the hills fade out round it), and also negative inside the channel.
+    pub fn outer_distance(&self, wx: i32, wz: i32) -> f32 {
         let (px, pz) = (wx as f32 + 0.5, wz as f32 + 0.5);
         let (cx, cz) = (self.x as f32 + 0.5, self.z as f32 + 0.5);
         let (dx, dz) = (px - cx, pz - cz);
-        let basin = (dx * dx + dz * dz).sqrt() - self.radius as f32 * lobes(self.phase, dz.atan2(dx));
+        let dist = (dx * dx + dz * dz).sqrt();
         let channel = distance_to_segment(px, pz, (self.from.0 as f32 + 0.5, self.from.1 as f32 + 0.5), (cx, cz)) - LAKE_CHANNEL_HALF_WIDTH;
+        // Far beyond the shore (further than the hills fade over) the exact shape does not matter, and the angle is
+        // not worked out. The cut-off is past the fade, so the fade itself is exact and continuous.
+        let basin = if dist > farthest_reach(self.radius) + LANDMARK_BLEND as f32 { dist - farthest_reach(self.radius) } else { dist - self.radius as f32 * lobes(self.phase, dz.atan2(dx)) };
         basin.min(channel)
     }
 
-    /// Whether the column (wx, wz) is under the lake.
+    /// Blocks from the column (wx, wz) to the shore of the island: negative on the island.
+    fn island_distance(&self, wx: i32, wz: i32) -> f32 {
+        let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
+        let reach = self.island_radius();
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist > reach * 1.25 {
+            return dist - reach * 1.25;
+        }
+        dist - reach * lobes(self.phase + 31, dz.atan2(dx))
+    }
+
+    /// Whether the column (wx, wz) is under the lake: inside its shore and outside its island.
     pub fn contains(&self, wx: i32, wz: i32) -> bool {
-        self.edge_distance(wx, wz) <= 0.0
+        self.outer_distance(wx, wz) <= 0.0 && self.island_distance(wx, wz) > 0.0
     }
 
     /// The columns the lake can touch, widened by `margin`: (min x, min z, max x, max z).
@@ -102,6 +130,64 @@ impl Lake {
             (cz + reach).max(fz + channel),
         )
     }
+
+    /// What the castle is made of in the cell `dy` blocks above the island's ground at the column (wx, wz):
+    /// `Some(Block::CastleStone)` for a wall, `Some(Block::Air)` for a cell the castle keeps empty, `None` outside the
+    /// castle's square or on a lake with no castle.
+    pub fn castle_block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+        if !self.has_castle() || !(0..CASTLE_HEIGHT).contains(&dy) {
+            return None;
+        }
+        let (dx, dz) = (wx - self.x, wz - self.z);
+        if dx.abs() > CASTLE_REACH || dz.abs() > CASTLE_REACH {
+            return None;
+        }
+        Some(if castle_is_solid(dx, dz, dy) { Block::CastleStone } else { Block::Air })
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the castle's square.
+    pub fn near_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.has_castle() && (wx - self.x).abs() <= CASTLE_REACH + margin && (wz - self.z).abs() <= CASTLE_REACH + margin
+    }
+}
+
+/// The shape of the castle, in blocks from its centre (`dx`, `dz`) and above the ground (`dy`, 0 is the first layer of
+/// air). Seen from above: an outer wall `CASTLE_WALL_HALF` blocks from the centre on each side, with a gate in the
+/// south side (towards +z) three blocks wide; a solid five-block tower at each corner; and in the middle a keep, a
+/// seven-block square building with a door in its south side and a roof. All of it ends in battlements: every other
+/// block along the top is left out.
+fn castle_is_solid(dx: i32, dz: i32, dy: i32) -> bool {
+    let (ax, az) = (dx.abs(), dz.abs());
+    let merlon = (dx + dz).rem_euclid(2) == 0;
+    let wall = CASTLE_WALL_HALF;
+    // The corner towers.
+    if (ax - wall).abs() <= 2 && (az - wall).abs() <= 2 {
+        return dy <= 9 || (dy == 10 && merlon);
+    }
+    // The outer wall, with its gate.
+    if ax.max(az) == wall {
+        if dz == wall && ax <= 1 && dy <= 3 {
+            return false;
+        }
+        return dy <= 5 || (dy == 6 && merlon);
+    }
+    // The keep: walls, a door, a roof, battlements.
+    if ax <= 3 && az <= 3 {
+        let shell = ax == 3 || az == 3;
+        if dy == 8 {
+            return true;
+        }
+        if dy == 9 {
+            return shell && merlon;
+        }
+        if dy <= 7 {
+            if dz == 3 && dx == 0 && dy <= 2 {
+                return false;
+            }
+            return shell;
+        }
+    }
+    false
 }
 
 /// A mountain: ground raised in a smooth, lopsided heap, steep enough to be tall and gentle enough to climb.
@@ -134,7 +220,11 @@ impl Mountain {
     /// Blocks from the column (wx, wz) to the foot of the mountain: negative on it.
     fn edge_distance(&self, wx: i32, wz: i32) -> f32 {
         let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
-        (dx * dx + dz * dz).sqrt() - self.radius as f32 * lobes(self.phase, dz.atan2(dx))
+        let dist = (dx * dx + dz * dz).sqrt();
+        if dist > farthest_reach(self.radius) + LANDMARK_BLEND as f32 {
+            return dist - farthest_reach(self.radius);
+        }
+        dist - self.radius as f32 * lobes(self.phase, dz.atan2(dx))
     }
 
     /// How many blocks the ground is raised at the column (wx, wz): zero off the mountain, the full `height` at
@@ -142,6 +232,9 @@ impl Mountain {
     pub fn rise_at(&self, wx: i32, wz: i32) -> i32 {
         let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
         let dist = (dx * dx + dz * dz).sqrt();
+        if dist >= farthest_reach(self.radius) {
+            return 0;
+        }
         let foot = self.radius as f32 * lobes(self.phase, dz.atan2(dx));
         if dist >= foot {
             return 0;
@@ -201,9 +294,14 @@ impl Landmarks {
     /// nothing near.
     pub fn relief_scale(&self, wx: i32, wz: i32) -> f32 {
         let blend = LANDMARK_BLEND as f32;
-        let lakes = self.lakes.iter().map(|l| l.edge_distance(wx, wz));
+        let lakes = self.lakes.iter().map(|l| l.outer_distance(wx, wz));
         let mountains = self.mountains.iter().map(|m| m.edge_distance(wx, wz));
         lakes.chain(mountains).map(|d| smoothstep(d / blend)).fold(1.0, f32::min)
+    }
+
+    /// Whether the column (wx, wz) is within `margin` blocks of the square a castle stands in.
+    pub fn near_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.lakes.iter().any(|l| l.near_castle(wx, wz, margin))
     }
 
     /// Whether any lake or mountain (with the margin the hills fade over) can touch the chunk (cx, cz).
@@ -328,30 +426,99 @@ mod tests {
         Mountain { x: 0, z: 0, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT, phase }
     }
 
+    /// A point in the water of a lake, between the island and the shore: (x, z) at `share` of the radius east of the centre.
+    fn ring_point(l: &Lake, share: f32) -> (i32, i32) {
+        (l.x + (l.radius as f32 * share) as i32, l.z)
+    }
+
     #[test]
     fn a_lake_lies_beyond_the_generated_land_and_is_joined_to_the_river() {
         let l = lake();
-        assert!(l.contains(l.x, l.z), "the centre is water");
+        let (rx, rz) = ring_point(&l, 0.55);
+        assert!(l.contains(rx, rz), "water between the island and the shore");
         assert!(l.contains(10, 10), "the channel starts in the river the player stood in");
-        assert!(l.contains((10 + l.x) / 2, 10), "and runs straight to the lake");
+        assert!(l.contains((10 + l.x - l.radius) / 2, 10), "and runs straight to the lake");
         assert!(!l.contains(l.x, l.z + LAKE_RADIUS * 2) && !l.contains(l.x, l.z - LAKE_RADIUS * 2));
         // The near shore, off the channel, is at least LAKE_DISTANCE blocks from the player.
-        let near = (-60..=60).flat_map(|dz| (-60..=60).map(move |dx| (l.x + dx, l.z + dz))).filter(|&(x, z)| l.contains(x, z) && (z - 10).abs() > 4);
+        let reach = farthest_reach(LAKE_RADIUS) as i32;
+        let near = (-reach..=reach).step_by(2).flat_map(|dz| (-reach..=reach).step_by(2).map(move |dx| (l.x + dx, l.z + dz))).filter(|&(x, z)| l.contains(x, z) && (z - 10).abs() > 4);
         for (x, z) in near {
             assert!((((x - 10) as f32).hypot((z - 10) as f32)) >= LAKE_DISTANCE as f32 - 1.0, "water at {x},{z} is too close");
         }
     }
 
     #[test]
-    fn a_lake_is_large_with_a_wavy_shore() {
+    fn a_lake_is_large_with_a_wavy_shore_and_a_large_island_in_the_middle() {
         let l = Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 11, from: (0, 0) };
-        let area = (-60..=60).flat_map(|z| (-60..=60).map(move |x| (x, z))).filter(|&(x, z)| l.contains(x, z)).count();
-        let circle = std::f32::consts::PI * (LAKE_RADIUS * LAKE_RADIUS) as f32;
-        assert!(area as f32 > circle * 0.7 && (area as f32) < circle * 1.4, "area {area}");
-        assert!(area > 2500, "a large lake");
-        let reach = |angle: f32| (0..80).rev().find(|&r| l.contains((r as f32 * angle.cos()) as i32, (r as f32 * angle.sin()) as i32)).unwrap();
-        let radii: Vec<i32> = (0..16).map(|i| reach(i as f32 * 0.4)).collect();
-        assert!(radii.iter().max().unwrap() - radii.iter().min().unwrap() >= 6, "not a perfect circle: {radii:?}");
+        let reach = farthest_reach(LAKE_RADIUS) as i32 + 2;
+        let (mut water, mut island) = (0, 0);
+        for z in -reach..=reach {
+            for x in -reach..=reach {
+                if l.contains(x, z) {
+                    water += 1;
+                } else if l.outer_distance(x, z) <= 0.0 {
+                    island += 1;
+                }
+            }
+        }
+        let circle = |r: f32| std::f32::consts::PI * r * r;
+        assert!(water as f32 > circle(LAKE_RADIUS as f32) * 0.6, "water {water}");
+        assert!(water > 30_000, "a large lake, bigger than 30,000 columns of water: {water}");
+        assert!(island as f32 > circle(l.island_radius()) * 0.6 && island > 2500, "a large island: {island} columns");
+        assert!(l.island_radius() >= 35.0);
+        assert!(!l.contains(0, 0), "the centre is the island");
+        // The shore is not a perfect circle.
+        let reach_at = |angle: f32| (0..(LAKE_RADIUS * 2)).rev().find(|&r| l.contains((r as f32 * angle.cos()) as i32, (r as f32 * angle.sin()) as i32)).unwrap();
+        let radii: Vec<i32> = (0..16).map(|i| reach_at(i as f32 * 0.4)).collect();
+        assert!(radii.iter().max().unwrap() - radii.iter().min().unwrap() >= 12, "not a perfect circle: {radii:?}");
+        // Wading from the shore to the island, the water is unbroken: there is water all the way out to the island.
+        let to_island = (0..60).map(|i| (i as f32 / 60.0 * LAKE_RADIUS as f32 * 0.7) as i32).filter(|&r| l.contains(r, 0)).count();
+        assert!(to_island > 10);
+    }
+
+    #[test]
+    fn the_castle_stands_in_the_middle_of_the_island_with_a_gate_and_a_door() {
+        let l = Lake { x: 100, z: -50, radius: LAKE_RADIUS, phase: 5, from: (0, 0) };
+        assert!(l.has_castle());
+        // Every column of the castle's square is dry island, with room to spare.
+        for dz in -CASTLE_REACH - 3..=CASTLE_REACH + 3 {
+            for dx in -CASTLE_REACH - 3..=CASTLE_REACH + 3 {
+                assert!(!l.contains(l.x + dx, l.z + dz), "water at the castle's foot: {dx},{dz}");
+            }
+        }
+        let at = |dx: i32, dz: i32, dy: i32| l.castle_block(l.x + dx, l.z + dz, dy);
+        let wall = Some(Block::CastleStone);
+        assert_eq!(at(8, 0, 0), wall, "the east wall");
+        assert_eq!(at(-8, 3, 5), wall);
+        assert_eq!(at(0, -8, 0), wall, "the north wall");
+        assert_eq!(at(0, 8, 0), Some(Block::Air), "the gate in the south wall, three wide");
+        assert_eq!(at(1, 8, 3), Some(Block::Air));
+        assert_eq!(at(-1, 8, 0), Some(Block::Air));
+        assert_eq!(at(2, 8, 0), wall);
+        assert_eq!(at(0, 8, 4), wall, "and a lintel over it");
+        assert_eq!(at(8, 8, 9), wall, "the corner tower is higher than the wall");
+        assert_eq!(at(7, 0, 8), Some(Block::Air), "the wall is lower than the tower");
+        assert_eq!(at(0, 3, 0), Some(Block::Air), "the door of the keep, on its south side");
+        assert_eq!(at(0, 3, 3), wall);
+        assert_eq!(at(3, 0, 0), wall, "the keep's wall");
+        assert_eq!(at(0, 0, 0), Some(Block::Air), "empty inside the keep");
+        assert_eq!(at(0, 0, 8), wall, "with a roof");
+        assert_eq!(at(0, 5, 0), Some(Block::Air), "the courtyard is open");
+        assert_eq!(at(0, 0, 11), None, "nothing above the castle");
+        assert_eq!(l.castle_block(l.x + CASTLE_REACH + 1, l.z, 0), None, "nothing outside its square");
+        // Walls and floor leave a way in: from the gate to the keep door the cells are all open, a man's height.
+        for dz in 3..=8 {
+            for dy in 0..2 {
+                assert_eq!(at(0, dz, dy), Some(Block::Air), "the way in at {dz},{dy}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_small_lake_has_an_island_but_no_castle() {
+        let l = Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) };
+        assert!(!l.has_castle() && l.castle_block(0, 0, 0).is_none());
+        assert!(!l.near_castle(0, 0, 100));
     }
 
     #[test]
@@ -359,24 +526,25 @@ mod tests {
         let mut marks = Landmarks::default();
         assert_eq!(marks.relief_scale(5, 5), 1.0);
         marks.lakes.push(Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) });
-        assert_eq!(marks.relief_scale(0, 0), 0.0, "no hill on the water");
+        assert_eq!(marks.relief_scale(0, 0), 0.0, "no hill on the water or the island");
         assert_eq!(marks.relief_scale(500, 500), 1.0, "none near: untouched");
         let ramp: Vec<f32> = (0..60).map(|x| marks.relief_scale(x, 0)).collect();
         assert!(ramp.windows(2).all(|w| w[1] >= w[0] - 1e-6), "the hills come back gradually");
         assert!(ramp[59] > 0.99);
-        marks.mountains.push(mountain(3));
-        assert_eq!(marks.relief_scale(300, 0), 1.0);
+        marks.mountains.push(Mountain { x: 5000, z: 0, ..mountain(3) });
         assert_eq!(marks.relief_scale(100, 100), 1.0);
-        assert!(marks.relief_scale(mountain(3).x + 5, 5) < 0.01);
+        assert_eq!(marks.relief_scale(5000, 5), 0.0, "no hill on a mountain");
+        assert_eq!(marks.relief_scale(5000 - 700, 0), 1.0, "and none at its foot");
     }
 
     #[test]
-    fn a_mountain_is_tall_and_can_be_climbed_one_block_at_a_time() {
-        for phase in 0..40 {
+    fn a_mountain_is_ten_times_taller_than_it_was_and_can_be_climbed_one_block_at_a_time() {
+        assert_eq!(MOUNTAIN_HEIGHT, 10 * 17, "ten times the old height");
+        assert!(MOUNTAIN_HEIGHT > 3 * HILL_MAX_HEIGHT, "much taller than any hill");
+        for phase in [0, 9, 17, 25, 33, 41, 49, 57, 62] {
             let m = mountain(phase);
             assert_eq!(m.rise_at(0, 0), MOUNTAIN_HEIGHT, "the summit");
-            assert!(MOUNTAIN_HEIGHT > 3 * HILL_MAX_HEIGHT, "much taller than any hill");
-            assert_eq!(m.rise_at(200, 0), 0);
+            assert_eq!(m.rise_at(MOUNTAIN_RADIUS * 2, 0), 0);
             let reach = farthest_reach(MOUNTAIN_RADIUS) as i32 + 2;
             let mut highest = 0;
             for z in -reach..=reach {

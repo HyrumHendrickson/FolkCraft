@@ -53,22 +53,26 @@ pub fn help_lines() -> Vec<Line> {
         )),
         heading("The land"),
         item("The world is forest, with clearings full of grass, flowers and berry bushes, broad gentle hills and valleys, and winding rivers. Lakes and mountains are not found by chance: see Exploring."),
+        item(format!("At most {MAX_DROPPED_ITEMS} items can lie on the ground at once. Beyond that the oldest ones disappear, so pick up what you want to keep, and do not leave things lying about.")),
         item("The ground cannot be dug. You can walk up any one-block step by jumping, which is how you climb a hill or a mountain."),
         item("Rivers are one block deep: wade straight through them, and jump to climb out the other side. Look down at the river bed to see what lies on it."),
         heading("Exploring"),
-        text("Three things reward you for going out and looking. Each is found by doing something, and each is told here so you can find it on purpose."),
+        text("Three things reward you for going out and looking. None is found by chance: each comes from doing something, and each is explained here step by step."),
         item(format!(
-            "Lake: step into a river and wade along it, without leaving the water, until you are {LAKE_TREK_CHUNKS} chunks ({} blocks) from where you entered, counting along either direction. Jumping while you wade is fine; stepping out onto the bank starts you over. The river then opens out into a large lake, still only one block deep, a little way ahead. Wade on to reach it. The top line of the screen shows your chunk.",
-            LAKE_TREK_CHUNKS * CHUNK_SIZE
+            "Lake, island and castle. Step into a river and wade along it, without leaving the water, until you are {LAKE_TREK_CHUNKS} chunks ({} blocks) from where you entered, counting along either direction. Jumping while you wade is fine; stepping out onto the bank starts you over. A very large lake then appears ahead, about {} blocks across, still only one block deep, joined to your river by a channel of water. Keep wading to reach it. In the middle of the lake is a large island with forest on it, and in the middle of the island stands a small castle of grey stone. Its outer wall has a gate on the south side, and inside is a keep with a door on its south side. Castle stone cannot be broken. Lakes are made again each time you make the walk.",
+            LAKE_TREK_CHUNKS * CHUNK_SIZE,
+            LAKE_RADIUS * 2
         )),
         item(format!(
-            "Mountain: hold a Compass (a Loadstone and an Iron Ore). A dial appears in the top right with a red needle that points north, and it turns as you turn. Walk north, the way the needle points, for {COMPASS_TREK_CHUNKS} chunks ({} blocks): the dial counts your progress. Putting the compass away starts the count over, and walking south takes progress back. A tall mountain then rises ahead. You can climb it one block at a time by jumping, and the top is covered in snow. Snow cannot be mined yet.",
+            "Mountain. Hold a Compass: a dial appears in the top right with a red needle that points north, and it turns as you turn. Walk north, the way the needle points, for {COMPASS_TREK_CHUNKS} chunks ({} blocks): the dial counts your progress. Putting the compass away starts the count over, and walking south takes progress back. A mountain then rises ahead, {MOUNTAIN_HEIGHT} blocks tall and several hundred blocks wide. You can climb it one block at a time by jumping, so keep jumping uphill, and bring food, since it is a long climb. Trees stop a little way up, then the slope is bare rock, and from {SNOW_LINE_RISE} blocks up the ground is snow. Snow cannot be mined yet.",
             COMPASS_TREK_CHUNKS * CHUNK_SIZE
         )),
         item(format!(
-            "Rainbow: hold a Peep Stone (a Rabbit Foot gives them, see Gathering). A rainbow appears nearby, rising beside you and coming down on a pile of gold about {} to {} blocks away. It shows only while the Peep Stone is in your hand. Walk to the end and hold left mouse on the pile to take {RAINBOW_GOLD_DROP} gold. There is only one rainbow in a world: once its gold is taken you will never see another.",
+            "Rainbow. Hold a Peep Stone. A rainbow appears nearby, rising beside you and coming down on a pile of gold about {} to {} blocks away. It shows only while the Peep Stone is in your hand, so keep it there and walk towards the end of the rainbow. Hold left mouse on the pile to take {RAINBOW_GOLD_DROP} gold. There is only one rainbow in a world: once its gold is taken you will never see another.",
             RAINBOW_GOLD_MIN_DISTANCE as i32, RAINBOW_GOLD_MAX_DISTANCE as i32
         )),
+        item("Getting a Peep Stone: kill a rabbit (one in four drops a Rabbit Foot), keep the foot anywhere in your hotbar, and break pebbles by hand. Each has a chance to add a Peep Stone."),
+        item("Getting a Compass: with the Rabbit Foot in your hotbar, break stones by hand until one drops a Loadstone. Break a boulder with a Bronze Mallet for iron ore. A Loadstone and an Iron Ore make a Compass in the inventory."),
         heading("Gathering"),
         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
@@ -144,7 +148,7 @@ pub fn help_lines() -> Vec<Line> {
             MOOSE_GIVE_UP_DISTANCE as i32
         )),
         item(format!(
-            "Will-o-whisps appear at night. They float above the ground and flee at {WILL_O_WHISP_FLEE_SPEED} blocks per second when you come within {WILL_O_WHISP_FLEE_DISTANCE} blocks. They have no attacks or drops yet."
+            "Will-o-whisps appear at night, and in numbers (up to {MAX_WILL_O_WHISP} at once). They are pale, see-through, ghostly things with a glowing heart, two dark eyes and a thin tail, and they float above the ground. They flee at {WILL_O_WHISP_FLEE_SPEED} blocks per second when you come within {WILL_O_WHISP_FLEE_DISTANCE} blocks. They have no attacks or drops yet."
         )),
         item("A blow throws the animal back, and a blow that hurts you (or a burn) throws you back, so you can see when something lands."),
         item("An arrow that hits an animal is used up. An arrow that misses lands on the ground: walk over it to pick it up again. Feathers are what you need to make more."),
@@ -326,7 +330,7 @@ mod tests {
         let t = all_text();
         for word in [
             "W A S D", "Shift", "Space", "Left mouse", "Right mouse", "inventory", "Esc", "hearts", "Bow Drill", "Bellows", "bears",
-            "Rivers", "Exploring", "Lake:", "Mountain:", "Rainbow:", "Peep Stone", "Clay", "Delete", "Stone Axe", "Bronze Mallet", "Boulders", "Sling", "Loadstone", "Compass", "clay forge", "Tin Pot", "Clay Jar", "Moose", "Rabbits", "stew", "Iron Axe",
+            "Rivers", "Exploring", "Lake, island and castle", "Mountain.", "Rainbow.", "Peep Stone", "Getting a Compass", "ghostly", "Clay", "Delete", "Stone Axe", "Bronze Mallet", "Boulders", "Sling", "Loadstone", "Compass", "clay forge", "Tin Pot", "Clay Jar", "Moose", "Rabbits", "stew", "Iron Axe",
         ] {
             assert!(t.contains(word), "the help mentions {word:?}");
         }
@@ -379,9 +383,18 @@ mod tests {
         let parts = [
             format!("{LAKE_TREK_CHUNKS} chunks ({} blocks)", LAKE_TREK_CHUNKS * CHUNK_SIZE),
             format!("{COMPASS_TREK_CHUNKS} chunks ({} blocks)", COMPASS_TREK_CHUNKS * CHUNK_SIZE),
+            format!("{MOUNTAIN_HEIGHT} blocks tall"),
+            format!("from {SNOW_LINE_RISE} blocks up the ground is snow"),
+            format!("about {} blocks across", LAKE_RADIUS * 2),
+            format!("At most {MAX_DROPPED_ITEMS} items"),
+            "large island".to_string(),
+            "small castle of grey stone".to_string(),
+            "gate on the south side".to_string(),
             "Snow cannot be mined yet".to_string(),
             "only one rainbow in a world".to_string(),
             "shows only while the Peep Stone is in your hand".to_string(),
+            "Getting a Peep Stone".to_string(),
+            "Getting a Compass".to_string(),
         ];
         for part in &parts {
             assert!(t.contains(part.as_str()), "the help says {part:?}");
