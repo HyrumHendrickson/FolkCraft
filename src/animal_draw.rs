@@ -4,6 +4,7 @@ use macroquad::prelude::*;
 
 use crate::animal::{Animal, AnimalKind, Mode};
 use crate::arrow::Arrow;
+use crate::config::*;
 use crate::dropped::draw_box;
 use crate::world::{in_render_range, World};
 
@@ -151,6 +152,17 @@ fn bear_parts(a: &Animal) -> Vec<Part> {
     parts
 }
 
+fn will_o_whisp_parts(a: &Animal, time: f32) -> Vec<Part> {
+    let pulse = 0.9 + 0.1 * (time * 4.0 + a.phase).sin();
+    let glow = col(0.42 * pulse, 0.85 * pulse, 0.96 * pulse);
+    let flame = col(0.70 * pulse, 0.96 * pulse, 1.0);
+    vec![
+        ((0.0, 0.32, 0.0), (WILL_O_WHISP_HALF_WIDTH, 0.24, WILL_O_WHISP_HALF_WIDTH), glow),
+        ((0.0, 0.02, 0.0), (0.10, 0.18, 0.10), flame),
+        ((0.0, -0.20, 0.0), (0.06, 0.12, 0.06), glow),
+    ]
+}
+
 /// Draw every animal within the render range. Call while the 3D camera is active.
 pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
     for a in animals {
@@ -163,6 +175,7 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
             AnimalKind::Bear => bear_parts(a),
             AnimalKind::Rabbit => rabbit_parts(a),
             AnimalKind::Moose => moose_parts(a),
+            AnimalKind::WillOWhisp => will_o_whisp_parts(a, time),
         };
         let (s, c) = a.heading.sin_cos();
         for ((fx, fy, fz), (hx, hy, hz), color) in parts {

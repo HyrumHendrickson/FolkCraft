@@ -65,6 +65,9 @@ impl Arrow {
                     .enumerate()
                     .filter_map(|(i, a)| {
                         let (lo, hi) = a.hitbox();
+                        if !a.kind.is_huntable() {
+                            return None;
+                        }
                         ray_box(self.pos, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= length).map(|t| (i, t))
                     })
                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));

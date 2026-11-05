@@ -10,7 +10,7 @@ use crate::config::*;
 use crate::dropped::{collect_nearby, DroppedItem};
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
-use crate::item::{drops_for, drops_for_with_berries, Hearth, ItemKind};
+use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
 use crate::player::Player;
 use crate::river::is_river;
 use crate::rng::{clock_seed, Rng};
@@ -50,7 +50,7 @@ pub struct Game {
     pub health: u32,
     /// Seconds spent touching fire since the last burn tick.
     pub burn_timer: f32,
-    /// Deer, quail and bears living around the player. They are not saved: new ones wander in.
+    /// Wildlife living around the player. Animals and will-o-whisps are not saved: new ones wander in.
     pub animals: Vec<Animal>,
     /// Arrows in flight.
     pub arrows: Vec<Arrow>,
@@ -138,11 +138,12 @@ impl Game {
             return Vec::new();
         }
         self.world.break_block(x, y, z);
-        let mut drops = if block == Block::Bush {
-            drops_for_with_berries(block, self.world.berry_kind_at(x, z), &mut self.rng)
-        } else {
-            drops_for(block, &mut self.rng)
-        };
+        let mut drops = drops_for_with_bonuses(
+            block,
+            if block == Block::Bush { self.world.berry_kind_at(x, z) } else { ItemKind::Berries },
+            self.rabbit_foot_in_hotbar(),
+            &mut self.rng,
+        );
         if self.rabbit_foot_in_hotbar() {
             if matches!(block, Block::PlacedStone | Block::WetStone)
                 && self.rng.chance(RABBIT_FOOT_LOADSTONE_CHANCE)
@@ -658,6 +659,7 @@ impl Game {
             .animals
             .iter()
             .enumerate()
+            .filter(|(_, a)| a.kind.is_huntable())
             .filter_map(|(i, a)| {
                 let (lo, hi) = a.hitbox();
                 ray_box(eye, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= reach).map(|t| (i, t))
@@ -794,18 +796,22 @@ impl Game {
         if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || is_river(self.world.seed, x, z) {
             return false;
         }
-        let pos = vec3(x as f32 + 0.5, (ground_top(self.world.seed, x, z) + 1) as f32 + 0.01, z as f32 + 0.5);
+        let ground_y = (ground_top(self.world.seed, x, z) + 1) as f32;
+        let pos = if kind == AnimalKind::WillOWhisp {
+            vec3(x as f32 + 0.5, ground_y + WILL_O_WHISP_SPAWN_HEIGHT, z as f32 + 0.5)
+        } else {
+            vec3(x as f32 + 0.5, ground_y + 0.01, z as f32 + 0.5)
+        };
         let half = vec3(kind.half_width(), 0.0, kind.half_width());
-        if self.world.box_blocked(pos - half, pos + half + vec3(0.0, kind.height(), 0.0)) {
+        if kind != AnimalKind::WillOWhisp && self.world.box_blocked(pos - half, pos + half + vec3(0.0, kind.height(), 0.0)) {
             return false;
         }
         self.animals.push(Animal::new(kind, pos, &mut self.rng));
         true
     }
 
-    /// Every `ANIMAL_SPAWN_INTERVAL` seconds, bring a deer, a covey of quail or a bear into the world a good
-    /// way from the player, unless there are already `MAX_DEER` / `MAX_QUAIL` / `MAX_BEAR` of that kind about.
-    /// The kind is drawn by the `SPAWN_WEIGHT_*` among those with room left.
+    /// Every `ANIMAL_SPAWN_INTERVAL` seconds, bring wildlife into the world a good way from the player, unless
+    /// that kind is already at its limit. Will-o-whisps are included only while the world is night.
     fn spawn_wildlife(&mut self) {
         let count = |k: AnimalKind| self.animals.iter().filter(|a| a.kind == k).count();
         let room = |kind: AnimalKind| match kind {
@@ -814,9 +820,10 @@ impl Game {
             AnimalKind::Bear => MAX_BEAR,
             AnimalKind::Rabbit => MAX_RABBIT,
             AnimalKind::Moose => MAX_MOOSE,
+            AnimalKind::WillOWhisp => MAX_WILL_O_WHISP,
         }
         .saturating_sub(count(kind));
-        let open: Vec<(AnimalKind, u64)> = [
+        let mut open: Vec<(AnimalKind, u64)> = [
             (AnimalKind::Deer, MAX_DEER, SPAWN_WEIGHT_DEER),
             (AnimalKind::Quail, MAX_QUAIL, SPAWN_WEIGHT_QUAIL),
             (AnimalKind::Bear, MAX_BEAR, SPAWN_WEIGHT_BEAR),
@@ -827,6 +834,9 @@ impl Game {
         .filter(|&(kind, max, _)| count(kind) < max)
         .map(|(kind, _, weight)| (kind, weight))
         .collect();
+        if self.world.night && count(AnimalKind::WillOWhisp) < MAX_WILL_O_WHISP {
+            open.push((AnimalKind::WillOWhisp, SPAWN_WEIGHT_WILL_O_WHISP));
+        }
         let total: u64 = open.iter().map(|&(_, w)| w).sum();
         if total == 0 {
             return;
@@ -859,7 +869,9 @@ impl Game {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         let player = self.player.pos;
         let flat = |a: &Animal| vec2(a.pos.x - player.x, a.pos.z - player.z).length();
-        self.animals.retain(|a| flat(a) < ANIMAL_DESPAWN_DISTANCE);
+        self.animals.retain(|a| {
+            flat(a) < ANIMAL_DESPAWN_DISTANCE && (self.world.night || a.kind != AnimalKind::WillOWhisp)
+        });
         let bears: Vec<Vec3> = self.animals.iter().filter(|a| a.kind == AnimalKind::Bear).map(|a| a.pos).collect();
         let mut strikes: Vec<(Vec3, u32, &'static str)> = Vec::new();
         for a in &mut self.animals {

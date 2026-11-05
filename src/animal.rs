@@ -1,4 +1,4 @@
-//! Wild animals: deer, rabbits, quail, bears and moose. Their behaviour is plain logic over the `World`; drawing lives
+//! Wild animals: deer, rabbits, quail, bears, moose and will-o-whisps. Their behaviour is plain logic over the `World`; drawing lives
 //! in `animal_draw.rs`.
 //!
 //! - **Deer** wander slowly, pausing now and then. A player (or a bear) within `FLEE_DISTANCE` makes them
@@ -13,6 +13,8 @@
 //! - **Rabbits** run from the player (or a bear) exactly like deer, a little slower.
 //! - **Moose** do not run. Left alone they wander; once hurt, one chases the player until one of them is dead or
 //!   they are `MOOSE_GIVE_UP_DISTANCE` apart, and hits for `MOOSE_DAMAGE` when it reaches them.
+//! - **Will-o-whisps** appear only at night, float above the terrain and flee when the player gets close. They have no
+//!   attacks or drops.
 //! - A hurt animal, and a hurt player, are knocked back (`Animal::knock_back`, `Player::knock_back`).
 //!
 //! Animals hop up one-block steps, so hills and logs do not trap them, and turn aside when
@@ -32,6 +34,7 @@ pub enum AnimalKind {
     Bear,
     Rabbit,
     Moose,
+    WillOWhisp,
 }
 
 impl AnimalKind {
@@ -42,6 +45,7 @@ impl AnimalKind {
             AnimalKind::Bear => BEAR_HEALTH,
             AnimalKind::Rabbit => RABBIT_HEALTH,
             AnimalKind::Moose => MOOSE_HEALTH,
+            AnimalKind::WillOWhisp => WILL_O_WHISP_HEALTH,
         }
     }
 
@@ -53,6 +57,7 @@ impl AnimalKind {
             AnimalKind::Bear => 0.55,
             AnimalKind::Rabbit => 0.20,
             AnimalKind::Moose => 0.70,
+            AnimalKind::WillOWhisp => WILL_O_WHISP_HALF_WIDTH,
         }
     }
 
@@ -63,6 +68,7 @@ impl AnimalKind {
             AnimalKind::Bear => 1.4,
             AnimalKind::Rabbit => 0.5,
             AnimalKind::Moose => 2.1,
+            AnimalKind::WillOWhisp => WILL_O_WHISP_HEIGHT,
         }
     }
 
@@ -73,6 +79,7 @@ impl AnimalKind {
             AnimalKind::Bear => BEAR_WALK_SPEED,
             AnimalKind::Rabbit => RABBIT_WALK_SPEED,
             AnimalKind::Moose => MOOSE_WALK_SPEED,
+            AnimalKind::WillOWhisp => 0.0,
         }
     }
 
@@ -84,6 +91,7 @@ impl AnimalKind {
             AnimalKind::Bear => (1.5, 4.0),
             AnimalKind::Rabbit => (1.0, 3.5),
             AnimalKind::Moose => (3.0, 8.0),
+            AnimalKind::WillOWhisp => (1.0, 1.0),
         }
     }
 
@@ -95,6 +103,7 @@ impl AnimalKind {
             AnimalKind::Bear => (2.0, 5.0),
             AnimalKind::Rabbit => (0.8, 2.0),
             AnimalKind::Moose => (2.0, 5.0),
+            AnimalKind::WillOWhisp => (1.0, 1.0),
         }
     }
 
@@ -105,17 +114,34 @@ impl AnimalKind {
 
     /// Speed (blocks per second) of an animal that is running away.
     fn run_speed(self) -> f32 {
-        if self == AnimalKind::Rabbit { RABBIT_RUN_SPEED } else { DEER_RUN_SPEED }
+        match self {
+            AnimalKind::Rabbit => RABBIT_RUN_SPEED,
+            AnimalKind::WillOWhisp => WILL_O_WHISP_FLEE_SPEED,
+            _ => DEER_RUN_SPEED,
+        }
     }
 
     /// Life taken by one blow of an animal that attacks (bears and moose).
     pub fn attack_damage(self) -> u32 {
-        if self == AnimalKind::Moose { MOOSE_DAMAGE } else { BEAR_DAMAGE }
+        match self {
+            AnimalKind::Moose => MOOSE_DAMAGE,
+            AnimalKind::Bear => BEAR_DAMAGE,
+            _ => 0,
+        }
     }
 
     /// Shown when this animal's blow kills the player.
     pub fn death_message(self) -> &'static str {
-        if self == AnimalKind::Moose { "A moose killed you" } else { "A bear killed you" }
+        match self {
+            AnimalKind::Moose => "A moose killed you",
+            AnimalKind::Bear => "A bear killed you",
+            _ => "An animal killed you",
+        }
+    }
+
+    /// Whether weapons can target this kind. Will-o-whisps are scenery and flight behaviour for now.
+    pub fn is_huntable(self) -> bool {
+        self != AnimalKind::WillOWhisp
     }
 
     /// What the animal leaves behind when killed.
@@ -145,6 +171,7 @@ impl AnimalKind {
                 add(ItemKind::MooseMeat, MOOSE_MEAT_DROP);
                 add(ItemKind::Leather, MOOSE_LEATHER_DROP);
             }
+            AnimalKind::WillOWhisp => {}
         }
         out
     }
@@ -282,6 +309,9 @@ impl Animal {
     /// Hurt the animal for `amount` and scare it (a bear is enraged instead: it charges the player
     /// wherever they are). Returns true when it is dead.
     pub fn damage(&mut self, amount: i32) -> bool {
+        if !self.kind.is_huntable() {
+            return false;
+        }
         self.health -= amount;
         self.alarm = ANIMAL_ALARM_SECONDS;
         if self.kind == AnimalKind::Moose {
@@ -411,9 +441,19 @@ impl Animal {
                     self.heading = towards + detour;
                 }
             }
+            AnimalKind::WillOWhisp => {
+                if flat_gap < WILL_O_WHISP_FLEE_DISTANCE {
+                    self.mode = Mode::Flee;
+                    if flat_gap > 1e-3 {
+                        self.heading = away;
+                    }
+                } else if self.mode == Mode::Flee && flat_gap >= WILL_O_WHISP_CALM_DISTANCE {
+                    self.mode = Mode::Idle;
+                }
+            }
         }
 
-        if matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
+        if self.kind != AnimalKind::WillOWhisp && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
             if self.mode == Mode::Idle {
                 self.mode = Mode::Wander;
                 self.heading = if self.kind == AnimalKind::Bear && dist < BEAR_NOTICE_DISTANCE {
@@ -426,6 +466,17 @@ impl Animal {
             } else {
                 self.rest(rng);
             }
+        }
+
+        if self.kind == AnimalKind::WillOWhisp {
+            let speed = if self.mode == Mode::Flee { WILL_O_WHISP_FLEE_SPEED } else { 0.0 };
+            self.vel = vec3(self.heading.cos() * speed, 0.0, self.heading.sin() * speed);
+            self.pos.x += self.vel.x * dt;
+            self.pos.z += self.vel.z * dt;
+            self.phase += dt * WILL_O_WHISP_BOB_SPEED;
+            self.pos.y = self.launch_y + self.phase.sin() * WILL_O_WHISP_BOB_AMPLITUDE;
+            self.on_ground = false;
+            return dropped;
         }
 
         let speed = match self.mode {
@@ -686,6 +737,26 @@ mod tests {
         assert_eq!(deer.mode, Mode::Flee);
         run(&mut deer, &w, far_player, ANIMAL_ALARM_SECONDS + 4.0, &mut rng);
         assert_ne!(deer.mode, Mode::Flee, "calms down after the alarm and the distance");
+    }
+
+    #[test]
+    fn a_will_o_whisp_floats_and_flees_without_attacking_or_dropping() {
+        let w = open_field();
+        let mut rng = Rng::new(10);
+        let mut whisp = Animal::new(AnimalKind::WillOWhisp, vec3(20.5, 9.0, 10.5), &mut rng);
+        let start = whisp.pos;
+        let player = vec3(15.5, 6.0, 10.5);
+        assert_eq!(whisp.update(&w, player, 0.1, &mut rng), None);
+        assert_eq!(whisp.mode, Mode::Flee);
+        assert!(whisp.pos.x > start.x, "it flees away from the player");
+        assert!((whisp.pos.y - start.y).abs() < WILL_O_WHISP_BOB_AMPLITUDE);
+        assert!(!whisp.try_attack(player));
+        assert!(!whisp.kind.is_huntable());
+        assert!(whisp.kind.drops(&mut rng).is_empty());
+
+        whisp.update(&w, vec3(-200.0, 6.0, -200.0), 0.1, &mut rng);
+        assert_eq!(whisp.mode, Mode::Idle);
+        assert!(whisp.vel.x.abs() < 1e-5 && whisp.vel.z.abs() < 1e-5);
     }
 
     #[test]

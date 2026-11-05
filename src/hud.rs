@@ -41,6 +41,18 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
                 draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w, color);
             }
         }
+        ItemKind::PeepStone => {
+            draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
+            draw_circle(cx, cy + 1.0, r.w * 0.25, color);
+            draw_circle(cx - r.w * 0.07, cy - r.h * 0.07, r.w * 0.09, lighten(color, 0.18));
+        }
+        ItemKind::HollyRod => {
+            draw_line(r.x + r.w * 0.25, r.y + r.h * 0.76, r.x + r.w * 0.75, r.y + r.h * 0.24, 6.0, outline);
+            draw_line(r.x + r.w * 0.25, r.y + r.h * 0.76, r.x + r.w * 0.75, r.y + r.h * 0.24, 4.0, color);
+            for (dx, dy) in [(0.38, 0.60), (0.60, 0.38)] {
+                draw_circle(r.x + r.w * dx, r.y + r.h * dy, 3.0, Color::new(0.78, 0.10, 0.16, 1.0));
+            }
+        }
         ItemKind::Stone => {
             draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
             draw_circle(cx, cy + 1.0, r.w * 0.25, color);

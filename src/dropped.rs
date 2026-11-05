@@ -55,6 +55,8 @@ impl ItemKind {
             ItemKind::BronzeMallet => 0.06,
             ItemKind::ClayForge => 0.10,
             ItemKind::RabbitFoot => 0.04,
+            ItemKind::PeepStone => 0.08,
+            ItemKind::HollyRod => 0.04,
             ItemKind::TinPot => 0.09,
             ItemKind::ClayJar | ItemKind::WaterJar => 0.10,
             ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew
@@ -97,6 +99,8 @@ impl ItemKind {
             ItemKind::BronzeMallet => vec3(0.24, 0.06, 0.10),
             ItemKind::ClayForge => vec3(0.16, 0.10, 0.16),
             ItemKind::RabbitFoot => vec3(0.08, 0.04, 0.06),
+            ItemKind::PeepStone => vec3(0.10, 0.08, 0.10),
+            ItemKind::HollyRod => vec3(0.24, 0.04, 0.04),
             ItemKind::TinPot => vec3(0.12, 0.09, 0.12),
             ItemKind::ClayJar | ItemKind::WaterJar => vec3(0.09, 0.10, 0.09),
             ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew

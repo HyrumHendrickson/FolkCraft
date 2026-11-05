@@ -69,6 +69,10 @@ pub enum ItemKind {
     CookedMoose,
     /// A rabbit sometimes leaves one. It has no use.
     RabbitFoot,
+    /// A rabbit-foot bonus drop. It has no use yet.
+    PeepStone,
+    /// A rabbit-foot bonus drop. It has no use yet.
+    HollyRod,
     /// Axes of metal: each hits one harder than the one before (stone, copper, bronze, iron).
     CopperAxe,
     BronzeAxe,
@@ -95,7 +99,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 57] = [
+    pub const ALL: [ItemKind; 59] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -137,6 +141,8 @@ impl ItemKind {
         ItemKind::MooseMeat,
         ItemKind::CookedMoose,
         ItemKind::RabbitFoot,
+        ItemKind::PeepStone,
+        ItemKind::HollyRod,
         ItemKind::CopperAxe,
         ItemKind::BronzeAxe,
         ItemKind::IronAxe,
@@ -199,6 +205,8 @@ impl ItemKind {
             ItemKind::MooseMeat => "Moose Meat",
             ItemKind::CookedMoose => "Cooked Moose",
             ItemKind::RabbitFoot => "Rabbit's Foot",
+            ItemKind::PeepStone => "Peep Stone",
+            ItemKind::HollyRod => "Holly Rod",
             ItemKind::CopperAxe => "Copper Axe",
             ItemKind::BronzeAxe => "Bronze Axe",
             ItemKind::IronAxe => "Iron Axe",
@@ -262,6 +270,8 @@ impl ItemKind {
             ItemKind::MooseMeat => "moose_meat",
             ItemKind::CookedMoose => "cooked_moose",
             ItemKind::RabbitFoot => "rabbit_foot",
+            ItemKind::PeepStone => "peep_stone",
+            ItemKind::HollyRod => "holly_rod",
             ItemKind::CopperAxe => "copper_axe",
             ItemKind::BronzeAxe => "bronze_axe",
             ItemKind::IronAxe => "iron_axe",
@@ -334,6 +344,8 @@ impl ItemKind {
             ItemKind::MooseMeat => Color::new(0.60, 0.14, 0.18, 1.0),
             ItemKind::CookedMoose => Color::new(0.40, 0.22, 0.12, 1.0),
             ItemKind::RabbitFoot => Color::new(0.82, 0.76, 0.66, 1.0),
+            ItemKind::PeepStone => Color::new(0.34, 0.62, 0.78, 1.0),
+            ItemKind::HollyRod => Color::new(0.24, 0.56, 0.20, 1.0),
             ItemKind::CopperAxe => Color::new(0.80, 0.46, 0.25, 1.0),
             ItemKind::BronzeAxe => Color::new(0.74, 0.55, 0.22, 1.0),
             ItemKind::IronAxe => Color::new(0.34, 0.36, 0.42, 1.0),
@@ -534,6 +546,30 @@ pub fn drops_for(block: Block, rng: &mut Rng) -> Vec<ItemKind> {
     drops_for_with_berries(block, ItemKind::Berries, rng)
 }
 
+/// Roll block drops and the extra discoveries enabled by a rabbit foot in the hotbar.
+pub fn drops_for_with_bonuses(
+    block: Block,
+    berry_kind: ItemKind,
+    rabbit_foot: bool,
+    rng: &mut Rng,
+) -> Vec<ItemKind> {
+    let mut drops = drops_for_with_berries(block, berry_kind, rng);
+    if !rabbit_foot {
+        return drops;
+    }
+
+    match block {
+        Block::Leaves | Block::Needles if rng.chance(RABBIT_FOOT_HOLLY_ROD_CHANCE) => {
+            drops.push(ItemKind::HollyRod);
+        }
+        Block::PlacedPebble | Block::WetPebble if rng.chance(RABBIT_FOOT_PEEP_STONE_CHANCE) => {
+            drops.push(ItemKind::PeepStone);
+        }
+        _ => {}
+    }
+    drops
+}
+
 /// Roll drops using the berry colour currently visible on a bush.
 pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng) -> Vec<ItemKind> {
     let mut drops = Vec::new();
@@ -602,6 +638,23 @@ mod tests {
         }
         let r = sticks as f64 / (2 * TRIALS) as f64;
         assert!((r - 0.50).abs() < 0.01, "stick rate {r}");
+    }
+
+    #[test]
+    fn rabbit_foot_adds_peep_stones_and_holly_rods_one_time_in_five() {
+        let mut rng = Rng::new(12);
+        let mut peep_stones = 0;
+        let mut holly_rods = 0;
+        for _ in 0..TRIALS {
+            let pebble = drops_for_with_bonuses(Block::PlacedPebble, ItemKind::Berries, true, &mut rng);
+            peep_stones += pebble.iter().filter(|&&kind| kind == ItemKind::PeepStone).count();
+            let leaves = drops_for_with_bonuses(Block::Leaves, ItemKind::Berries, true, &mut rng);
+            holly_rods += leaves.iter().filter(|&&kind| kind == ItemKind::HollyRod).count();
+        }
+        assert!((rate(peep_stones) - 0.20).abs() < 0.015, "peep stone rate {}", rate(peep_stones));
+        assert!((rate(holly_rods) - 0.20).abs() < 0.015, "holly rod rate {}", rate(holly_rods));
+        assert!(drops_for_with_bonuses(Block::PlacedPebble, ItemKind::Berries, false, &mut rng).iter().all(|&kind| kind != ItemKind::PeepStone));
+        assert!(drops_for_with_bonuses(Block::Leaves, ItemKind::Berries, false, &mut rng).iter().all(|&kind| kind != ItemKind::HollyRod));
     }
 
     #[test]

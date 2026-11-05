@@ -2,8 +2,8 @@
 
 A small Minecraft-style voxel game in Rust using [macroquad](https://macroquad.rs) 0.4.
 First-person view, a chunked procedural forest with clearings, gentle hills and valleys and winding rivers,
-block breaking and placing, item drops, an inventory, shapeless crafting, fire and cooking, wild deer, quail
-and bears, and hunting with an axe or a bow. This file is the starting point for agents
+block breaking and placing, item drops, an inventory, shapeless crafting, fire and cooking, wild deer, quail,
+bears, rabbits, moose and nighttime will-o-whisps, and hunting with an axe or a bow. This file is the starting point for agents
 (and humans) changing the code.
 
 ## Build, run, test
@@ -21,6 +21,24 @@ cargo build          # must stay free of warnings
   put logic in plain functions or methods on data types and unit-test those; keep macroquad
   drawing and input calls in thin wrappers (`hud.rs`, `play.rs`, `menu.rs`, `effects.rs`).
 - Always run `cargo test` and `cargo build` before finishing a change. Add tests for new logic.
+
+## Agent contributor guide
+
+Use this loop for every change:
+
+1. Read the relevant section of this README and the owning module before editing.
+2. Put gameplay rules in the logic modules (`block.rs`, `item.rs`, `inventory.rs`, `recipe.rs`, `world.rs`, `animal.rs`, or `game.rs`). Keep input and drawing in the thin UI wrappers.
+3. Add tunable numbers to the matching section of `config.rs`; keep constants grouped by system and document non-obvious values.
+4. Add or update unit tests beside the logic you changed. Tests must not require a window or GPU.
+5. Run `cargo fmt --check`, `cargo test`, and `cargo build`. Inspect `git diff --check` before handing off.
+
+For a new item, update `ItemKind`, `ALL`, `name`, `id`, `color`, dropped-item geometry, and the HUD icon. For a new block, update its shape and rules, drop handling, generation if needed, and save id if players can place it. For a new creature, update `AnimalKind`, movement/spawn rules, rendering, weapon targeting, and tests. Keep save compatibility: item and block ids are part of the plain-text world format.
+
+The main gameplay call path is:
+
+`play::play_screen` → input/raycast → `Game` action methods → world/inventory/entity state → item pickup/fire/animal updates → rendering/HUD.
+
+Before adding a helper, search for an existing rule owner. In particular, use `Game::held_item()`, `Block::can_break_with`, `ItemKind` conversion methods, `Inventory` mutation methods, `World::set_block`/`break_block`, and `Animal::update` instead of duplicating their logic.
 
 ### Looking at the game without a display (optional)
 
@@ -47,6 +65,9 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
   twice as rocky): about 2% of columns hold a pebble and 0.8% a stone (`GROUND_PEBBLE_PER_MILLE`,
   `GROUND_STONE_PER_MILLE`, `HILL_ROCK_FACTOR`). They are ordinary `PlacedPebble`/`PlacedStone` blocks in the
   generated terrain, so they break by hand, drop themselves, and stay gone (recorded in `World::removed`).
+- A **Rabbit Foot** in the hotbar gives a broken pebble a `RABBIT_FOOT_PEEP_STONE_CHANCE` (20%) chance to
+  add a Peep Stone, and leaves or pine needles a `RABBIT_FOOT_HOLLY_ROD_CHANCE` (20%) chance to add a Holly Rod.
+  It also keeps the existing Loadstone and Gold Ore bonuses. Peep Stones and Holly Rods do nothing yet.
 - **Boulders** (`Block::Boulder`) lie among the stones at `GROUND_BOULDER_PER_MILLE` 2 per mille of columns (twice as often on
   hills). They are solid, rust-streaked rocks that only a **bronze mallet** breaks (`BREAK_SECONDS_BOULDER` 4 s). A broken boulder
   drops one stone, one pebble and `BOULDER_IRON_MIN..=BOULDER_IRON_MAX` (1 to 3) iron ore, and stays gone.
@@ -122,7 +143,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
   the count restarts when contact ends. At 0 the player respawns at the start with full health and keeps
   their inventory. Right click with food held eats one, but only when hurt (`ItemKind::heal_amount`):
   berries +1, cooked venison +4, cooked poultry +3, cooked bear meat +5, cooked rabbit +2, cooked moose +5, and every stew double its cooked meat. Raw meat cannot be eaten.
-- **Animals** (`animal.rs`): deer, rabbits, quail, bears and moose wander the world (`Game::update_animals`).
+- **Animals** (`animal.rs`): deer, rabbits, quail, bears and moose wander the world, and will-o-whisps appear at night (`Game::update_animals`).
   - A **deer** wanders slowly with pauses. A player **or a bear** within `FLEE_DISTANCE` (10 blocks) makes it run
     directly away at `DEER_RUN_SPEED` (faster than sprinting) until it is `FLEE_CALM_DISTANCE` away.
   - A **rabbit** (`RABBIT_HEALTH` 2) runs from the player or a bear exactly like a deer (`RABBIT_RUN_SPEED` = `DEER_RUN_SPEED`). It drops
@@ -143,8 +164,11 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     them and hits for `BEAR_DAMAGE` (2) every `BEAR_ATTACK_COOLDOWN` (1.2 s) (`Animal::try_attack`; dying respawns
     the player). A bear that is hurt charges the player from any distance for `ANIMAL_ALARM_SECONDS`. Bears never
     chase deer or quail. At most `MAX_BEAR` (2) live nearby; spawns are weighted by `SPAWN_WEIGHT_*`.
+  - A **will-o-whisp** appears only while the world is night. It floats about three blocks above the terrain,
+    flees at `WILL_O_WHISP_FLEE_SPEED` when the player comes within `WILL_O_WHISP_FLEE_DISTANCE`, and has no
+    attacks, drops or weapon interaction yet. At most `MAX_WILL_O_WHISP` live nearby.
   - Animals hop up one-block steps and turn aside from taller obstacles. They spawn out of sight
-    (`ANIMAL_SPAWN_MIN_DISTANCE`..`MAX`) up to `MAX_DEER`/`MAX_QUAIL`/`MAX_BEAR`, are simulated within
+    (`ANIMAL_SPAWN_MIN_DISTANCE`..`MAX`) up to each `MAX_*` limit, are simulated within
     `ANIMAL_UPDATE_DISTANCE`, and vanish beyond `ANIMAL_DESPAWN_DISTANCE`. They are not saved.
 - **Hunting**: only an **axe** (stone, copper, bronze or iron: `AXE_DAMAGE` 4, then one more each), a **bronze mallet** or a **bow** hurts animals (the mallet does `MALLET_DAMAGE` 5 per swing, `MALLET_COOLDOWN` 0.6 s, and is also the only tool that breaks boulders); hands, sticks, stones and the rest do not.
   - Axe: with the axe held, an animal under the crosshair within `AXE_REACH` (and not behind a solid
@@ -189,11 +213,11 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `main.rs` | Module list, window config, top-level loop dispatching on `app::Mode`. |
 | `config.rs` | **All tunable constants** (sizes, speeds, drop chances, clearing, hill, fire, cooking, animal and hunting numbers). Add new tunables here. |
 | `block.rs` | `Block` enum, block shapes (`parts`, `bounds`), and rules (`hand_breakable`, `can_break_with`, `opaque`, `collides`). |
-| `item.rs` | `ItemKind` (name, save id, colour, `placeable_block`), `ItemStack`, and `drops_for(block, rng)`. |
+| `item.rs` | `ItemKind` (name, save id, colour, `placeable_block`), `ItemStack`, and block drop rolls (`drops_for*`). |
 | `inventory.rs` | `Inventory`: `add`, `remove`, `take_from_slot`, `count`, `move_stack`. Pure logic, fully tested. |
 | `recipe.rs` | `RECIPES` table, `craftable(&Inventory)`, `craft(&mut Inventory, &Recipe)`. |
 | `game.rs` | `Game`: one running session (world, player, inventory, items, animals, arrows, selected slot, `mine`, `update_mining`, `update_health`, `eat_held`, `use_held` incl. cooking, `try_ignite`, `swing_melee`, `shoot_bow`, `update_animals`, `update_arrows`). |
-| `animal.rs` | `Animal`, `AnimalKind`, `Mode`: deer, quail and bear behaviour (wander, flee, fly, charge, bear attacks, hop steps), health, drops. Pure logic. |
+| `animal.rs` | `Animal`, `AnimalKind`, `Mode`: deer, quail, bear, rabbit, moose and will-o-whisp behaviour, health and drops. Pure logic. |
 | `arrow.rs` | `Arrow`: flight under gravity and `Fate` (hit animal, hit block, expired). Pure logic. |
 | `animal_draw.rs` | Box models for animals, and arrows (thin wrapper over `draw_box`). |
 | `play.rs` | The in-game frame: input, simulation step, 3D render, HUD. Calls into `hud.rs` and `effects.rs`. |
@@ -318,7 +342,7 @@ Old item ids `copper_ore` and `tin_ore` load as `stone` and `pebble` (what smelt
 
 Item ids come from `ItemKind::id()`: `stick`, `pebble`, `stone`, `log`, `stone_axe`, `grass`, `berries`,
 `twine`, `bow_drill`, `charcoal`, `plank`, `feather`, `bow`, `arrow`, `venison`, `poultry`, `cooked_venison`,
-`cooked_poultry`, `leather`, `bear_meat`, `cooked_bear_meat`, `bear_pelt`, `bellows`, `ash`, `copper`, `tin`, `iron`, `clay`, `iron_ore`, `leather_cord`, `bronze`, `bronze_mallet`, `clay_forge`, `rabbit_meat`, `cooked_rabbit`, `moose_meat`, `cooked_moose`, `rabbit_foot`, `copper_axe`, `bronze_axe`, `iron_axe`, `tin_pot`, `clay_jar`, `water_jar`, `venison_stew`, `poultry_stew`, `bear_stew`, `rabbit_stew`, `moose_stew`. Block ids come from `Block::id()`: `placed_log`,
+`cooked_poultry`, `leather`, `bear_meat`, `cooked_bear_meat`, `bear_pelt`, `bellows`, `ash`, `copper`, `tin`, `iron`, `clay`, `iron_ore`, `leather_cord`, `bronze`, `bronze_mallet`, `clay_forge`, `rabbit_meat`, `cooked_rabbit`, `moose_meat`, `cooked_moose`, `rabbit_foot`, `peep_stone`, `holly_rod`, `copper_axe`, `bronze_axe`, `iron_axe`, `tin_pot`, `clay_jar`, `water_jar`, `venison_stew`, `poultry_stew`, `bear_stew`, `rabbit_stew`, `moose_stew`, `red_berry_stew`, `purple_berry_stew`, `sling`, `loadstone`, `compass`. Block ids come from `Block::id()`: `placed_log`,
 `placed_pebble`, `placed_stone`, `fire`, `charcoal`, `planks`, `embers`, `ash`, `clay_forge`, `forge_charged`, `forge_lit`. Animals and arrows are not saved. The selected hotbar slot is not saved (it resets to slot 1 on load).
 
 ## How to extend
@@ -340,6 +364,10 @@ colours, and the `hand_breakable`/`breakable`/`can_break_with`/`opaque`/`collide
 
 **New tool or held-item behaviour**: read `game.held_item()`; extend `Block::can_break_with` for
 tool-gated breaking, or add an action next to `Game::try_ignite` and call it from `play::handle_breaking`.
+
+**New creature**: add the `AnimalKind` data and movement rules in `animal.rs`, add spawn limits and
+night/day gating in `Game::spawn_wildlife`, add a model in `animal_draw.rs`, then decide explicitly whether
+the creature can be hunted, attacks, or drops anything. Add focused behaviour tests before wiring it into the UI.
 
 ## Known limitations
 

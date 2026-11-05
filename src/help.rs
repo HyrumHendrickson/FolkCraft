@@ -59,7 +59,7 @@ pub fn help_lines() -> Vec<Line> {
         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
         item("Stones and pebbles lie on the ground everywhere, and on the river bed under the water. Hold left mouse on one to pick it up."),
-        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, and boulders a {}% chance to drop Gold Ore. Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass, which does nothing yet.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE)),
+        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, boulders a {}% chance to drop Gold Ore, pebbles a {}% chance to add a Peep Stone, and leaves or pine needles a {}% chance to add a Holly Rod. Peep Stones and Holly Rods do nothing yet. Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass, which does nothing yet.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE, RABBIT_FOOT_PEEP_STONE_CHANCE, RABBIT_FOOT_HOLLY_ROD_CHANCE)),
         item(format!("Clay lies on the river bed. Hold left mouse on a lump to dig {CLAY_DROP} clay out of it. Clay makes a clay forge.")),
         item(format!(
             "Boulders are big grey rocks, a little wider than a block, scattered on the ground (more on hills). Only a Bronze Mallet breaks one: hold left mouse on it for {} seconds. It drops a stone, a pebble and {BOULDER_IRON_MIN} to {BOULDER_IRON_MAX} iron ore.",
@@ -128,6 +128,9 @@ pub fn help_lines() -> Vec<Line> {
         item(format!(
             "Moose ({MOOSE_HEALTH} health) do not run. Leave one alone and it ignores you, but once you hurt it, it chases you until one of you is dead or you are {} blocks away, and hits for {MOOSE_DAMAGE}. A moose drops {MOOSE_MEAT_DROP} moose meat and {MOOSE_LEATHER_DROP} leather.",
             MOOSE_GIVE_UP_DISTANCE as i32
+        )),
+        item(format!(
+            "Will-o-whisps appear at night. They float above the ground and flee at {WILL_O_WHISP_FLEE_SPEED} blocks per second when you come within {WILL_O_WHISP_FLEE_DISTANCE} blocks. They have no attacks or drops yet."
         )),
         item("A blow throws the animal back, and a blow that hurts you (or a burn) throws you back, so you can see when something lands."),
         item("An arrow that hits an animal is used up. An arrow that misses lands on the ground: walk over it to pick it up again. Feathers are what you need to make more."),
