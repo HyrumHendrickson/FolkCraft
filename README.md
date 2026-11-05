@@ -232,7 +232,8 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `dropped.rs` | Items on the ground: spawn, physics, pickup, drawing (`draw_box` is shared with `effects.rs`). |
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
 | `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
-| `horizen.rs` | `Dimension` and the Horizen's land: empty flat ground with ponds. |
+| `horizen.rs` | `Dimension` and the Horizen's land: empty flat ground with ponds and the arrival pool. |
+| `tornado.rs` | The Horizen's one daytime fire tornado: movement, target capture, collision and damage timing. |
 | `landmarks.rs` | `Lake`, `Mountain`, `GrandCastle`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
 | `river.rs` | `is_river`, `river_near`: rivers as zero contours of a smooth noise field. Pure functions of seed and column. |
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG. |
@@ -449,10 +450,13 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Axes** deal `AXE_DAMAGE` 4, `COPPER_AXE_DAMAGE` 6, `BRONZE_AXE_DAMAGE` 8, `IRON_AXE_DAMAGE` 10.
 - **Moose** drop `Antlers`; Antlers + 2 Gold craft a `BoneTotem`. Held by day it trails to the single `Well`, by night to the
   single `Graveyard` (`try_show_well_or_graveyard`, `trail_path`).
-- **Well:** 4x4 water sunk to the stone floor, one-block rim. Feet below `WELL_FALL_DEPTH` inside it calls `Game::enter_horizen`.
+- **Well:** 4x4 water sunk to the stone floor, one-block rim. `Game::update_dimension` waits for the player's feet to collide with that floor before starting the blacked-out transfer.
 - **Horizen** (`horizen.rs`): a second `World` (`World::dimension`), kept in `Game::away` while the player is elsewhere, with its own
-  edits and items. No wildlife, no landmarks, day/night potions ignored, split sky (`sky::draw_horizen_sky`). Dying there returns the
-  player to the overworld start. Saves: `dimension horizen` plus `h <record>` lines.
+  edits, items and day/night state. It has no wildlife or landmarks. The well only transports the player after their feet hit the
+  stone floor; the screen blacks out and the player appears on the dedicated arrival pool. At night the stars rotate quickly.
+  By day, `Game::tornado` holds one fire tornado: it spawns every `HORIZEN_TORNADO_INTERVAL` seconds 40 blocks away, travels to
+  the player's captured spawn position, stays there, deals periodic damage on contact, and is cleared by nightfall. Saves: `dimension
+  horizen` plus `h <record>` lines, including the Horizen's own `time` record.
 - **Wearing:** `Game::worn` holds one `PeltCloak` or `RoyalArmor` (right click, or the Worn slot in the inventory; saved as `worn`).
   A cloak sets `Animal::pacified` on bears that are not `provoked`; the armour halves damage, rounding up.
 - **Grand castle by day and night:** `grand_castle_cell` (night whole, gate and throne-room door shut, stair works, armour in the

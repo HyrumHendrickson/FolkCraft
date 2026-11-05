@@ -20,7 +20,7 @@
 //!   recipe    - crafting recipes            hud       - hotbar, inventory screen, crafting UI
 //!   help      - the how-to-play screen      horizen   - the second dimension, behind the well
 //!   game      - a running session (mining, placing, fire, held item, pickup)
-//!   save      - persistence                 app       - shared app state
+//!   save      - persistence                 tornado   - the Horizen's moving fire tornado
 //!   sky       - the sun and the clouds
 //!   ui        - menu widgets                menu      - world list / create
 //!   play      - in-game loop and rendering
@@ -52,6 +52,7 @@ mod rng;
 mod save;
 mod sky;
 mod terrain;
+mod tornado;
 mod ui;
 mod world;
 

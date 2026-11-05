@@ -3,9 +3,9 @@
 //! A dimension is a world of its own. The Horizen shares nothing with the overworld but the player and what they
 //! carry: its land, its edits (blocks put down, fires lit) and its items on the ground are separate, and none of the
 //! overworld's creatures live there. For now there is nothing in it but empty flat land, at the height of the
-//! overworld's plain, broken by many small ponds. Its sky is split in two: the sun and the clouds fill one half and the
-//! moon and the stars the other (`sky.rs`), it never changes between day and night, and the compass, the peep stone and
-//! the bone totem show nothing there.
+//! overworld's plain, broken by many small ponds. A dedicated pool surrounds the arrival point so the player appears
+//! in water after the well transition. The Horizen has its own ordinary day/night state; the compass, peep stone and
+//! bone totem still show nothing there.
 //!
 //! Like the overworld, the land is a pure function of the world seed, here of the pond of each square of
 //! `HORIZEN_POND_CELL` blocks.
@@ -65,6 +65,12 @@ pub fn pond_in_cell(seed: i64, cx: i32, cz: i32) -> Option<Pond> {
 
 /// Whether a pond covers the column (wx, wz).
 pub fn is_pond(seed: i64, wx: i32, wz: i32) -> bool {
+    let (sx, sz) = (HORIZEN_SPAWN.0 as f32 + 0.5, HORIZEN_SPAWN.1 as f32 + 0.5);
+    let dx = wx as f32 + 0.5 - sx;
+    let dz = wz as f32 + 0.5 - sz;
+    if dx * dx + dz * dz <= HORIZEN_ARRIVAL_POOL_RADIUS.powi(2) {
+        return true;
+    }
     pond_in_cell(seed, wx.div_euclid(HORIZEN_POND_CELL), wz.div_euclid(HORIZEN_POND_CELL)).map_or(false, |p| p.contains(wx, wz))
 }
 
@@ -139,13 +145,10 @@ mod tests {
     }
 
     #[test]
-    fn the_arrival_point_is_dry_with_room_round_it() {
+    fn the_arrival_point_is_a_pool_with_room_round_it() {
         for seed in 0..40 {
-            for dz in -10..=10 {
-                for dx in -10..=10 {
-                    assert!(!is_pond(seed, HORIZEN_SPAWN.0 + dx, HORIZEN_SPAWN.1 + dz), "seed {seed}: water at {dx},{dz}");
-                }
-            }
+            assert!(is_pond(seed, HORIZEN_SPAWN.0, HORIZEN_SPAWN.1), "seed {seed}: the arrival pool is missing");
+            assert!(!is_pond(seed, HORIZEN_SPAWN.0 + 8, HORIZEN_SPAWN.1), "seed {seed}: the pool is too large");
         }
     }
 

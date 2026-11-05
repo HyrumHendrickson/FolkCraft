@@ -168,6 +168,9 @@ impl World {
                 // Above the tree line the mountain is bare rock, not grass.
                 Block::Dirt if fi == 2 && y > GROUND_TOP + TREE_LINE_RISE => (r, g, b) = (0.46, 0.43, 0.40),
                 Block::Dirt if fi == 2 => (r, g, b) = (0.28, 0.58, 0.20),
+                // Night makes the tree canopy look lifeless instead of merely turning a green tree dark.
+                Block::Leaves if self.night => (r, g, b) = (0.25, 0.23, 0.17),
+                Block::Needles if self.night => (r, g, b) = (0.19, 0.21, 0.16),
                 Block::Leaves if (h >> 20) % 100 < 30 => (r, g, b) = (0.24, 0.62, 0.20),
                 Block::Needles if (h >> 20) % 100 < 30 => (r, g, b) = (0.12, 0.44, 0.27),
                 _ => {}

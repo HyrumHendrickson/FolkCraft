@@ -98,7 +98,7 @@ pub struct World {
     pub night: bool,
     /// The lakes, mountains and rainbow the player has brought into the world (persisted to disk).
     pub landmarks: Landmarks,
-    /// Which dimension this world is. The Horizen has no landmarks, no animals and no change of day and night.
+    /// Which dimension this world is. The Horizen has no landmarks or animals, but it has its own day/night state.
     pub dimension: Dimension,
 }
 

@@ -6,6 +6,7 @@ use crate::block::Block;
 use crate::config::*;
 use crate::dropped::draw_box;
 use crate::landmarks::Rainbow;
+use crate::tornado::FireTornado;
 use crate::world::{in_render_range, World};
 
 
@@ -101,6 +102,42 @@ pub fn draw_pots(world: &World, player_chunk: (i32, i32)) {
     }
 }
 
+/// Draw the active Horizen hazard as a tall, layered spiral of fire. The simulation keeps only one tornado alive;
+/// once it reaches its recorded target these layers continue to whirl in place until the next spawn.
+pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i32)) {
+    if !in_render_range(player_chunk, World::chunk_of_pos(tornado.pos)) {
+        return;
+    }
+    for layer in 0..9 {
+        let t = layer as f32 / 8.0;
+        let radius = HORIZEN_TORNADO_RADIUS * (1.0 - 0.72 * t);
+        let angle = time * 4.0 + layer as f32 * 1.35;
+        let centre = tornado.pos
+            + vec3(angle.cos() * radius * 0.48, t * HORIZEN_TORNADO_HEIGHT + 0.35, angle.sin() * radius * 0.48);
+        let fire = if layer % 2 == 0 {
+            Color::new(1.0, 0.18 + 0.12 * (1.0 - t), 0.015, 0.88)
+        } else {
+            Color::new(1.0, 0.62, 0.04, 0.82)
+        };
+        draw_box(centre, vec3(radius, HORIZEN_TORNADO_HEIGHT / 18.0, radius), angle, fire);
+        if layer % 2 == 0 {
+            draw_box(
+                centre + vec3(0.0, 0.18, 0.0),
+                vec3(radius * 0.55, HORIZEN_TORNADO_HEIGHT / 24.0, radius * 0.55),
+                -angle * 1.4,
+                Color::new(1.0, 0.90, 0.18, 0.70),
+            );
+        }
+    }
+    // A dark, translucent cap makes the top read as smoke rather than a stack of unrelated boxes.
+    draw_box(
+        tornado.pos + vec3(0.0, HORIZEN_TORNADO_HEIGHT + 0.35, 0.0),
+        vec3(HORIZEN_TORNADO_RADIUS * 0.42, 0.32, HORIZEN_TORNADO_RADIUS * 0.42),
+        time * 0.7,
+        Color::new(0.16, 0.10, 0.07, 0.42),
+    );
+}
+
 /// The colours of the rainbow, outermost first.
 pub const RAINBOW_COLORS: [(f32, f32, f32); 7] = [
     (0.92, 0.16, 0.16),
@@ -167,7 +204,10 @@ pub fn draw_rainbow(world: &World, rainbow: &Rainbow, time: f32) {
     let (gx, gy, gz) = rainbow.gold;
     let to = vec3(gx as f32 + 0.5, gy as f32 + 0.3, gz as f32 + 0.5);
     let blocks = rainbow_blocks(from, to);
-    let filled: std::collections::HashSet<(i32, i32, i32)> = blocks.iter().map(|b| b.cell).collect();
+    // Keep the band owning each cell. The old renderer culled a face whenever *any* rainbow block touched it,
+    // which enclosed middle colours behind neighbouring bands. Faces between different bands are part of the
+    // rainbow's visible colour separation and must remain, especially when the camera is close to the arch.
+    let filled: std::collections::HashMap<(i32, i32, i32), usize> = blocks.iter().map(|b| (b.cell, b.band)).collect();
     // The neighbour each face looks at, and the corners of the face (unit cube).
     const FACES: [((i32, i32, i32), [(f32, f32, f32); 4]); 6] = [
         ((1, 0, 0), [(1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (1.0, 1.0, 1.0), (1.0, 0.0, 1.0)]),
@@ -186,11 +226,15 @@ pub fn draw_rainbow(world: &World, rainbow: &Rainbow, time: f32) {
     };
     for block in &blocks {
         let (r, g, b) = RAINBOW_COLORS[block.band];
-        let alpha = 0.42 + 0.10 * (time * 1.7 + block.band as f32 * 0.6).sin();
+        let alpha = 0.78 + 0.12 * (time * 1.7 + block.band as f32 * 0.6).sin();
         let (cx, cy, cz) = block.cell;
         for &((nx, ny, nz), corners) in FACES.iter() {
-            if filled.contains(&(cx + nx, cy + ny, cz + nz)) {
-                continue;
+            match filled.get(&(cx + nx, cy + ny, cz + nz)) {
+                // Same-colour neighbours share their internal face.
+                Some(&other) if other == block.band => continue,
+                // At a colour boundary, let the inner band own the face so every colour has a visible surface.
+                Some(&other) if other > block.band => continue,
+                _ => {}
             }
             // A little shading by direction, so the blocks read as blocks.
             let shade = match (nx, ny, nz) {

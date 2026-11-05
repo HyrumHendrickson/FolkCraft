@@ -45,9 +45,9 @@ pub const AUTOSAVE_INTERVAL: f32 = 20.0;
 /// The first `HOTBAR_SLOTS` inventory slots form the hotbar.
 pub const INVENTORY_SLOTS: usize = 36;
 pub const HOTBAR_SLOTS: usize = 9;
-pub const MAX_STACK: u32 = 64;
+pub const MAX_STACK: u32 = 100;
 /// Chance (percent) that leaves or pine needles drop a stick.
-pub const LEAF_STICK_CHANCE: u64 = 50;
+pub const LEAF_STICK_CHANCE: u64 = 70;
 /// Items lying on the ground can be picked up once they are this old.
 pub const PICKUP_DELAY: f32 = 0.5;
 /// Horizontal pickup distance in blocks.
@@ -102,7 +102,7 @@ pub const RELIEF_PLACEMENT_TRIES: i32 = 8;
 // --- Landmarks: lakes, mountains and the rainbow -----------------------------------------
 
 /// A walk this many chunks long through a river, without leaving the water, ends at a lake.
-pub const LAKE_TREK_CHUNKS: i32 = 10;
+pub const LAKE_TREK_CHUNKS: i32 = 8;
 /// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter). The lake
 /// is large: about a hundred blocks from shore to shore each way.
 pub const LAKE_RADIUS: i32 = 130;
@@ -122,7 +122,7 @@ pub const LAKE_CHANNEL_HALF_WIDTH: f32 = 2.5;
 pub const LAKE_DEPTH: i32 = RIVER_DEPTH;
 
 /// Following a held compass this many chunks leads to a mountain.
-pub const COMPASS_TREK_CHUNKS: i32 = 10;
+pub const COMPASS_TREK_CHUNKS: i32 = 8;
 /// The compass needle points this way: north, which is towards smaller z.
 pub const COMPASS_NORTH_BEARING: f32 = -std::f32::consts::FRAC_PI_2;
 /// Wide enough that the slope never exceeds one block per column, so the summit can be climbed by jumping.
@@ -232,22 +232,38 @@ pub const BREAK_SECONDS_ARMOR: f32 = 1.0;
 /// radii, and one block deep like a river. No pond comes within `HORIZEN_SPAWN_CLEARANCE` blocks of where the player
 /// arrives.
 pub const HORIZEN_POND_CELL: i32 = 22;
-pub const HORIZEN_POND_CHANCE: u64 = 70;
+pub const HORIZEN_POND_CHANCE: u64 = 85;
 pub const HORIZEN_POND_MIN_RADIUS: f32 = 2.5;
-pub const HORIZEN_POND_MAX_RADIUS: f32 = 5.5;
+pub const HORIZEN_POND_MAX_RADIUS: f32 = 7.5;
 pub const HORIZEN_SPAWN_CLEARANCE: f32 = 12.0;
-/// Where the player arrives in the Horizen (and the nearest dry spot to it), as a column.
+/// Where the player arrives in the Horizen, at the centre of its dedicated arrival pool, as a column.
 pub const HORIZEN_SPAWN: (i32, i32) = (CHUNK_SIZE / 2, CHUNK_SIZE / 2);
-/// A player whose feet sink below this height inside the well has fallen in (the water's surface is `GROUND_TOP + 1`).
-pub const WELL_FALL_DEPTH: f32 = (GROUND_TOP + 1) as f32 - 1.2;
+/// The player must be standing on the well's stone floor before the fall is complete.
+pub const WELL_FLOOR_Y: f32 = STONE_LAYERS as f32;
+/// The pool shown immediately after arriving in the Horizen.
+pub const HORIZEN_ARRIVAL_POOL_RADIUS: f32 = 3.5;
+/// How long the black screen lasts while the player passes through the well.
+pub const HORIZEN_TRANSITION_SECONDS: f32 = 1.2;
 
 // --- Plants, drops and fire -------------------------------------------------------------
 
-pub const GRASS_DROP_CHANCE: u64 = 70;
+pub const GRASS_DROP_CHANCE: u64 = 80;
 pub const BUSH_BERRY_ROLLS: u32 = 5;
 pub const BUSH_BERRY_CHANCE: u64 = 50;
 pub const PURPLE_BUSH_ONE_IN: u64 = 10;
 pub const FIRE_SECONDS: f32 = 60.0;
+
+// --- Horizen fire tornadoes -------------------------------------------------------------
+
+/// A new fire tornado appears in the Horizen this often during the day.
+pub const HORIZEN_TORNADO_INTERVAL: f32 = 30.0;
+/// The tornado begins this far from the player and travels toward the position it recorded at spawn.
+pub const HORIZEN_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
+pub const HORIZEN_TORNADO_SPEED: f32 = 7.0;
+pub const HORIZEN_TORNADO_RADIUS: f32 = 1.8;
+pub const HORIZEN_TORNADO_HEIGHT: f32 = 6.0;
+pub const HORIZEN_TORNADO_DAMAGE: u32 = 2;
+pub const HORIZEN_TORNADO_DAMAGE_INTERVAL: f32 = 1.0;
 
 // --- Block breaking ---------------------------------------------------------------------
 
@@ -320,7 +336,7 @@ pub const ANIMAL_SPAWN_MIN_DISTANCE: f32 = 22.0;
 pub const ANIMAL_SPAWN_MAX_DISTANCE: f32 = 60.0;
 pub const ANIMAL_SPAWN_INTERVAL: f32 = 1.5;
 
-pub const DEER_HEALTH: i32 = 6;
+pub const DEER_HEALTH: i32 = 16;
 pub const DEER_WALK_SPEED: f32 = 1.6;
 pub const DEER_RUN_SPEED: f32 = 8.0;
 pub const DEER_VENISON_DROP: u32 = 2;
@@ -328,7 +344,7 @@ pub const DEER_LEATHER_DROP: u32 = 1;
 pub const MAX_DEER: usize = 6;
 pub const SPAWN_WEIGHT_DEER: u64 = 30;
 
-pub const QUAIL_HEALTH: i32 = 2;
+pub const QUAIL_HEALTH: i32 = 4;
 pub const QUAIL_WALK_SPEED: f32 = 1.0;
 pub const QUAIL_FLY_SPEED: f32 = 7.0;
 pub const QUAIL_FLY_HEIGHT: f32 = 9.0;
@@ -343,7 +359,7 @@ pub const MAX_QUAIL: usize = 9;
 pub const SPAWN_WEIGHT_QUAIL: u64 = 55;
 
 /// Twice the health bears had before (14).
-pub const BEAR_HEALTH: i32 = 28;
+pub const BEAR_HEALTH: i32 = 50;
 pub const BEAR_WALK_SPEED: f32 = 2.2;
 pub const BEAR_RUN_SPEED: f32 = 5.4;
 pub const BEAR_NOTICE_DISTANCE: f32 = 40.0;
@@ -391,7 +407,7 @@ pub const SPAWN_WEIGHT_WILL_O_WHISP: u64 = 100;
 
 // --- Rabbits, moose and stews -----------------------------------------------------------
 
-pub const RABBIT_HEALTH: i32 = 2;
+pub const RABBIT_HEALTH: i32 = 4;
 pub const RABBIT_WALK_SPEED: f32 = 1.4;
 pub const RABBIT_RUN_SPEED: f32 = DEER_RUN_SPEED;
 pub const RABBIT_MEAT_DROP: u32 = 1;
@@ -399,7 +415,7 @@ pub const RABBIT_FOOT_CHANCE: u64 = 25;
 pub const MAX_RABBIT: usize = 9;
 pub const SPAWN_WEIGHT_RABBIT: u64 = 55;
 
-pub const MOOSE_HEALTH: i32 = 20;
+pub const MOOSE_HEALTH: i32 = 50;
 pub const MOOSE_WALK_SPEED: f32 = 1.5;
 pub const MOOSE_RUN_SPEED: f32 = 5.8;
 pub const MOOSE_MEAT_DROP: u32 = 4;
@@ -419,13 +435,13 @@ pub const STEW_SECONDS: f32 = 12.0;
 // --- Hunting and knockback --------------------------------------------------------------
 
 /// Damage of one blow of each axe: stone, copper, bronze, iron. Every kind of axe hits for a different amount.
-pub const AXE_DAMAGE: i32 = 4;
-pub const COPPER_AXE_DAMAGE: i32 = 6;
-pub const BRONZE_AXE_DAMAGE: i32 = 8;
-pub const IRON_AXE_DAMAGE: i32 = 10;
-pub const MALLET_DAMAGE: i32 = 5;
-pub const ARROW_DAMAGE: i32 = 3;
-pub const SLING_DAMAGE: i32 = 2;
+pub const AXE_DAMAGE: i32 = 6;
+pub const COPPER_AXE_DAMAGE: i32 = 8;
+pub const BRONZE_AXE_DAMAGE: i32 = 10;
+pub const IRON_AXE_DAMAGE: i32 = 12;
+pub const MALLET_DAMAGE: i32 = 6;
+pub const ARROW_DAMAGE: i32 = 8;
+pub const SLING_DAMAGE: i32 = 4;
 pub const SLING_COOLDOWN: f32 = 0.8;
 pub const SLING_SPEED: f32 = 26.0;
 pub const AXE_REACH: f32 = 3.5;
@@ -466,3 +482,7 @@ pub const STAR_RADIUS: f32 = 1.8;
 pub const MOON_ELEVATION_DEGREES: f32 = 44.0;
 pub const MOON_BEARING_DEGREES: f32 = 55.0;
 pub const MOON_RADIUS: f32 = 30.0;
+/// The Horizen's night stars orbit quickly instead of hanging still.
+pub const HORIZEN_STAR_ROTATION_SPEED: f32 = 2.4;
+/// A night scene receives a final 20% brightness reduction, including dynamic models and water.
+pub const NIGHT_SCENE_BRIGHTNESS: f32 = 0.80;

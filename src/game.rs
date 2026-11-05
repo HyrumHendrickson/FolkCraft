@@ -16,6 +16,7 @@ use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, 
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
+use crate::tornado::FireTornado;
 use crate::world::{Pot, ray_box, Hit, Pos, World};
 
 /// A block being broken. Progress resets when the target, the block or the held tool changes,
@@ -106,6 +107,12 @@ pub struct Game {
     pub worn: Option<ItemKind>,
     /// The other dimension, once the player has been to the Horizen (see `Away`).
     pub away: Option<Away>,
+    /// The one fire tornado currently active in the Horizen, if it is daytime there.
+    pub tornado: Option<FireTornado>,
+    /// Seconds since the previous Horizen tornado spawned.
+    pub tornado_timer: f32,
+    /// Fade in progress after the player reaches the bottom of the well.
+    pub horizen_transition: Option<f32>,
 }
 
 impl Game {
@@ -135,7 +142,8 @@ impl Game {
             let mut hw = World::with_edits(info.seed, h.removed, h.placed, h.fires)
                 .with_cooking(h.cooking)
                 .with_glow(h.glow)
-                .with_pots(h.pots);
+                .with_pots(h.pots)
+                .with_night(h.night);
             hw.dimension = Dimension::Horizen;
             Away { world: hw, items: h.items, player: h.player }
         });
@@ -174,6 +182,9 @@ impl Game {
             blackout: None,
             worn,
             away,
+            tornado: None,
+            tornado_timer: 0.0,
+            horizen_transition: None,
         }
     }
 
@@ -424,9 +435,10 @@ impl Game {
 
     /// Turn the world to night or to day, behind a blackout (see `Blackout`). Nothing happens if it already is.
     fn set_night(&mut self, night: bool) {
-        if self.in_horizen() {
-            self.toasts.push("The sky of the Horizen never changes".to_string());
-            return;
+        // A nightfall immediately removes the daytime tornado, even while the blackout is fading in.
+        if night && self.in_horizen() {
+            self.tornado = None;
+            self.tornado_timer = 0.0;
         }
         match self.blackout.as_mut() {
             Some(b) => {
@@ -444,6 +456,10 @@ impl Game {
     fn apply_night(&mut self, night: bool) {
         let changed = self.world.night != night;
         self.world.set_night(night);
+        if self.in_horizen() && night {
+            self.tornado = None;
+            self.tornado_timer = 0.0;
+        }
         // A gate or door that has shut where the player stands puts them beside it instead.
         self.player.eject_from_blocks(&self.world);
         if changed {
@@ -1145,14 +1161,18 @@ impl Game {
 
     // --- The Horizen ---------------------------------------------------------------------
 
-    /// Fall into the well and the player is taken to the Horizen: a player over the water of the well whose feet have
-    /// sunk below `WELL_FALL_DEPTH`.
+    /// Finish a well fall only when the player is standing on its stone floor.
     pub fn update_dimension(&mut self) {
         if self.in_horizen() {
             return;
         }
         let p = self.player.pos;
-        if p.y < WELL_FALL_DEPTH && self.world.landmarks.is_well(p.x.floor() as i32, p.z.floor() as i32) {
+        // Water is deliberately non-solid, so `on_ground` becomes true only when the falling player reaches the
+        // stone floor. This prevents a shallow fall through the well from teleporting early.
+        if self.player.on_ground
+            && p.y <= WELL_FLOOR_Y + 0.05
+            && self.world.landmarks.is_well(p.x.floor() as i32, p.z.floor() as i32)
+        {
             self.enter_horizen();
         }
     }
@@ -1176,19 +1196,21 @@ impl Game {
         self.arrows.clear();
         self.mining = None;
         self.blackout = None;
+        self.tornado = None;
+        self.tornado_timer = 0.0;
         self.treks = Treks::new();
         self.world.stream_chunks(self.player.pos);
         self.world.rebuild_dirty(self.player.pos, usize::MAX);
         self.player.lift_out_of_blocks(&self.world);
     }
 
-    /// Fall into the Horizen. The player arrives on dry land near its middle.
+    /// Fall into the Horizen. The player is swapped into its arrival pool while the screen is black.
     pub fn enter_horizen(&mut self) {
         if self.in_horizen() {
             return;
         }
-        // They arrive at the Horizen's own spot (or where they last stood there), not where they fell.
         self.swap_dimension();
+        self.horizen_transition = Some(0.0);
         self.toasts.push("You fall through the water into the Horizen.".to_string());
     }
 
@@ -1198,6 +1220,28 @@ impl Game {
             return;
         }
         self.swap_dimension();
+        self.horizen_transition = None;
+    }
+
+    /// Advance the black screen after a well fall. The player has already appeared in the arrival pool underneath it.
+    pub fn update_horizen_transition(&mut self, dt: f32) {
+        let Some(mut elapsed) = self.horizen_transition else { return };
+        elapsed += dt;
+        self.horizen_transition = (elapsed < HORIZEN_TRANSITION_SECONDS).then_some(elapsed);
+    }
+
+    /// Darkness of the well transition, from clear to black and back to clear.
+    pub fn horizen_transition_darkness(&self) -> f32 {
+        let Some(elapsed) = self.horizen_transition else { return 0.0 };
+        let t = (elapsed / HORIZEN_TRANSITION_SECONDS).clamp(0.0, 1.0);
+        const FADE_SHARE: f32 = 0.30;
+        if t < FADE_SHARE {
+            t / FADE_SHARE
+        } else if t > 1.0 - FADE_SHARE {
+            (1.0 - t) / FADE_SHARE
+        } else {
+            1.0
+        }
     }
 
     /// Put a new animal on the ground at column (x, z). Fails when that column is not loaded, is under a river or
@@ -1280,6 +1324,10 @@ impl Game {
     /// of the player and any bear; a bear only ever reacts to the player.
     pub fn update_animals(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        if self.in_horizen() {
+            self.update_horizen_tornado(dt);
+            return;
+        }
         let player = self.player.pos;
         // Will-o-whisps are drawn to a player with a holly rod in the hotbar. One that is bonded and has been left
         // far behind (the player ran off, or started again at the beginning) catches up at once.
@@ -1329,6 +1377,65 @@ impl Game {
             self.spawn_timer = 0.0;
             self.spawn_wildlife();
         }
+    }
+
+    /// Spawn and advance the Horizen's single daytime tornado. The target is captured at spawn time, so walking
+    /// away does not make the tornado chase the player. It is replaced, not removed, by the next 30-second spawn.
+    fn update_horizen_tornado(&mut self, dt: f32) {
+        if self.world.night {
+            self.tornado = None;
+            self.tornado_timer = 0.0;
+            return;
+        }
+        self.tornado_timer += dt;
+        if self.tornado_timer >= HORIZEN_TORNADO_INTERVAL {
+            self.tornado_timer = 0.0;
+            self.spawn_horizen_tornado();
+        }
+        let player = self.player.pos;
+        if let Some(tornado) = self.tornado.as_mut() {
+            tornado.update(dt);
+        }
+        let mut damage = false;
+        let mut source = player;
+        if let Some(tornado) = self.tornado.as_mut() {
+            if tornado.hits(player) {
+                tornado.damage_timer += dt;
+                if tornado.damage_timer >= HORIZEN_TORNADO_DAMAGE_INTERVAL {
+                    tornado.damage_timer = 0.0;
+                    damage = true;
+                    source = tornado.pos;
+                }
+            } else {
+                tornado.damage_timer = 0.0;
+            }
+        }
+        if damage && !self.hurt_player(HORIZEN_TORNADO_DAMAGE, "The fire tornado burns you") {
+            self.knock_player(source);
+        }
+    }
+
+    fn spawn_horizen_tornado(&mut self) {
+        let target = self.player.pos;
+        let mut angle = self.rng.unit() * std::f32::consts::TAU;
+        let mut x = (target.x + angle.cos() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
+        let mut z = (target.z + angle.sin() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
+        // Prefer dry ground, but preserve the exact forty-block ring if every tested direction is a pond.
+        for _ in 0..16 {
+            if !self.world.is_wet_column(x, z) {
+                break;
+            }
+            angle += std::f32::consts::TAU / 16.0;
+            x = (target.x + angle.cos() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
+            z = (target.z + angle.sin() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
+        }
+        let y = (self.world.ground_top(x, z) + 1) as f32;
+        let start = vec3(
+            target.x + angle.cos() * HORIZEN_TORNADO_SPAWN_DISTANCE,
+            y,
+            target.z + angle.sin() * HORIZEN_TORNADO_SPAWN_DISTANCE,
+        );
+        self.tornado = Some(FireTornado::new(start, target));
     }
 
     /// Advance dropped items and let the player pick up whatever is within reach.
@@ -4209,18 +4316,55 @@ mod totem_horizen_and_wear_tests {
     }
 
     #[test]
-    fn falling_into_the_well_takes_the_player_to_a_separate_flat_world_with_ponds_and_no_creatures() {
+    fn the_well_does_not_transport_the_player_until_the_stone_floor_is_hit() {
+        let mut g = game(30);
+        let well = Well { x: 40, z: 40 };
+        g.world.add_well(well);
+        for cz in 1..=3 {
+            for cx in 1..=3 {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        g.player.pos = vec3(41.5, WELL_FLOOR_Y + 2.0, 41.5);
+        g.player.on_ground = true;
+        g.update_dimension();
+        assert!(!g.in_horizen(), "a shallow fall does not count");
+        g.player.pos.y = WELL_FLOOR_Y;
+        g.update_dimension();
+        assert!(g.in_horizen(), "the floor collision completes the fall");
+        assert!(g.horizen_transition.is_some(), "the transfer starts blacked out");
+    }
+
+    #[test]
+    fn a_daytime_horizen_tornado_spawns_on_the_forty_block_ring_and_night_clears_it() {
+        let mut g = game(31);
+        fall_in_the_well(&mut g);
+        let target = g.player.pos;
+        g.update_animals(HORIZEN_TORNADO_INTERVAL - 0.01);
+        assert!(g.tornado.is_none(), "the tornado has not spawned early");
+        g.update_animals(0.01);
+        let tornado = g.tornado.expect("the first daytime tornado");
+        let distance = vec2(tornado.pos.x - target.x, tornado.pos.z - target.z).length();
+        assert!((distance - HORIZEN_TORNADO_SPAWN_DISTANCE).abs() < 1.5, "spawn ring distance: {distance}");
+        assert!((tornado.target - target).length() < 1e-5, "target is the captured player position");
+        g.world.set_night(true);
+        g.update_animals(0.0);
+        assert!(g.tornado.is_none(), "night removes the tornado");
+    }
+
+    #[test]
+    fn falling_into_the_well_takes_the_player_to_the_horizen_arrival_pool_with_no_creatures() {
         let mut g = game(3);
         g.animals.push(Animal::new(AnimalKind::Deer, vec3(30.0, 6.01, 30.0), &mut Rng::new(1)));
         fall_in_the_well(&mut g);
         assert!(g.in_horizen(), "the player fell into the Horizen");
         assert_eq!(g.world.dimension, Dimension::Horizen);
         assert!(g.animals.is_empty(), "no creature of the overworld comes along");
-        // Land and sky of the new world: flat, with ponds; the player stands on dry ground.
+        // Land and sky of the new world: flat, with ponds; the player appears on the dedicated arrival pool.
         g.world.stream_chunks(g.player.pos);
         g.player.update(&g.world, 0.5, &MoveInput::default());
-        assert!(!g.world.is_wet_column(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32));
-        assert!((g.player.pos.y - (GROUND_TOP + 1) as f32).abs() < 0.2, "on the plain: {}", g.player.pos.y);
+        assert!(g.world.is_wet_column(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32));
+        assert!((g.player.pos.y - GROUND_TOP as f32).abs() < 0.2, "on the arrival pool: {}", g.player.pos.y);
         assert!(g.world.chunks.values().all(|c| !c.blocks.contains(&Block::Wood) && !c.blocks.contains(&Block::Bush)), "nothing grows there");
         // Wildlife never spawns in the Horizen.
         for _ in 0..50 {
@@ -4233,11 +4377,10 @@ mod totem_horizen_and_wear_tests {
     }
 
     #[test]
-    fn in_the_horizen_potions_do_not_change_the_sky_and_the_compass_peep_stone_and_totem_do_nothing() {
+    fn in_the_horizen_potions_change_the_sky_and_landmarks_still_do_nothing() {
         let mut g = game(4);
         fall_in_the_well(&mut g);
         assert!(g.in_horizen());
-        let night = g.world.night;
         give(&mut g, ItemKind::PurpleBerryStew, 1);
         g.select_slot(0);
         g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::PurpleBerryStew, count: 1 });
@@ -4245,10 +4388,13 @@ mod totem_horizen_and_wear_tests {
         for _ in 0..90 {
             g.update_blackout(1.0 / 60.0);
         }
-        assert!(g.blackout.is_none() && g.world.night == night, "the purple stew did not bring night");
+        assert!(g.blackout.is_none() && g.world.night, "the purple stew brings night to the Horizen");
         g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::RedBerryStew, count: 1 });
         g.eat_held();
-        assert!(g.blackout.is_none() && g.world.night == night);
+        for _ in 0..90 {
+            g.update_blackout(1.0 / 60.0);
+        }
+        assert!(g.blackout.is_none() && !g.world.night, "the red stew brings day to the Horizen");
         for item in [ItemKind::PeepStone, ItemKind::BoneTotem, ItemKind::Compass] {
             hold(&mut g, item);
             for _ in 0..3 {
@@ -4276,6 +4422,7 @@ mod totem_horizen_and_wear_tests {
         g.worn = Some(ItemKind::PeltCloak);
         fall_in_the_well(&mut g);
         assert!(g.in_horizen());
+        g.world.set_night(true);
         let (x, z) = (g.player.pos.x.floor() as i32 + 2, g.player.pos.z.floor() as i32);
         g.world.set_block(x, GROUND_TOP + 1, z, Block::PlacedStone);
         g.items.push(DroppedItem::at_rest(ItemKind::Stick, vec3(12.5, 6.04, 12.5)));
@@ -4283,6 +4430,7 @@ mod totem_horizen_and_wear_tests {
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let mut again = Game::from_save(info, crate::save::parse_save(&text), 9);
         assert!(again.in_horizen(), "still in the Horizen");
+        assert!(again.world.night, "the Horizen keeps its own time of day");
         assert_eq!(again.worn, Some(ItemKind::PeltCloak));
         assert_eq!(again.world.block_at(x, GROUND_TOP + 1, z), Block::PlacedStone, "the edit in the Horizen is kept");
         assert_eq!(again.items.len(), 1);

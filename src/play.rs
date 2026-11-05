@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_flames, draw_meat, draw_pots, draw_rainbow, draw_trail};
+use crate::effects::{draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_trail};
 use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
@@ -54,7 +54,7 @@ pub fn play_screen(app: &mut App) {
 
     game.world.stream_chunks(game.player.pos);
     game.world.rebuild_dirty(game.player.pos, MESH_BUDGET_PER_FRAME);
-    let input = if game.inventory_open { MoveInput::default() } else { MoveInput::from_keyboard() };
+    let input = if game.inventory_open || game.horizen_transition.is_some() { MoveInput::default() } else { MoveInput::from_keyboard() };
     game.player.update(&game.world, dt, &input);
     game.update_landmarks();
 
@@ -73,6 +73,7 @@ pub fn play_screen(app: &mut App) {
     game.update_arrows(dt);
     game.update_health(dt);
     game.update_blackout(dt);
+    game.update_horizen_transition(dt);
 
     game.autosave_timer += dt;
     if game.autosave_timer >= AUTOSAVE_INTERVAL {
@@ -193,8 +194,7 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
 
 /// Draw the 3D scene. Returns how many chunks were drawn.
 fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
-    // The Horizen's sky is half day and half night, whatever the overworld's time of day (`draw_horizen_sky`).
-    clear_background(if game.world.night && !game.in_horizen() {
+    clear_background(if game.world.night {
         Color::new(0.015, 0.025, 0.075, 1.0)
     } else {
         Color::new(0.53, 0.81, 0.92, 1.0)
@@ -208,7 +208,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     });
     // The sun and the clouds go first, so the land is drawn over them.
     if game.in_horizen() {
-        draw_horizen_sky(game.world.seed, eye, get_time() as f32);
+        draw_horizen_sky(game.world.seed, eye, get_time() as f32, game.world.night);
     } else {
         draw_sky(game.world.seed, eye, get_time() as f32, game.world.night);
     }
@@ -225,6 +225,9 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     draw_flames(&game.world, get_time() as f32, World::chunk_of_pos(eye));
     draw_meat(&game.world, World::chunk_of_pos(eye));
     draw_pots(&game.world, World::chunk_of_pos(eye));
+    if let Some(tornado) = game.tornado.as_ref() {
+        draw_fire_tornado(tornado, get_time() as f32, World::chunk_of_pos(eye));
+    }
     draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
     draw_arrows(&game.arrows);
     // The water goes on last: it is translucent and the bed, the items and the animals behind it show through.
@@ -250,6 +253,12 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
             let col = if game.can_interact(hit.block) || game.can_use_fire(&hit) { BLACK } else { Color::new(0.8, 0.1, 0.1, 1.0) };
             draw_cube_wires((lo + hi) / 2.0, hi - lo + Vec3::splat(0.004), col);
         }
+    }
+    // Apply the night reduction after every 3D layer, including animals, water, fires and the moving tornado, while
+    // leaving the HUD readable.
+    if game.world.night {
+        set_default_camera();
+        draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 1.0 - NIGHT_SCENE_BRIGHTNESS));
     }
     drawn.len()
 }
@@ -284,9 +293,10 @@ fn render_hud(game: &mut Game, drawn: usize) {
         "WASD move | Mouse look | Space jump | Shift sprint | Left break/attack/shoot | Right place/eat/cook | 1-9/wheel hotbar | E inventory | F1 help | Esc save & exit",
         10.0, h - 12.0, 18.0, WHITE,
     );
-    // Between day and night the whole screen goes black for a moment.
-    if let Some(blackout) = game.blackout {
-        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, blackout.darkness()));
+    // Between day and night, or while passing through the well, the whole screen goes black for a moment.
+    let darkness = game.blackout.map_or(0.0, |b| b.darkness()).max(game.horizen_transition_darkness());
+    if darkness > 0.0 {
+        draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, darkness));
     }
 }
 

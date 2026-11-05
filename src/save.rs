@@ -137,6 +137,7 @@ pub struct SaveExtras<'a> {
 
 /// The records that describe a world's edits, each starting with `prefix`.
 fn world_lines(world: &World, prefix: &str, out: &mut String) {
+    out.push_str(&format!("{prefix}time {}\n", if world.night { "night" } else { "day" }));
     for (x, y, z) in &world.removed {
         out.push_str(&format!("{prefix}{} {} {}\n", x, y, z));
     }
