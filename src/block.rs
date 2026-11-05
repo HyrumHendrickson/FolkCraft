@@ -41,8 +41,11 @@ pub enum Block {
     WetPebble,
     WetStone,
     WetClay,
-    /// A big rock lying on the ground. Only a bronze mallet breaks it; it drops stone, a pebble and iron ore.
+    /// A big rock lying on the ground, a little wider than its cell. Only a bronze mallet breaks it; it drops stone, a
+    /// pebble and iron ore.
     Boulder,
+    /// A small dark lodestone lying on the ground. It is generated, never placed; broken by hand it drops a loadstone.
+    Loadstone,
     /// A forge of clay the player has put down, empty. Charcoal is put in it by right click.
     ClayForge,
     /// A clay forge with charcoal in it, ready to be lit with a bow drill.
@@ -110,13 +113,31 @@ const CLAY_PARTS: &[Part] = &[
     part([0.18, 0.0, 0.22], [0.82, 0.12, 0.78], (0.66, 0.52, 0.43)),
     part([0.32, 0.12, 0.34], [0.68, 0.19, 0.66], (0.72, 0.58, 0.48)),
 ];
-/// A big rock streaked with rust, which is where the iron is.
+/// A big plain rock. It bulges `BOULDER_OVERHANG` past its cell on every side and is built from stacked, narrowing
+/// layers whose corners are cut (a wide box along x, a wide box along z and a square one between them), so it
+/// reads as roundish rather than as a cube. Neighbouring boxes differ a little in height so no two faces share a
+/// plane. The collider is the one box around all of it (`Block::bounds`).
 const BOULDER_PARTS: &[Part] = &[
-    part([0.08, 0.0, 0.08], [0.92, 0.62, 0.92], (0.40, 0.40, 0.43)),
-    part([0.20, 0.62, 0.18], [0.80, 0.84, 0.78], (0.47, 0.47, 0.50)),
-    part([0.05, 0.18, 0.30], [0.10, 0.48, 0.52], (0.62, 0.24, 0.14)),
-    part([0.40, 0.20, 0.90], [0.62, 0.46, 0.95], (0.62, 0.24, 0.14)),
-    part([0.34, 0.80, 0.34], [0.58, 0.86, 0.52], (0.62, 0.24, 0.14)),
+    // Lowest layer: widest.
+    part([-0.15, 0.0, 0.12], [1.15, 0.34, 0.88], (0.39, 0.39, 0.42)),
+    part([0.12, 0.0, -0.15], [0.88, 0.35, 1.15], (0.40, 0.40, 0.43)),
+    part([0.0, 0.0, 0.0], [1.0, 0.33, 1.0], (0.38, 0.38, 0.41)),
+    // Middle layer: narrower, cut at the corners.
+    part([-0.03, 0.34, 0.16], [1.03, 0.68, 0.84], (0.44, 0.44, 0.47)),
+    part([0.16, 0.35, -0.03], [0.84, 0.69, 1.03], (0.45, 0.45, 0.48)),
+    part([0.08, 0.33, 0.08], [0.92, 0.67, 0.92], (0.43, 0.43, 0.46)),
+    // Crown, a little off centre.
+    part([0.16, 0.68, 0.22], [0.82, 0.92, 0.84], (0.50, 0.50, 0.53)),
+    part([0.28, 0.92, 0.30], [0.66, 1.0, 0.70], (0.54, 0.54, 0.57)),
+    // Lumps on the flanks, so the outline is not symmetrical.
+    part([0.88, 0.0, 0.58], [1.12, 0.26, 0.92], (0.36, 0.36, 0.39)),
+    part([-0.10, 0.0, 0.08], [0.14, 0.22, 0.36], (0.37, 0.37, 0.40)),
+];
+/// A small dark lodestone with a faint metallic glint on top.
+const LOADSTONE_PARTS: &[Part] = &[
+    part([0.27, 0.0, 0.27], [0.73, 0.20, 0.72], (0.20, 0.21, 0.26)),
+    part([0.34, 0.20, 0.34], [0.64, 0.30, 0.62], (0.27, 0.28, 0.34)),
+    part([0.44, 0.30, 0.43], [0.55, 0.33, 0.53], (0.46, 0.48, 0.58)),
 ];
 /// A forge of clay: a squat block with a dark opening on top. The coal in it is a third part, black when
 /// filled and red-hot when lit (`effects.rs` draws the flames and the glow on top).
@@ -165,6 +186,7 @@ impl Block {
                 | Block::PlacedLog
                 | Block::PlacedPebble
                 | Block::PlacedStone
+                | Block::Loadstone
                 | Block::Charcoal
                 | Block::Planks
                 | Block::Ash
@@ -208,6 +230,7 @@ impl Block {
             Block::PlacedLog
             | Block::PlacedPebble
             | Block::PlacedStone
+            | Block::Loadstone
             | Block::Charcoal
             | Block::Ash
             | Block::WetPebble
@@ -228,9 +251,10 @@ impl Block {
 
     /// Whether a player holding `held` (or nothing) can break this block.
     /// Wood needs a stone axe and a boulder a bronze mallet. With a bow drill in hand a placed log, charcoal or
-    /// a filled forge is lit instead of broken, and with a bow in hand nothing is broken: the button shoots instead.
+    /// a filled forge is lit instead of broken, and with a bow or a sling in hand nothing is broken: the button
+    /// shoots instead.
     pub fn can_break_with(self, held: Option<ItemKind>) -> bool {
-        if held == Some(ItemKind::Bow) {
+        if held.map_or(false, ItemKind::is_launcher) {
             return false;
         }
         match self {
@@ -296,6 +320,7 @@ impl Block {
             Block::WetStone => STONE_PARTS,
             Block::WetClay => CLAY_PARTS,
             Block::Boulder => BOULDER_PARTS,
+            Block::Loadstone => LOADSTONE_PARTS,
             Block::ClayForge => FORGE_PARTS,
             Block::ForgeCharged => FORGE_CHARGED_PARTS,
             Block::ForgeLit => FORGE_LIT_PARTS,
@@ -371,7 +396,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 25] = [
+    const ALL: [Block; 26] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -394,6 +419,7 @@ mod tests {
         Block::WetStone,
         Block::WetClay,
         Block::Boulder,
+        Block::Loadstone,
         Block::ClayForge,
         Block::ForgeCharged,
         Block::ForgeLit,
@@ -518,7 +544,6 @@ mod tests {
         assert!(Block::Grass.can_break_with(Some(ItemKind::BronzeMallet)), "a mallet still picks like a hand");
         let (lo, hi) = b.bounds().unwrap();
         assert!(hi[1] > 0.7 && hi[0] - lo[0] > 0.8, "a boulder is big: {lo:?} {hi:?}");
-        assert_eq!(b.parts().last().unwrap().color, (0.62, 0.24, 0.14), "rust streaks mark the iron");
     }
 
     #[test]
@@ -577,17 +602,19 @@ mod tests {
     #[test]
     fn every_shape_fits_in_its_cell() {
         for b in ALL {
+            // Only a boulder bulges past its cell, and only sideways.
+            let slack = |a: usize| if b == Block::Boulder && a != 1 { BOULDER_OVERHANG } else { 0.0 };
             match b.bounds() {
                 None => assert_eq!(b, Block::Air),
                 Some((lo, hi)) => {
                     for a in 0..3 {
-                        assert!(0.0 <= lo[a] && lo[a] < hi[a] && hi[a] <= 1.0, "{b:?} axis {a}");
+                        assert!(-slack(a) <= lo[a] && lo[a] < hi[a] && hi[a] <= 1.0 + slack(a), "{b:?} axis {a}");
                     }
                 }
             }
             for p in b.parts() {
                 for a in 0..3 {
-                    assert!(0.0 <= p.min[a] && p.min[a] < p.max[a] && p.max[a] <= 1.0, "{b:?} part axis {a}");
+                    assert!(-slack(a) <= p.min[a] && p.min[a] < p.max[a] && p.max[a] <= 1.0 + slack(a), "{b:?} part axis {a}");
                 }
             }
         }
@@ -619,5 +646,75 @@ mod tests {
     #[test]
     fn only_air_has_no_bounds() {
         assert_eq!(ALL.iter().filter(|b| b.bounds().is_none()).count(), 1);
+    }
+
+    #[cfg(test)]
+    mod more {
+        use super::*;
+
+        #[test]
+        fn a_boulder_is_plain_grey_rock_with_no_red_iron_showing() {
+            for p in Block::Boulder.parts() {
+                let (r, g, b) = p.color;
+                assert!((r - b).abs() < 0.06 && (r - g).abs() < 0.06, "no rust red: {:?}", p.color);
+            }
+        }
+
+        #[test]
+        fn a_boulder_is_a_little_wider_than_a_block_with_one_square_collider() {
+            let (lo, hi) = Block::Boulder.bounds().unwrap();
+            assert!((lo[0] + BOULDER_OVERHANG).abs() < 1e-6 && (hi[0] - 1.0 - BOULDER_OVERHANG).abs() < 1e-6, "{lo:?} {hi:?}");
+            assert!((lo[2] + BOULDER_OVERHANG).abs() < 1e-6 && (hi[2] - 1.0 - BOULDER_OVERHANG).abs() < 1e-6, "{lo:?} {hi:?}");
+            let (wx, wz) = (hi[0] - lo[0], hi[2] - lo[2]);
+            assert!(wx > 1.1 && wx < 1.5 && (wx - wz).abs() < 1e-6, "square and a little over a block: {wx} x {wz}");
+            assert!(hi[1] <= 1.0 && lo[1] == 0.0, "no taller than a block, so it can be hopped onto");
+            assert!(Block::Boulder.collides() && !Block::Boulder.is_full_cube());
+        }
+
+        #[test]
+        fn a_boulder_is_built_of_layers_with_cut_corners_not_one_cube() {
+            let parts = Block::Boulder.parts();
+            assert!(parts.len() >= 8, "{} boxes", parts.len());
+            // The top is narrower than the bottom, and no single box fills the whole footprint.
+            let widest = |f: &dyn Fn(&Part) -> bool| parts.iter().filter(|p| f(p)).map(|p| p.max[0] - p.min[0]).fold(0.0_f32, f32::max);
+            assert!(widest(&|p| p.min[1] >= 0.66) < widest(&|p| p.min[1] < 0.01) - 0.3);
+            let (lo, hi) = Block::Boulder.bounds().unwrap();
+            for p in parts {
+                assert!(p.max[0] - p.min[0] < hi[0] - lo[0] || p.max[2] - p.min[2] < hi[2] - lo[2], "a box covers the whole footprint: {:?}", p.min);
+            }
+            // The corners of the bounding square are empty: no part reaches into them.
+            let corner = |cx: f32, cz: f32| parts.iter().any(|p| p.min[0] <= cx + 0.05 && p.max[0] >= cx - 0.05 && p.min[2] <= cz + 0.05 && p.max[2] >= cz - 0.05 && p.min[1] < 0.3);
+            for (cx, cz) in [(lo[0], lo[2]), (hi[0], lo[2]), (lo[0], hi[2]), (hi[0], hi[2])] {
+                assert!(!corner(cx, cz), "the corner ({cx}, {cz}) is cut");
+            }
+        }
+
+        #[test]
+        fn a_loadstone_is_a_small_dark_walk_through_rock_that_breaks_by_hand() {
+            let b = Block::Loadstone;
+            assert!(b.hand_breakable() && b.breakable() && b.can_break_with(None) && b.can_break_with(Some(ItemKind::StoneAxe)));
+            assert_eq!(b.break_seconds(), BREAK_SECONDS_PLACED);
+            assert!(!b.collides() && !b.opaque() && !b.is_full_cube() && !b.is_wet() && !b.is_burning());
+            assert_eq!(b.id(), None, "it is found, not placed");
+            let (lo, hi) = b.bounds().unwrap();
+            assert!(hi[1] <= 0.45 && lo[1] == 0.0 && hi[0] - lo[0] <= 0.8);
+            let (r, g, bl) = b.base_color();
+            assert!(r < 0.3 && g < 0.3 && bl < 0.35, "dark");
+        }
+
+        #[test]
+        fn a_sling_in_hand_breaks_nothing_just_like_a_bow() {
+            for b in ALL {
+                assert!(!b.can_break_with(Some(ItemKind::Sling)), "{b:?}");
+            }
+        }
+
+        #[test]
+        fn every_axe_chops_a_trunk_but_a_mallet_and_a_sling_do_not() {
+            for axe in [ItemKind::StoneAxe, ItemKind::CopperAxe, ItemKind::BronzeAxe, ItemKind::IronAxe] {
+                assert!(Block::Wood.can_break_with(Some(axe)), "{axe:?}");
+            }
+            assert!(!Block::Wood.can_break_with(Some(ItemKind::BronzeMallet)) && !Block::Wood.can_break_with(Some(ItemKind::Sling)));
+        }
     }
 }

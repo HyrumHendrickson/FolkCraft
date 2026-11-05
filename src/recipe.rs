@@ -48,6 +48,8 @@ pub const RECIPES: &[Recipe] = &[
         output_count: 1,
         inputs: &[(ItemKind::Bronze, 2), (ItemKind::LeatherCord, 1), (ItemKind::Stick, 1)],
     },
+    Recipe { output: ItemKind::Sling, output_count: 1, inputs: &[(ItemKind::Leather, 1)] },
+    Recipe { output: ItemKind::Compass, output_count: 1, inputs: &[(ItemKind::Loadstone, 1), (ItemKind::IronOre, 1)] },
     Recipe {
         output: ItemKind::Arrow,
         output_count: 1,
@@ -294,5 +296,18 @@ mod tests {
         assert!(craft(&mut inv, recipe_for(ItemKind::ClayJar)) && craft(&mut inv, recipe_for(ItemKind::ClayJar)));
         assert_eq!((inv.count(ItemKind::ClayJar), inv.count(ItemKind::Clay)), (2, 1));
         assert!(!craft(&mut inv, recipe_for(ItemKind::ClayJar)) && !craft(&mut inv, recipe_for(ItemKind::TinPot)));
+    }
+
+    #[test]
+    fn a_sling_is_one_leather_and_a_compass_one_loadstone_and_one_iron_ore() {
+        assert_eq!(recipe_for(ItemKind::Sling).inputs, &[(ItemKind::Leather, 1)]);
+        assert_eq!(recipe_for(ItemKind::Sling).describe(), "1 Leather");
+        assert_eq!(recipe_for(ItemKind::Compass).inputs, &[(ItemKind::Loadstone, 1), (ItemKind::IronOre, 1)]);
+        let mut inv = inv_with(&[(ItemKind::Leather, 2)]);
+        assert!(craft(&mut inv, recipe_for(ItemKind::Sling)));
+        assert_eq!((inv.count(ItemKind::Leather), inv.count(ItemKind::Sling)), (1, 1));
+        let mut inv = inv_with(&[(ItemKind::Loadstone, 1)]);
+        assert!(!craft(&mut inv, recipe_for(ItemKind::Compass)), "the iron ore is missing");
+        assert_eq!(inv.count(ItemKind::Loadstone), 1);
     }
 }

@@ -10,8 +10,8 @@ use crate::dropped::draw_dropped_items;
 use crate::effects::{draw_flames, draw_meat, draw_pots};
 use crate::game::Game;
 use crate::hud::{draw_hotbar, inventory_screen};
-use crate::item::ItemKind;
 use crate::player::MoveInput;
+use crate::sky::draw_sky;
 use crate::world::{Hit, World};
 
 type Target = Option<Hit>;
@@ -125,21 +125,15 @@ fn handle_hotbar_selection(game: &mut Game) {
     }
 }
 
-/// Left click with a bow shoots an arrow along the crosshair. With a stone axe or a bronze mallet, holding the
-/// button strikes the animal under the crosshair (`aimed`), once per swing cooldown (`ItemKind::melee_cooldown`).
+/// Left click with a bow shoots an arrow along the crosshair, and with a sling a pebble. With any axe or a bronze
+/// mallet, holding the button strikes the animal under the crosshair (`aimed`), once per swing cooldown
+/// (`ItemKind::melee_cooldown`). The rules live in `Game::attack`.
 fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool) {
     if game.inventory_open {
         return;
     }
-    match game.held_item() {
-        Some(ItemKind::Bow) if is_mouse_button_pressed(MouseButton::Left) => {
-            game.shoot_bow(eye, dir);
-        }
-        Some(ItemKind::StoneAxe | ItemKind::BronzeMallet) if aimed && is_mouse_button_down(MouseButton::Left) => {
-            game.swing_melee(eye, dir);
-        }
-        _ => {}
-    }
+    let (clicked, held_down) = (is_mouse_button_pressed(MouseButton::Left), is_mouse_button_down(MouseButton::Left));
+    game.attack(eye, dir, clicked, held_down, aimed);
 }
 
 /// Hold the left mouse button on a block until it breaks (`Block::break_seconds`). What can be
@@ -178,6 +172,8 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
         fovy: 70.0_f32.to_radians(),
         ..Default::default()
     });
+    // The sun and the clouds go first, so the land is drawn over them.
+    draw_sky(game.world.seed, eye, get_time() as f32);
     // Only chunks within the render radius (and inside the view cone) are drawn.
     let aspect = screen_width() / screen_height();
     let half_fov = ((35.0_f32).to_radians().tan() * (1.0 + aspect * aspect).sqrt()).atan();

@@ -58,9 +58,10 @@ pub fn help_lines() -> Vec<Line> {
         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
         item("Stones and pebbles lie on the ground everywhere, and on the river bed under the water. Hold left mouse on one to pick it up."),
+        item("Loadstones are small dark stones that lie on the ground here and there. Hold left mouse on one to pick it up. A Loadstone and an Iron Ore make a Compass, which does nothing yet."),
         item(format!("Clay lies on the river bed. Hold left mouse on a lump to dig {CLAY_DROP} clay out of it. Clay makes a clay forge.")),
         item(format!(
-            "Boulders are big grey rocks streaked with rust, scattered on the ground (more on hills). Only a Bronze Mallet breaks one: hold left mouse on it for {} seconds. It drops a stone, a pebble and {BOULDER_IRON_MIN} to {BOULDER_IRON_MAX} iron ore.",
+            "Boulders are big grey rocks, a little wider than a block, scattered on the ground (more on hills). Only a Bronze Mallet breaks one: hold left mouse on it for {} seconds. It drops a stone, a pebble and {BOULDER_IRON_MIN} to {BOULDER_IRON_MAX} iron ore.",
             BREAK_SECONDS_BOULDER as i32
         )),
         item("Tree trunks: you need a Stone Axe in your hand. Hold left mouse on a trunk for 5 seconds to get a log."),
@@ -115,7 +116,7 @@ pub fn help_lines() -> Vec<Line> {
             BEAR_NOTICE_DISTANCE as i32, BEAR_CHARGE_DISTANCE as i32, BEAR_CALM_DISTANCE as i32
         )),
         item(format!(
-            "Only an axe (hold left mouse on the animal: a Stone Axe does {AXE_DAMAGE} damage a blow, a Copper Axe one more, a Bronze Axe two more, an Iron Axe three more), a Bronze Mallet ({MALLET_DAMAGE}) or a Bow (left click to shoot an arrow from your inventory, {ARROW_DAMAGE} damage) hurts animals. A bear you hurt will charge you."
+            "Only an axe (hold left mouse on the animal: a Stone Axe does {AXE_DAMAGE} damage a blow, a Copper Axe one more, a Bronze Axe two more, an Iron Axe three more), a Bronze Mallet ({MALLET_DAMAGE}), a Bow (left click to shoot an arrow from your inventory, {ARROW_DAMAGE} damage) or a Sling (left click to sling a pebble from your inventory, {SLING_DAMAGE} damage) hurts animals. A bear you hurt will charge you."
         )),
         item(format!(
             "A deer drops {DEER_VENISON_DROP} venison and {DEER_LEATHER_DROP} leather. A quail drops {QUAIL_POULTRY_DROP} poultry and {QUAIL_FEATHER_DROP} feathers. A bear drops {BEAR_MEAT_DROP} bear meat and {BEAR_PELT_DROP} pelt. A startled quail also drops a feather as it takes off."
@@ -129,9 +130,10 @@ pub fn help_lines() -> Vec<Line> {
         )),
         item("A blow throws the animal back, and a blow that hurts you (or a burn) throws you back, so you can see when something lands."),
         item("An arrow that hits an animal is used up. An arrow that misses lands on the ground: walk over it to pick it up again. Feathers are what you need to make more."),
+        item("A Sling is made of one leather and slings pebbles the way a bow shoots arrows: a pebble that hits an animal is used up, and one that misses lands on the ground to be picked up again."),
         heading("Tips"),
         item("Start with grass for twine, sticks from leaves, and a stone from the ground: that is a Stone Axe. Then logs, a Bow Drill, a fire, and food."),
-        item("Keep an eye out for bears before you wander far from your fire, and keep your bow stocked with arrows."),
+        item("Keep an eye out for bears before you wander far from your fire, and keep your bow stocked with arrows or your sling with pebbles."),
         item("On the menu, the Delete button beside a world removes it for good, after asking you to confirm."),
     ]);
     out
@@ -303,7 +305,7 @@ mod tests {
         let t = all_text();
         for word in [
             "W A S D", "Shift", "Space", "Left mouse", "Right mouse", "inventory", "Esc", "hearts", "Bow Drill", "Bellows", "bears",
-            "Rivers", "Clay", "Delete", "Stone Axe", "Bronze Mallet", "Boulders", "clay forge", "Tin Pot", "Clay Jar", "Moose", "Rabbits", "stew", "Iron Axe",
+            "Rivers", "Clay", "Delete", "Stone Axe", "Bronze Mallet", "Boulders", "Sling", "Loadstone", "Compass", "clay forge", "Tin Pot", "Clay Jar", "Moose", "Rabbits", "stew", "Iron Axe",
         ] {
             assert!(t.contains(word), "the help mentions {word:?}");
         }

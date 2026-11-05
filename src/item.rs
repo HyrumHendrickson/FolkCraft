@@ -81,10 +81,16 @@ pub enum ItemKind {
     BearStew,
     RabbitStew,
     MooseStew,
+    /// A strip of leather that slings pebbles (left click). Made of one leather.
+    Sling,
+    /// A small dark lodestone found lying on the ground. With an iron ore it makes a compass.
+    Loadstone,
+    /// A loadstone and an iron ore. It does nothing yet.
+    Compass,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 49] = [
+    pub const ALL: [ItemKind; 52] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -134,6 +140,9 @@ impl ItemKind {
         ItemKind::BearStew,
         ItemKind::RabbitStew,
         ItemKind::MooseStew,
+        ItemKind::Sling,
+        ItemKind::Loadstone,
+        ItemKind::Compass,
     ];
 
     /// Display name.
@@ -188,6 +197,9 @@ impl ItemKind {
             ItemKind::BearStew => "Bear Stew",
             ItemKind::RabbitStew => "Rabbit Stew",
             ItemKind::MooseStew => "Moose Stew",
+            ItemKind::Sling => "Sling",
+            ItemKind::Loadstone => "Loadstone",
+            ItemKind::Compass => "Compass",
         }
     }
 
@@ -243,6 +255,9 @@ impl ItemKind {
             ItemKind::BearStew => "bear_stew",
             ItemKind::RabbitStew => "rabbit_stew",
             ItemKind::MooseStew => "moose_stew",
+            ItemKind::Sling => "sling",
+            ItemKind::Loadstone => "loadstone",
+            ItemKind::Compass => "compass",
         }
     }
 
@@ -307,6 +322,9 @@ impl ItemKind {
             ItemKind::BearStew => Color::new(0.42, 0.22, 0.14, 1.0),
             ItemKind::RabbitStew => Color::new(0.62, 0.42, 0.26, 1.0),
             ItemKind::MooseStew => Color::new(0.48, 0.30, 0.20, 1.0),
+            ItemKind::Sling => Color::new(0.58, 0.38, 0.22, 1.0),
+            ItemKind::Loadstone => Color::new(0.20, 0.21, 0.26, 1.0),
+            ItemKind::Compass => Color::new(0.72, 0.55, 0.24, 1.0),
         }
     }
 
@@ -362,6 +380,20 @@ impl ItemKind {
     /// Whether this is an axe: it chops trees and hurts animals.
     pub fn is_axe(self) -> bool {
         matches!(self, ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe)
+    }
+
+    /// Whether this shoots something when the left button is clicked: a bow (arrows) or a sling (pebbles).
+    pub fn is_launcher(self) -> bool {
+        matches!(self, ItemKind::Bow | ItemKind::Sling)
+    }
+
+    /// What a launcher shoots, taken from the inventory (`None` for anything that is not a launcher).
+    pub fn ammo(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::Bow => Some(ItemKind::Arrow),
+            ItemKind::Sling => Some(ItemKind::Pebble),
+            _ => None,
+        }
     }
 
     /// Whether this can be added to a burning log or embers to extend the fire by `FIRE_SECONDS`.
@@ -508,6 +540,7 @@ pub fn drops_for(block: Block, rng: &mut Rng) -> Vec<ItemKind> {
             }
         }
         Block::Ash => drops.push(ItemKind::Ash),
+        Block::Loadstone => drops.push(ItemKind::Loadstone),
         Block::Air | Block::Dirt | Block::Stone | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
     }
     drops
@@ -798,5 +831,34 @@ mod tests {
             assert!(axe.is_axe() && Block::Wood.can_break_with(Some(axe)), "{axe:?}");
         }
         assert!(!ItemKind::BronzeMallet.is_axe() && !Block::Wood.can_break_with(Some(ItemKind::BronzeMallet)));
+    }
+
+    #[test]
+    fn a_loadstone_block_drops_a_loadstone_and_launchers_have_their_ammunition() {
+        let mut rng = Rng::new(21);
+        assert_eq!(drops_for(Block::Loadstone, &mut rng), vec![ItemKind::Loadstone]);
+        assert_eq!(ItemKind::Bow.ammo(), Some(ItemKind::Arrow));
+        assert_eq!(ItemKind::Sling.ammo(), Some(ItemKind::Pebble));
+        assert!(ItemKind::Bow.is_launcher() && ItemKind::Sling.is_launcher());
+        for k in ItemKind::ALL {
+            assert_eq!(k.is_launcher(), k.ammo().is_some(), "{k:?}");
+        }
+        for k in [ItemKind::Sling, ItemKind::Loadstone, ItemKind::Compass] {
+            assert!(k.placeable_block().is_none() && k.melee_damage().is_none() && k.heal_amount().is_none(), "{k:?}");
+            assert_eq!(ItemKind::from_id(k.id()), Some(k));
+        }
+    }
+
+    #[test]
+    fn every_axe_and_the_mallet_have_a_melee_damage_and_each_axe_hits_one_harder() {
+        let axes = [ItemKind::StoneAxe, ItemKind::CopperAxe, ItemKind::BronzeAxe, ItemKind::IronAxe];
+        for (i, axe) in axes.iter().enumerate() {
+            assert!(axe.is_axe());
+            assert_eq!(axe.melee_damage(), Some(AXE_DAMAGE + i as i32), "{axe:?}");
+        }
+        assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
+        for k in ItemKind::ALL {
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || k == ItemKind::BronzeMallet, "{k:?}");
+        }
     }
 }

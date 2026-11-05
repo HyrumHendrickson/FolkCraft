@@ -988,7 +988,7 @@ mod tests {
         assert_eq!(moose.vel.y, KNOCKBACK_HOP);
         let start = moose.pos;
         run(&mut moose, &w, vec3(-50.0, 6.0, 10.5), 1.0, &mut rng);
-        assert!(moose.pos.x > start.x + 0.5 && moose.pos.x < start.x + 1.3, "pushed about a block: {}", moose.pos.x - start.x);
+        assert!(moose.pos.x > start.x + 1.5 && moose.pos.x < start.x + 2.6, "pushed about two blocks: {}", moose.pos.x - start.x);
         assert!(moose.knock.length() < 0.2, "the push has died away");
         // With nothing to push away from it is thrown the way it faces.
         let mut other = at(AnimalKind::Deer, 20.5, 10.5);

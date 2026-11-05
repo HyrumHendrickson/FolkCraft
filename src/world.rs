@@ -185,9 +185,11 @@ impl World {
     /// count as solid walls. Blocks are tested by their actual shape, so a thin trunk or a
     /// low log only blocks where it is.
     pub fn box_blocked(&self, lo: Vec3, hi: Vec3) -> bool {
+        // A boulder bulges `BOULDER_OVERHANG` past its cell, so look that far into the cells around the box too.
+        let m = BOULDER_OVERHANG;
         for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
-            for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
+            for z in (lo.z - m).floor() as i32..=(hi.z + m).floor() as i32 {
+                for x in (lo.x - m).floor() as i32..=(hi.x + m).floor() as i32 {
                     if self.cell_blocks_box(x, y, z, lo, hi) {
                         return true;
                     }
@@ -549,6 +551,24 @@ impl World {
                     let whi = [base[0] + hi[0], base[1] + hi[1], base[2] + hi[2]];
                     if ray_box(origin, dir, wlo, whi).map_or(false, |d| d <= max_dist) {
                         return Some(hit);
+                    }
+                }
+            }
+            // A boulder bulges past its cell, so a ray can clip it from a cell beside it.
+            let t_exit = t_max.0.min(t_max.1).min(t_max.2);
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    let (nx, nz) = (cell.0 + dx, cell.2 + dz);
+                    if (dx, dz) == (0, 0) || self.block_at(nx, cell.1, nz) != Block::Boulder {
+                        continue;
+                    }
+                    if let Some((lo, hi)) = Block::Boulder.bounds() {
+                        let base = [nx as f32, cell.1 as f32, nz as f32];
+                        let wlo = [base[0] + lo[0], base[1] + lo[1], base[2] + lo[2]];
+                        let whi = [base[0] + hi[0], base[1] + hi[1], base[2] + hi[2]];
+                        if ray_box(origin, dir, wlo, whi).map_or(false, |d| d <= max_dist && d <= t_exit) {
+                            return Some(Hit { x: nx, y: cell.1, z: nz, block: Block::Boulder, prev });
+                        }
                     }
                 }
             }
@@ -1130,5 +1150,68 @@ mod tests {
             .with_pots(HashMap::from([((1, 6, 1), pot), ((9, 6, 9), pot)]));
         assert_eq!(w.pots.len(), 1);
         assert!(w.pots.contains_key(&(1, 6, 1)));
+    }
+
+    #[test]
+    fn a_boulders_collider_is_one_square_box_a_little_bigger_than_its_cell() {
+        let mut w = empty_sky_world();
+        put(&mut w, 10, 6, 10, Block::Boulder);
+        let boxx = |x0: f32, x1: f32, z0: f32, z1: f32| w.box_blocked(vec3(x0, 6.1, z0), vec3(x1, 6.9, z1));
+        // Past the cell's edge, within the overhang: blocked, on every side.
+        assert!(boxx(9.70, 9.90, 10.3, 10.7), "west of the cell");
+        assert!(boxx(11.10, 11.30, 10.3, 10.7), "east of the cell");
+        assert!(boxx(10.3, 10.7, 9.70, 9.90), "north of the cell");
+        assert!(boxx(10.3, 10.7, 11.10, 11.30), "south of the cell");
+        // The collider is square: even a corner that the rounded shape leaves empty is solid.
+        assert!(boxx(9.86, 9.9, 9.86, 9.9), "the cut corner still blocks");
+        assert!(boxx(11.10, 11.14, 11.10, 11.14));
+        // Beyond the overhang it is open, and the top is a standing place at height 1.
+        assert!(!boxx(9.60, 9.80, 10.3, 10.7));
+        assert!(!boxx(11.20, 11.40, 10.3, 10.7));
+        assert!(!w.box_blocked(vec3(10.2, 7.0, 10.2), vec3(10.8, 8.8, 10.8)), "the player can stand on it");
+        assert!(w.box_blocked(vec3(10.2, 6.95, 10.2), vec3(10.8, 8.75, 10.8)));
+    }
+
+    #[test]
+    fn a_player_walking_into_a_boulder_stops_at_its_overhang_not_at_its_cell() {
+        let mut w = empty_sky_world();
+        put(&mut w, 10, 6, 10, Block::Boulder);
+        let mut p = Player::new();
+        // Yaw 0 faces +x, straight at the boulder's west face.
+        p.pos = vec3(8.0, 6.0, 10.5);
+        p.yaw = 0.0;
+        let input = MoveInput { forward: true, ..MoveInput::default() };
+        for _ in 0..180 {
+            p.update(&w, 1.0 / 60.0, &input);
+        }
+        let face = 10.0 - BOULDER_OVERHANG;
+        let front = p.pos.x + PLAYER_HALF_WIDTH;
+        assert!(front <= face + 1e-3 && front > face - 0.2, "stopped with its front at {front}, the face is at {face}");
+    }
+
+    #[test]
+    fn a_ray_can_hit_the_overhang_of_a_boulder_from_the_neighbouring_cell() {
+        let mut w = empty_sky_world();
+        put(&mut w, 10, 6, 10, Block::Boulder);
+        // Along x at the boulder's height: the face lies at 9.85, in cell 9, so a short ray reaches it.
+        let hit = w.raycast_hit(vec3(9.0, 6.5, 10.5), vec3(1.0, 0.0, 0.0), 0.9).expect("the overhang is hit");
+        assert_eq!((hit.x, hit.y, hit.z, hit.block), (10, 6, 10, Block::Boulder));
+        assert!(w.raycast_hit(vec3(9.0, 6.5, 10.5), vec3(1.0, 0.0, 0.0), 0.8).is_none(), "too short to reach it");
+        // A ray that stays in cell 9 all the way (x = 9.9) still clips it at the z overhang.
+        let hit = w.raycast_hit(vec3(9.9, 6.5, 8.0), vec3(0.0, 0.0, 1.0), 5.0).expect("clipped from the diagonal cell");
+        assert_eq!((hit.x, hit.z, hit.block), (10, 10, Block::Boulder));
+        // Just outside the overhang it passes.
+        assert!(w.raycast_hit(vec3(9.8, 6.5, 8.0), vec3(0.0, 0.0, 1.0), 5.0).is_none());
+        // And over the top it passes too.
+        assert!(w.raycast_hit(vec3(9.0, 7.2, 10.5), vec3(1.0, 0.0, 0.0), 5.0).is_none());
+    }
+
+    #[test]
+    fn a_closer_block_is_still_hit_before_a_boulders_overhang_behind_it() {
+        let mut w = empty_sky_world();
+        put(&mut w, 10, 6, 10, Block::Boulder);
+        put(&mut w, 8, 6, 10, Block::Dirt);
+        let hit = w.raycast_hit(vec3(5.5, 6.5, 10.5), vec3(1.0, 0.0, 0.0), 10.0).unwrap();
+        assert_eq!((hit.x, hit.block), (8, Block::Dirt));
     }
 }

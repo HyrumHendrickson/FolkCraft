@@ -21,6 +21,7 @@
 //!   help      - the how-to-play screen
 //!   game      - a running session (mining, placing, fire, held item, pickup)
 //!   save      - persistence                 app       - shared app state
+//!   sky       - the sun and the clouds
 //!   ui        - menu widgets                menu      - world list / create
 //!   play      - in-game loop and rendering
 
@@ -47,6 +48,7 @@ mod recipe;
 mod river;
 mod rng;
 mod save;
+mod sky;
 mod terrain;
 mod ui;
 mod world;

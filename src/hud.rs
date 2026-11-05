@@ -267,6 +267,39 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
                 draw_circle(cx + dx * r.w, cy + dy * r.h, r.w * 0.04, lighten(color, 0.18));
             }
         }
+        ItemKind::Sling => {
+            // A leather pouch on two cords that meet in a loop.
+            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
+            let (pouch, loop_a, loop_b) = (p(0.50, 0.30), p(0.22, 0.80), p(0.78, 0.80));
+            for end in [loop_a, loop_b] {
+                draw_line(pouch.x, pouch.y, end.x, end.y, 4.0, outline);
+                draw_line(pouch.x, pouch.y, end.x, end.y, 2.0, ItemKind::LeatherCord.color());
+            }
+            draw_circle(loop_a.x, loop_a.y, 4.0, outline);
+            draw_circle(loop_a.x, loop_a.y, 2.5, ItemKind::LeatherCord.color());
+            draw_circle(loop_b.x, loop_b.y, 4.0, outline);
+            draw_circle(loop_b.x, loop_b.y, 2.5, ItemKind::LeatherCord.color());
+            draw_circle(pouch.x, pouch.y, r.w * 0.17, outline);
+            draw_circle(pouch.x, pouch.y, r.w * 0.15, color);
+            draw_circle(pouch.x - r.w * 0.04, pouch.y - r.h * 0.04, r.w * 0.05, lighten(color, 0.14));
+        }
+        ItemKind::Loadstone => {
+            // A dark, slightly bluish rock with a metallic glint.
+            draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
+            draw_circle(cx, cy + 1.0, r.w * 0.25, color);
+            draw_circle(cx - r.w * 0.06, cy - r.h * 0.06, r.w * 0.09, Color::new(0.46, 0.48, 0.58, 1.0));
+            draw_circle(cx - r.w * 0.08, cy - r.h * 0.08, r.w * 0.03, Color::new(0.80, 0.82, 0.90, 1.0));
+        }
+        ItemKind::Compass => {
+            // A brass case with a glass face and a red and white needle.
+            draw_circle(cx, cy, r.w * 0.31, outline);
+            draw_circle(cx, cy, r.w * 0.29, color);
+            draw_circle(cx, cy, r.w * 0.23, Color::new(0.90, 0.88, 0.80, 1.0));
+            let (n, sth) = (vec2(cx + r.w * 0.09, cy - r.h * 0.16), vec2(cx - r.w * 0.09, cy + r.h * 0.16));
+            draw_line(cx, cy, n.x, n.y, 3.0, Color::new(0.80, 0.14, 0.14, 1.0));
+            draw_line(cx, cy, sth.x, sth.y, 3.0, Color::new(0.96, 0.96, 0.96, 1.0));
+            draw_circle(cx, cy, 2.0, outline);
+        }
         ItemKind::RabbitFoot => {
             // A small furry foot with three toes.
             draw_circle(cx, cy + 3.0, r.w * 0.20, outline);

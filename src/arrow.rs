@@ -1,9 +1,10 @@
-//! Arrows shot from a bow: flight under gravity, and what they hit.
+//! Arrows shot from a bow and pebbles slung from a sling: flight under gravity, and what they hit.
 
 use macroquad::prelude::*;
 
 use crate::animal::Animal;
 use crate::config::*;
+use crate::item::ItemKind;
 use crate::world::{ray_box, World};
 
 /// Longest distance (blocks) an arrow travels between two collision checks.
@@ -11,6 +12,8 @@ const MAX_STEP: f32 = 0.25;
 
 #[derive(Clone, Debug)]
 pub struct Arrow {
+    /// What it is: `ItemKind::Arrow` from a bow or `ItemKind::Pebble` from a sling. It lands as this item.
+    pub kind: ItemKind,
     pub pos: Vec3,
     pub vel: Vec3,
     /// Seconds in flight.
@@ -32,7 +35,17 @@ pub enum Fate {
 impl Arrow {
     /// An arrow leaving `origin` (the eye) along the unit vector `dir`.
     pub fn fired(origin: Vec3, dir: Vec3) -> Arrow {
-        Arrow { pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+        Arrow { kind: ItemKind::Arrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+    }
+
+    /// A pebble leaving `origin` (the eye) along the unit vector `dir`.
+    pub fn slung(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::Pebble, pos: origin, vel: dir * SLING_SPEED, age: 0.0 }
+    }
+
+    /// Life points taken from an animal it hits.
+    pub fn damage(&self) -> i32 {
+        if self.kind == ItemKind::Pebble { SLING_DAMAGE } else { ARROW_DAMAGE }
     }
 
     /// Advance the arrow by `dt` seconds. The path is checked in short segments, so a fast arrow

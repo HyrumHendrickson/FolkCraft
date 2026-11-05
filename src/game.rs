@@ -622,24 +622,54 @@ impl Game {
         }
     }
 
+    /// What the left button does with a weapon in hand. A click shoots a bow or a sling; holding the button on an
+    /// animal under the crosshair (`aimed`) swings any axe or the bronze mallet, once per swing cooldown.
+    /// Returns whether something was shot or struck.
+    pub fn attack(&mut self, eye: Vec3, dir: Vec3, clicked: bool, held_down: bool, aimed: bool) -> bool {
+        match self.held_item() {
+            Some(ItemKind::Bow) if clicked => self.shoot_bow(eye, dir),
+            Some(ItemKind::Sling) if clicked => self.shoot_sling(eye, dir),
+            Some(kind) if kind.melee_damage().is_some() && aimed && held_down => self.swing_melee(eye, dir),
+            _ => false,
+        }
+    }
+
     /// Shoot an arrow along `dir` from `eye`. Needs a bow in hand and an arrow in the inventory.
     /// Returns whether an arrow was shot.
     pub fn shoot_bow(&mut self, eye: Vec3, dir: Vec3) -> bool {
-        if self.held_item() != Some(ItemKind::Bow) || self.attack_cooldown > 0.0 {
+        self.shoot(ItemKind::Bow, eye, dir)
+    }
+
+    /// Sling a pebble along `dir` from `eye`. Needs a sling in hand and a pebble in the inventory.
+    /// Returns whether a pebble was slung.
+    pub fn shoot_sling(&mut self, eye: Vec3, dir: Vec3) -> bool {
+        self.shoot(ItemKind::Sling, eye, dir)
+    }
+
+    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition.
+    fn shoot(&mut self, launcher: ItemKind, eye: Vec3, dir: Vec3) -> bool {
+        let Some(ammo) = launcher.ammo() else { return false };
+        if self.held_item() != Some(launcher) || self.attack_cooldown > 0.0 {
             return false;
         }
-        if !self.inventory.remove(ItemKind::Arrow, 1) {
+        if !self.inventory.remove(ammo, 1) {
             self.attack_cooldown = AXE_COOLDOWN;
-            self.toasts.push("You have no arrows".to_string());
+            self.toasts.push(format!("You have no {}", if ammo == ItemKind::Arrow { "arrows" } else { "pebbles" }));
             return false;
         }
-        self.attack_cooldown = BOW_COOLDOWN;
-        self.arrows.push(Arrow::fired(eye, dir));
+        if launcher == ItemKind::Sling {
+            self.attack_cooldown = SLING_COOLDOWN;
+            self.arrows.push(Arrow::slung(eye, dir));
+        } else {
+            self.attack_cooldown = BOW_COOLDOWN;
+            self.arrows.push(Arrow::fired(eye, dir));
+        }
         true
     }
 
-    /// Fly the arrows on. An arrow that hits an animal hurts it and is used up; one that hits a block or runs out
-    /// of flight without hurting anything lands on the ground as an arrow item, to be picked up and used again.
+    /// Fly the arrows and slung pebbles on. One that hits an animal hurts it and is used up; one that hits a block
+    /// or runs out of flight without hurting anything lands on the ground as the item it was (an arrow or a
+    /// pebble), to be picked up and used again.
     pub fn update_arrows(&mut self, dt: f32) {
         let mut hits = Vec::new();
         let mut landed = Vec::new();
@@ -647,17 +677,17 @@ impl Game {
         self.arrows.retain_mut(|arrow| match arrow.update(world, animals, dt) {
             Fate::InFlight => true,
             Fate::HitAnimal(i) => {
-                hits.push((i, ARROW_DAMAGE));
+                hits.push((i, arrow.damage()));
                 false
             }
             Fate::HitBlock | Fate::Expired => {
-                landed.push(arrow.pos - arrow.vel.normalize_or_zero() * ARROW_DROP_BACKOFF);
+                landed.push((arrow.kind, arrow.pos - arrow.vel.normalize_or_zero() * ARROW_DROP_BACKOFF));
                 false
             }
         });
         self.hurt_animals(&hits);
-        for spot in landed {
-            self.items.push(DroppedItem::at_rest(ItemKind::Arrow, spot));
+        for (kind, spot) in landed {
+            self.items.push(DroppedItem::at_rest(kind, spot));
         }
     }
 
@@ -2735,5 +2765,175 @@ mod tests {
         let count = |g: &Game, k: AnimalKind| g.animals.iter().filter(|a| a.kind == k).count();
         assert!(count(&g, AnimalKind::Rabbit) <= MAX_RABBIT && count(&g, AnimalKind::Moose) <= MAX_MOOSE);
         assert!(count(&g, AnimalKind::Rabbit) > 0, "rabbits turned up");
+    }
+
+    // --- Sling, every axe, harder knockback, loadstones ------------------------------------------
+
+    #[test]
+    fn every_axe_and_the_mallet_hurt_an_animal_when_the_button_is_held_on_it() {
+        for (item, damage) in [
+            (ItemKind::StoneAxe, AXE_DAMAGE),
+            (ItemKind::CopperAxe, AXE_DAMAGE + 1),
+            (ItemKind::BronzeAxe, AXE_DAMAGE + 2),
+            (ItemKind::IronAxe, AXE_DAMAGE + 3),
+            (ItemKind::BronzeMallet, MALLET_DAMAGE),
+        ] {
+            let mut g = hunting_game(170);
+            let dir = animal_ahead(&mut g, AnimalKind::Moose, 2.5);
+            hold(&mut g, item, 1);
+            // A click alone does not swing, and neither does holding it with nothing under the crosshair...
+            assert!(!g.attack(eye(&g), dir, true, false, true), "{item:?} needs the button held");
+            assert!(!g.attack(eye(&g), dir, false, true, false), "{item:?} needs an animal under the crosshair");
+            assert_eq!(g.animals[0].health, MOOSE_HEALTH, "{item:?}");
+            // ...holding it on the animal does.
+            assert!(g.attack(eye(&g), dir, false, true, true), "{item:?}");
+            assert_eq!(g.animals[0].health, MOOSE_HEALTH - damage, "{item:?}");
+            assert_eq!(g.attack_cooldown, item.melee_cooldown(), "{item:?}");
+            assert!(!g.attack(eye(&g), dir, false, true, true), "{item:?} has to recover first");
+        }
+    }
+
+    #[test]
+    fn nothing_else_in_hand_swings_or_shoots() {
+        for held in [None, Some(ItemKind::Stick), Some(ItemKind::Stone), Some(ItemKind::Pebble), Some(ItemKind::BowDrill), Some(ItemKind::Compass), Some(ItemKind::Loadstone)] {
+            let mut g = hunting_game(171);
+            let dir = animal_ahead(&mut g, AnimalKind::Deer, 2.0);
+            g.inventory.slots[0] = held.map(|k| ItemStack { kind: k, count: 5 });
+            g.select_slot(0);
+            assert!(!g.attack(eye(&g), dir, true, true, true), "{held:?}");
+            assert!(g.arrows.is_empty() && g.animals[0].health == DEER_HEALTH, "{held:?}");
+        }
+    }
+
+    #[test]
+    fn a_sling_slings_a_pebble_from_the_inventory_after_a_click() {
+        let mut g = hunting_game(172);
+        hold(&mut g, ItemKind::Sling, 1);
+        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Pebble, count: 3 });
+        let dir = vec3(0.0, 0.2, 1.0).normalize();
+        assert!(!g.attack(eye(&g), dir, false, true, false), "holding the button without a click does not sling");
+        assert!(g.attack(eye(&g), dir, true, true, false));
+        assert_eq!(g.inventory.count(ItemKind::Pebble), 2);
+        assert_eq!(g.arrows.len(), 1);
+        assert_eq!(g.arrows[0].kind, ItemKind::Pebble);
+        assert!((g.arrows[0].vel.length() - SLING_SPEED).abs() < 1e-3);
+        assert_eq!(g.attack_cooldown, SLING_COOLDOWN);
+        assert!(!g.attack(eye(&g), dir, true, true, false), "one sling per cooldown");
+        assert_eq!(g.inventory.count(ItemKind::Pebble), 2);
+    }
+
+    #[test]
+    fn a_sling_needs_pebbles_and_a_bow_still_needs_arrows_not_pebbles() {
+        let mut g = hunting_game(173);
+        hold(&mut g, ItemKind::Sling, 1);
+        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Arrow, count: 4 });
+        let dir = vec3(0.0, 0.0, 1.0);
+        assert!(!g.shoot_sling(eye(&g), dir), "arrows are no ammunition for a sling");
+        assert!(g.arrows.is_empty() && g.toasts.contains("no pebbles"));
+        let mut g = hunting_game(174);
+        hold(&mut g, ItemKind::Bow, 1);
+        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Pebble, count: 4 });
+        assert!(!g.shoot_bow(eye(&g), dir), "pebbles are no ammunition for a bow");
+        assert!(!g.shoot_sling(eye(&g), dir), "and a sling is not what is in hand");
+        assert_eq!(g.inventory.count(ItemKind::Pebble), 4);
+    }
+
+    #[test]
+    fn a_pebble_that_hurts_is_used_up_and_one_that_misses_lands_to_be_picked_up_again() {
+        // A hit: SLING_DAMAGE, and the pebble is gone.
+        let mut g = hunting_game(175);
+        let dir = animal_ahead(&mut g, AnimalKind::Deer, 4.0);
+        g.arrows.push(Arrow::slung(eye(&g), dir));
+        for _ in 0..30 {
+            g.update_arrows(1.0 / 60.0);
+        }
+        assert!(g.arrows.is_empty());
+        assert_eq!(g.animals[0].health, DEER_HEALTH - SLING_DAMAGE);
+        assert!(g.items.iter().all(|i| i.kind != ItemKind::Pebble), "a pebble that did damage is gone");
+
+        // A miss: it lands as a pebble, and walking over it puts it back in the inventory.
+        let mut g = hunting_game(176);
+        g.arrows.push(Arrow::slung(vec3(10.5, 7.0, 10.5), vec3(0.0, -0.3, 1.0).normalize()));
+        for _ in 0..60 {
+            g.update_arrows(1.0 / 60.0);
+        }
+        assert!(g.arrows.is_empty());
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::Pebble).count(), 1, "the pebble is on the ground");
+        assert!(g.items.iter().all(|i| i.kind != ItemKind::Arrow));
+        let spot = g.items[0].pos;
+        g.player.pos = vec3(spot.x, 6.0, spot.z);
+        for _ in 0..30 {
+            g.update_items(1.0 / 60.0);
+        }
+        assert_eq!(g.inventory.count(ItemKind::Pebble), 1, "and it can be slung again");
+    }
+
+    #[test]
+    fn a_slung_pebble_hurts_less_than_an_arrow_and_an_arrow_still_lands_as_an_arrow() {
+        assert!(SLING_DAMAGE > 0 && SLING_DAMAGE < ARROW_DAMAGE);
+        assert_eq!(Arrow::slung(Vec3::ZERO, Vec3::X).damage(), SLING_DAMAGE);
+        assert_eq!(Arrow::fired(Vec3::ZERO, Vec3::X).damage(), ARROW_DAMAGE);
+        let mut g = hunting_game(177);
+        g.arrows.push(Arrow::fired(vec3(10.5, 7.0, 10.5), vec3(0.0, -0.3, 1.0).normalize()));
+        for _ in 0..60 {
+            g.update_arrows(1.0 / 60.0);
+        }
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::Arrow).count(), 1);
+        assert!(g.items.iter().all(|i| i.kind != ItemKind::Pebble));
+    }
+
+    #[test]
+    fn a_blow_throws_a_hurt_animal_back_hard() {
+        assert!(ANIMAL_KNOCKBACK_SPEED >= 12.0 && KNOCKBACK_HOP >= 5.0, "more than the gentle push it used to be");
+        for item in [ItemKind::StoneAxe, ItemKind::IronAxe, ItemKind::BronzeMallet] {
+            let mut g = hunting_game(178);
+            let dir = animal_ahead(&mut g, AnimalKind::Moose, 2.5);
+            hold(&mut g, item, 1);
+            assert!(g.attack(eye(&g), dir, false, true, true));
+            let moose = &g.animals[0];
+            assert!((moose.knock.z - ANIMAL_KNOCKBACK_SPEED).abs() < 1e-3, "{item:?}: {:?}", moose.knock);
+            assert_eq!(moose.vel.y, KNOCKBACK_HOP);
+        }
+        // A slung pebble and an arrow push too.
+        for shot in [Arrow::slung as fn(Vec3, Vec3) -> Arrow, Arrow::fired] {
+            let mut g = hunting_game(179);
+            let dir = animal_ahead(&mut g, AnimalKind::Moose, 4.0);
+            g.arrows.push(shot(eye(&g), dir));
+            for _ in 0..30 {
+                g.update_arrows(1.0 / 60.0);
+            }
+            assert!(g.animals[0].knock.z > 10.0, "{:?}", g.animals[0].knock);
+        }
+    }
+
+    #[test]
+    fn a_loadstone_on_the_ground_is_picked_up_by_hand_and_stays_gone() {
+        let mut g = game(180);
+        g.world.chunks.get_mut(&(0, 0)).unwrap().blocks[idx(12, 6, 12)] = Block::Loadstone;
+        assert!(g.can_interact(Block::Loadstone));
+        let hit = Hit { x: 12, y: 6, z: 12, block: Block::Loadstone, prev: (12, 7, 12) };
+        assert!(g.update_mining(Some(hit), true, Block::Loadstone.break_seconds() - 0.1).is_empty());
+        let drops = g.update_mining(Some(hit), true, 0.2);
+        assert_eq!(drops, vec![ItemKind::Loadstone]);
+        assert_eq!(g.world.block_at(12, 6, 12), Block::Air);
+        assert!(g.world.removed.contains(&(12, 6, 12)), "a taken loadstone stays gone");
+    }
+
+    #[test]
+    fn a_compass_is_made_of_a_loadstone_and_an_iron_ore_and_a_sling_of_a_leather() {
+        let mut g = game(181);
+        give(&mut g, 0, ItemKind::Loadstone, 1);
+        give(&mut g, 1, ItemKind::IronOre, 1);
+        give(&mut g, 2, ItemKind::Leather, 1);
+        let names: Vec<_> = crate::recipe::craftable(&g.inventory).iter().map(|r| r.output).collect();
+        assert!(names.contains(&ItemKind::Compass) && names.contains(&ItemKind::Sling) && names.contains(&ItemKind::LeatherCord), "{names:?}");
+        let compass = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::Compass).unwrap();
+        assert!(crate::recipe::craft(&mut g.inventory, compass));
+        assert_eq!((g.inventory.count(ItemKind::Loadstone), g.inventory.count(ItemKind::IronOre), g.inventory.count(ItemKind::Compass)), (0, 0, 1));
+        // The compass does nothing yet: holding it and clicking changes nothing.
+        hold(&mut g, ItemKind::Compass, 1);
+        let dir = vec3(0.0, 0.0, 1.0);
+        assert!(!g.attack(eye(&g), dir, true, true, true));
+        assert!(!g.eat_held());
     }
 }

@@ -185,6 +185,13 @@ pub const HILL_ROCK_FACTOR: u64 = 2;
 /// Chance (per mille, per ground column, on top of the above and scaled by `HILL_ROCK_FACTOR` on hills) of a
 /// boulder: a big rock that only a bronze mallet breaks, and the only source of iron.
 pub const GROUND_BOULDER_PER_MILLE: u64 = 2;
+/// Chance (per mille, per ground column, after the boulders and scaled by `HILL_ROCK_FACTOR` on hills) of a
+/// loadstone: a small dark lodestone lying on the ground that makes a compass.
+pub const GROUND_LOADSTONE_PER_MILLE: u64 = 2;
+/// How far (blocks) a boulder bulges past the edge of its cell on each side: it is a little more than a block
+/// wide (`1 + 2 * BOULDER_OVERHANG`), and its collider is the one box around that. Collision and aiming look this
+/// far into the neighbouring cells.
+pub const BOULDER_OVERHANG: f32 = 0.15;
 /// A broken boulder drops one stone, one pebble and this many iron ores (inclusive range).
 pub const BOULDER_IRON_MIN: i32 = 1;
 pub const BOULDER_IRON_MAX: i32 = 3;
@@ -267,6 +274,10 @@ pub const BEAR_ATTACK_COOLDOWN: f32 = 1.2;
 pub const AXE_DAMAGE: i32 = 4;
 pub const MALLET_DAMAGE: i32 = 5;
 pub const ARROW_DAMAGE: i32 = 3;
+/// Damage of one pebble slung from a sling, and the pause between slings and the pebble's speed.
+pub const SLING_DAMAGE: i32 = 2;
+pub const SLING_COOLDOWN: f32 = 0.8;
+pub const SLING_SPEED: f32 = 26.0;
 /// How far a stone axe reaches an animal (blocks), and the pause between swings or shots (seconds).
 pub const AXE_REACH: f32 = 3.5;
 pub const AXE_COOLDOWN: f32 = 0.45;
@@ -311,8 +322,28 @@ pub const STEW_SECONDS: f32 = 12.0;
 /// Knockback: horizontal speed given to the player and to a hurt animal, the hop that goes with it, and how
 /// quickly the push dies away (fraction lost per second).
 pub const PLAYER_KNOCKBACK_SPEED: f32 = 6.0;
-pub const ANIMAL_KNOCKBACK_SPEED: f32 = 6.0;
-pub const KNOCKBACK_HOP: f32 = 4.0;
+pub const ANIMAL_KNOCKBACK_SPEED: f32 = 13.0;
+pub const KNOCKBACK_HOP: f32 = 5.0;
 pub const KNOCKBACK_DECAY: f32 = 7.0;
 /// An arrow that hit a block or ran out of flight lands this far back along its path (blocks).
 pub const ARROW_DROP_BACKOFF: f32 = 0.3;
+
+// --- Sky ---------------------------------------------------------------------------------
+/// The sun hangs at a fixed place in the sky: this high above the horizon (degrees), and in this compass
+/// bearing (degrees from the +x axis towards +z), a little past noon. It does not move.
+pub const SUN_ELEVATION_DEGREES: f32 = 58.0;
+pub const SUN_BEARING_DEGREES: f32 = 235.0;
+/// The sun is drawn this far from the eye (blocks) with this radius, so it stays out of reach of the terrain.
+pub const SUN_DISTANCE: f32 = 800.0;
+pub const SUN_RADIUS: f32 = 38.0;
+/// Clouds are flat slabs on a grid of `CLOUD_CELL` blocks, floating this high, this thick, drawn this many
+/// cells out from the player. A cell is cloud where smooth noise exceeds `CLOUD_THRESHOLD` (0 to 1).
+pub const CLOUD_CELL: f32 = 16.0;
+pub const CLOUD_HEIGHT: f32 = 62.0;
+pub const CLOUD_THICKNESS: f32 = 4.0;
+pub const CLOUD_RADIUS_CELLS: i32 = 11;
+pub const CLOUD_THRESHOLD: f32 = 0.56;
+/// How fast the clouds drift along x (blocks per second); 0 freezes them.
+pub const CLOUD_DRIFT_SPEED: f32 = 0.8;
+/// How many cells wide the cloud noise lattice is, so clouds gather in banks rather than as single cells.
+pub const CLOUD_NOISE_CELLS: f32 = 4.0;
