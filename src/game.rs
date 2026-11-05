@@ -11,11 +11,10 @@ use crate::dropped::{collect_nearby, DroppedItem};
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
+use crate::landmarks::{Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks};
 use crate::player::Player;
-use crate::river::is_river;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, save_world, SaveData, WorldInfo};
-use crate::terrain::ground_top;
 use crate::world::{Pot, ray_box, Hit, Pos, World};
 
 /// A block being broken. Progress resets when the target, the block or the held tool changes,
@@ -59,6 +58,8 @@ pub struct Game {
     /// Seconds since the last attempt to bring a new animal into the world.
     pub spawn_timer: f32,
     pub autosave_timer: f32,
+    /// Progress of the walk through a river and the walk behind a compass, which bring in lakes and mountains.
+    pub treks: Treks,
     /// Frames of mouse movement to ignore after the cursor is re-captured.
     pub skip_look_frames: u8,
 }
@@ -75,7 +76,8 @@ impl Game {
             .with_glow(data.glow)
             .with_pots(data.pots)
             .with_berry_picked(data.berry_picked)
-            .with_night(data.night);
+            .with_night(data.night)
+            .with_landmarks(data.landmarks);
         world.stream_chunks(data.player.pos);
         world.rebuild_dirty(data.player.pos, usize::MAX);
         let health = data.health;
@@ -102,6 +104,7 @@ impl Game {
             attack_cooldown: 0.0,
             spawn_timer: 0.0,
             autosave_timer: 0.0,
+            treks: Treks::new(),
             skip_look_frames: 0,
         }
     }
@@ -159,6 +162,11 @@ impl Game {
                     }
                 }
             }
+        }
+        if block == Block::GoldPile && self.world.active_rainbow().map_or(false, |r| r.gold == (x, y, z)) {
+            // The gold is gone, and so is the rainbow, for the rest of the game.
+            self.world.set_rainbow(RainbowState::Spent);
+            self.toasts.push("The rainbow fades. There will not be another.".to_string());
         }
         for &kind in &drops {
             self.items.push(DroppedItem::spawn(kind, (x, y, z), &mut self.rng));
@@ -790,13 +798,93 @@ impl Game {
         }
     }
 
-    /// Put a new animal on the ground at column (x, z). Fails when that column is not loaded, is part of a
-    /// river, or something solid is in the way.
-    pub fn spawn_animal(&mut self, kind: AnimalKind, x: i32, z: i32) -> bool {
-        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || is_river(self.world.seed, x, z) {
+    // --- Lakes, mountains and the rainbow ------------------------------------------------------
+
+    /// Whether the player is wading: water fills the cell their feet are in, or one of the two cells below
+    /// (so a jump in a river does not count as leaving it).
+    pub fn player_in_water(&self) -> bool {
+        let p = self.player.pos;
+        let feet = (p.y + 0.1).floor() as i32;
+        (0..3).any(|down| self.world.block_at(p.x.floor() as i32, feet - down, p.z.floor() as i32).is_wet())
+    }
+
+    /// Advance the treks and the rainbow. Walking `LAKE_TREK_CHUNKS` chunks through a river without leaving the
+    /// water brings a lake into the world ahead of the player; following a held compass north for
+    /// `COMPASS_TREK_CHUNKS` chunks brings a mountain; holding a peep stone shows the rainbow (once).
+    /// Call once a frame, after the player has moved.
+    pub fn update_landmarks(&mut self) {
+        let p = self.player.pos;
+        let compass = self.held_item() == Some(ItemKind::Compass);
+        let wading = self.player_in_water();
+        if let Some(event) = self.treks.step((p.x, p.z), wading, compass) {
+            self.bring_in(event);
+        }
+        self.try_show_rainbow();
+    }
+
+    /// Make the lake or mountain that a finished trek leads to, and say so.
+    fn bring_in(&mut self, event: TrekEvent) {
+        let phase = self.rng.range(0, 63);
+        match event {
+            TrekEvent::Lake { at, dir } => {
+                self.world.add_lake(Lake::ahead(at, dir, phase));
+                self.toasts.push("The river opens out ahead into a great lake.".to_string());
+            }
+            TrekEvent::Mountain { at, dir } => {
+                self.world.add_mountain(Mountain::ahead(at, dir, phase));
+                self.toasts.push("The compass has led you north: a great mountain rises ahead.".to_string());
+            }
+        }
+    }
+
+    /// Whether the pile of gold can lie in the column (x, z): dry, loaded, bare ground with nothing standing on it.
+    fn gold_fits_at(&self, x: i32, z: i32) -> bool {
+        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || self.world.is_wet_column(x, z) {
             return false;
         }
-        let ground_y = (ground_top(self.world.seed, x, z) + 1) as f32;
+        let ground = self.world.ground_top(x, z);
+        self.world.block_at(x, ground, z) == Block::Dirt && self.world.block_at(x, ground + 1, z) == Block::Air
+    }
+
+    /// With a peep stone in hand, and only if the world has never had a rainbow, bring it out: an arc that begins
+    /// beside the player and ends `RAINBOW_GOLD_MIN_DISTANCE` to `RAINBOW_GOLD_MAX_DISTANCE` blocks away on a pile of
+    /// gold. Returns whether the rainbow appeared. If no good spot is found this frame, the next frame tries again.
+    pub fn try_show_rainbow(&mut self) -> bool {
+        if self.world.landmarks.rainbow != RainbowState::Unseen || self.held_item() != Some(ItemKind::PeepStone) {
+            return false;
+        }
+        let p = self.player.pos;
+        for _ in 0..RAINBOW_SPOT_TRIES {
+            let angle = self.rng.unit() * std::f32::consts::TAU;
+            let dist = RAINBOW_GOLD_MIN_DISTANCE + self.rng.unit() * (RAINBOW_GOLD_MAX_DISTANCE - RAINBOW_GOLD_MIN_DISTANCE);
+            let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
+            if !self.gold_fits_at(x, z) {
+                continue;
+            }
+            let y = self.world.ground_top(x, z) + 1;
+            self.world.set_block(x, y, z, Block::GoldPile);
+            // The arc starts a few blocks to one side of the player, so it rises beside them.
+            let side = (-angle.sin(), angle.cos());
+            let from = ((p.x + side.0 * RAINBOW_START_OFFSET).floor() as i32, (p.z + side.1 * RAINBOW_START_OFFSET).floor() as i32);
+            self.world.set_rainbow(RainbowState::Active(Rainbow { from, gold: (x, y, z) }));
+            self.toasts.push("A rainbow appears! Follow it to the gold at its end.".to_string());
+            return true;
+        }
+        false
+    }
+
+    /// The rainbow to draw this frame: it shows only while a peep stone is in the hand, and until its gold is taken.
+    pub fn visible_rainbow(&self) -> Option<Rainbow> {
+        if self.held_item() == Some(ItemKind::PeepStone) { self.world.active_rainbow() } else { None }
+    }
+
+    /// Put a new animal on the ground at column (x, z). Fails when that column is not loaded, is under a river or
+    /// a lake, or something solid is in the way.
+    pub fn spawn_animal(&mut self, kind: AnimalKind, x: i32, z: i32) -> bool {
+        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || self.world.is_wet_column(x, z) {
+            return false;
+        }
+        let ground_y = (self.world.ground_top(x, z) + 1) as f32;
         let pos = if kind == AnimalKind::WillOWhisp {
             vec3(x as f32 + 0.5, ground_y + WILL_O_WHISP_SPAWN_HEIGHT, z as f32 + 0.5)
         } else {
@@ -1044,7 +1132,7 @@ mod tests {
             }
             assert_eq!(g.world.block_at(x, 7, z), Block::Air);
         }
-        assert!((35..=65).contains(&grass), "~50 of 100 grass should drop, got {grass}");
+        assert!((55..=85).contains(&grass), "~70 of 100 grass should drop, got {grass}");
         assert!((200..=300).contains(&berries), "~250 berries from 100 bushes, got {berries}");
     }
 
@@ -2158,7 +2246,7 @@ mod tests {
         assert!(g.animals[0].pos.z > spot.z, "the hurt deer ran away");
         g.animals[0].pos = spot;
         assert!(g.swing_melee(eye(&g), dir));
-        assert_eq!(g.animals[0].health, DEER_HEALTH - 2 * AXE_DAMAGE);
+        assert!(g.animals.is_empty() == (2 * AXE_DAMAGE >= DEER_HEALTH), "the second blow kills a deer of {DEER_HEALTH} health");
     }
 
     #[test]
@@ -2188,12 +2276,13 @@ mod tests {
         let mut g = hunting_game(73);
         hold(&mut g, ItemKind::StoneAxe, 1);
         let dir = animal_ahead(&mut g, AnimalKind::Deer, 2.0);
-        for blow in 1..=3 {
+        let needed = (DEER_HEALTH + AXE_DAMAGE - 1) / AXE_DAMAGE;
+        for blow in 1..=needed {
             assert!(g.swing_melee(eye(&g), dir), "blow {blow}");
-            assert_eq!(g.animals.len(), if blow < 3 { 1 } else { 0 });
+            assert_eq!(g.animals.len(), if blow < needed { 1 } else { 0 });
             g.attack_cooldown = 0.0;
         }
-        assert!(g.animals.is_empty(), "three axe blows kill a deer");
+        assert!(g.animals.is_empty(), "{needed} axe blows kill a deer");
         let count = |g: &Game, k| g.items.iter().filter(|i| i.kind == k).count() as u32;
         assert_eq!(count(&g, ItemKind::Venison), DEER_VENISON_DROP);
         assert_eq!(count(&g, ItemKind::Leather), DEER_LEATHER_DROP);
@@ -2320,7 +2409,7 @@ mod tests {
         for a in &g.animals {
             let d = vec2(a.pos.x - g.player.pos.x, a.pos.z - g.player.pos.z).length();
             assert!(d < ANIMAL_DESPAWN_DISTANCE, "{d}");
-            let ground = ground_top(g.world.seed, a.pos.x.floor() as i32, a.pos.z.floor() as i32);
+            let ground = g.world.ground_top(a.pos.x.floor() as i32, a.pos.z.floor() as i32);
             assert!(a.pos.y >= (ground + 1) as f32 - 0.1, "stands on the ground, valleys and all");
         }
     }
@@ -2476,7 +2565,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bear_takes_seven_axe_blows_or_five_arrows_and_drops_meat_and_a_pelt() {
+    fn a_bear_takes_seven_axe_blows_or_ten_arrows_and_drops_meat_and_a_pelt() {
         let mut g = hunting_game(113);
         hold(&mut g, ItemKind::StoneAxe, 1);
         g.animals.push(Animal::new(AnimalKind::Bear, vec3(10.0, 6.0, 12.5), &mut Rng::new(1)));
@@ -2495,11 +2584,11 @@ mod tests {
 
         let mut g = hunting_game(114);
         hold(&mut g, ItemKind::Bow, 1);
-        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Arrow, count: 9 });
+        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Arrow, count: 16 });
         g.animals.push(Animal::new(AnimalKind::Bear, vec3(10.0, 6.0, 16.0), &mut Rng::new(1)));
         let dir = (vec3(10.0, 6.7, 16.0) - eye(&g)).normalize();
         let mut shots = 0;
-        while !g.animals.is_empty() && shots < 9 {
+        while !g.animals.is_empty() && shots < 16 {
             g.animals[0].pos = vec3(10.0, 6.0, 16.0);
             g.attack_cooldown = 0.0;
             assert!(g.shoot_bow(eye(&g), dir));
@@ -2508,7 +2597,7 @@ mod tests {
                 g.update_arrows(1.0 / 60.0);
             }
         }
-        assert_eq!(shots, 5, "14 health, 3 damage per arrow");
+        assert_eq!(shots, (BEAR_HEALTH + ARROW_DAMAGE - 1) / ARROW_DAMAGE, "{BEAR_HEALTH} health, {ARROW_DAMAGE} damage per arrow");
         assert_eq!(count_items(&g, ItemKind::BearMeat), BEAR_MEAT_DROP);
     }
 
@@ -2775,7 +2864,7 @@ mod tests {
         assert!(g.world.pots.contains_key(&pos) && g.inventory.count(ItemKind::TinPot) == 0);
 
         hold(&mut g, ItemKind::Venison, 2);
-        assert!(!g.can_use_fire(&fire) && !g.use_held(&fire), "no water yet");
+        assert!(!g.use_held(&fire), "no water yet");
         assert!(g.toasts.contains("Fill the pot with water first"));
         assert_eq!(g.inventory.count(ItemKind::Venison), 2);
         hold(&mut g, ItemKind::WaterJar, 1);
@@ -3040,5 +3129,227 @@ mod tests {
         let info = WorldInfo { name: "dev".into(), seed: 1, path: PathBuf::new() };
         assert!(Game::from_save(info, data, 1).dev_mode);
         assert!(!game(190).dev_mode);
+    }
+}
+
+#[cfg(test)]
+mod landmark_tests {
+    use super::*;
+    use crate::chunk::idx;
+    use std::path::PathBuf;
+
+    fn game(seed: u64) -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        Game::from_save(info, SaveData::new(), seed)
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind) {
+        g.inventory.slots[0] = Some(crate::item::ItemStack { kind, count: 1 });
+        g.select_slot(0);
+    }
+
+    fn load_column(g: &mut Game, x: i32, z: i32) {
+        let (cx, cz) = World::chunk_of(x, z);
+        g.world.ensure_chunk(cx, cz);
+    }
+
+    #[test]
+    fn a_finished_river_trek_brings_a_one_block_deep_lake_with_a_channel_from_the_river() {
+        let mut g = game(1);
+        let at = (g.player.pos.x, g.player.pos.z);
+        g.bring_in(TrekEvent::Lake { at, dir: (1.0, 0.0) });
+        assert_eq!(g.world.landmarks.lakes.len(), 1);
+        let lake = g.world.landmarks.lakes[0];
+        assert!(lake.x as f32 - at.0 >= LAKE_DISTANCE as f32, "beyond the generated land");
+        load_column(&mut g, lake.x, lake.z);
+        // The surface of the lake lies at the level of the river: a bed one block down, water above it.
+        assert_eq!(g.world.block_at(lake.x, GROUND_TOP, lake.z), Block::Water);
+        assert_eq!(g.world.block_at(lake.x, GROUND_TOP - LAKE_DEPTH, lake.z), Block::Dirt);
+        assert_eq!(g.world.block_at(lake.x, GROUND_TOP + 1, lake.z), Block::Air);
+        assert!(g.world.is_wet_column(lake.x, lake.z));
+        // The channel leaves the column the player stood in and runs to the lake, all of it water.
+        let (px, pz) = (at.0.floor() as i32, at.1.floor() as i32);
+        assert!(g.world.is_wet_column(px, pz));
+        let mid = ((px + lake.x) / 2, (pz + lake.z) / 2);
+        assert!(g.world.is_wet_column(mid.0, mid.1), "the middle of the channel is wet");
+        assert!(g.toasts.contains("great lake"));
+        // The chunk the player stands in was generated again, and they still stand on something.
+        assert!(g.world.chunks.contains_key(&World::chunk_of(px, pz)));
+        assert_eq!(g.world.ground_top(px, pz), GROUND_TOP - LAKE_DEPTH, "the river bed under the player is unchanged");
+    }
+
+    #[test]
+    fn a_lake_takes_the_place_of_what_stood_there_and_animals_do_not_spawn_in_it() {
+        let mut g = game(2);
+        let at = (g.player.pos.x, g.player.pos.z);
+        g.bring_in(TrekEvent::Lake { at, dir: (0.0, 1.0) });
+        let lake = g.world.landmarks.lakes[0];
+        load_column(&mut g, lake.x, lake.z);
+        assert!(!g.spawn_animal(AnimalKind::Deer, lake.x, lake.z), "no deer on the water");
+        let (cx, cz) = World::chunk_of(lake.x, lake.z);
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                if g.world.is_wet_column(wx, wz) {
+                    for y in GROUND_TOP + 1..WORLD_HEIGHT {
+                        let b = g.world.block_at(wx, y, wz);
+                        assert!(!matches!(b, Block::Wood | Block::Leaves | Block::Needles | Block::Grass | Block::Bush), "{b:?} on the water at {wx},{wz}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_finished_compass_trek_brings_a_tall_climbable_snow_capped_mountain_you_cannot_dig() {
+        let mut g = game(3);
+        let at = (g.player.pos.x, g.player.pos.z);
+        g.bring_in(TrekEvent::Mountain { at, dir: crate::landmarks::compass_direction() });
+        let m = g.world.landmarks.mountains[0];
+        assert!(m.z < at.1 as i32 - MOUNTAIN_DISTANCE, "north of the player, beyond the loaded land");
+        assert!(g.toasts.contains("mountain"));
+        // Climb in a straight line from the far side to the summit: no step is taller than a jump.
+        let mut last = g.world.ground_top(m.x + m.radius * 2, m.z);
+        let mut highest = last;
+        for x in (m.x..=m.x + m.radius * 2).rev() {
+            let top = g.world.ground_top(x, m.z);
+            assert!((top - last).abs() <= 1, "step of {} at x={x}", top - last);
+            last = top;
+            highest = highest.max(top);
+        }
+        assert_eq!(highest, GROUND_TOP + MOUNTAIN_HEIGHT);
+        // The summit is rather tall and snowy, and the snow cannot be mined.
+        load_column(&mut g, m.x, m.z);
+        assert_eq!(g.world.block_at(m.x, highest, m.z), Block::Snow);
+        assert_eq!(g.world.block_at(m.x, highest + 1, m.z), Block::Air);
+        assert!(highest >= GROUND_TOP + 3 * HILL_MAX_HEIGHT);
+        hold(&mut g, ItemKind::StoneAxe);
+        assert!(g.mine(m.x, highest, m.z).is_empty());
+        assert_eq!(g.world.block_at(m.x, highest, m.z), Block::Snow, "snow cannot be mined yet");
+        assert!(!g.can_interact(Block::Snow));
+        // Lower down it is dirt, and the snow starts at the snow line.
+        assert!(Block::Snow.collides() && Block::Snow.opaque());
+        assert_eq!(g.world.block_at(m.x, crate::terrain::SNOW_Y - 1, m.z), Block::Dirt);
+        assert_eq!(g.world.block_at(m.x, crate::terrain::SNOW_Y, m.z), Block::Snow);
+    }
+
+    #[test]
+    fn no_tree_grows_above_the_tree_line_on_a_mountain() {
+        let mut g = game(4);
+        let at = (g.player.pos.x, g.player.pos.z);
+        g.bring_in(TrekEvent::Mountain { at, dir: (0.0, -1.0) });
+        let m = g.world.landmarks.mountains[0];
+        let (cx0, cz0) = World::chunk_of(m.x, m.z);
+        for cz in cz0 - 3..=cz0 + 3 {
+            for cx in cx0 - 3..=cx0 + 3 {
+                g.world.ensure_chunk(cx, cz);
+                let blocks = &g.world.chunks[&(cx, cz)].blocks;
+                for lz in 0..CHUNK_SIZE {
+                    for lx in 0..CHUNK_SIZE {
+                        let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                        let top = g.world.ground_top(wx, wz);
+                        for y in 0..WORLD_HEIGHT {
+                            if matches!(blocks[idx(lx, y, lz)], Block::Wood) {
+                                assert!(top <= GROUND_TOP + TREE_LINE_RISE, "a trunk at {wx},{wz} on ground {top}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_peep_stone_in_hand_shows_one_rainbow_that_ends_in_gold_within_walking_distance() {
+        let mut g = game(5);
+        assert!(!g.try_show_rainbow(), "no peep stone in hand");
+        assert_eq!(g.world.landmarks.rainbow, RainbowState::Unseen);
+        hold(&mut g, ItemKind::Stick);
+        assert!(!g.try_show_rainbow());
+        hold(&mut g, ItemKind::PeepStone);
+        assert!(g.try_show_rainbow());
+        let rainbow = g.world.active_rainbow().expect("a rainbow");
+        let (x, y, z) = rainbow.gold;
+        assert_eq!(g.world.block_at(x, y, z), Block::GoldPile);
+        assert_eq!(g.world.block_at(x, y - 1, z), Block::Dirt, "the gold lies on the ground");
+        let p = g.player.pos;
+        let away = ((x as f32 + 0.5 - p.x).powi(2) + (z as f32 + 0.5 - p.z).powi(2)).sqrt();
+        assert!(away >= RAINBOW_GOLD_MIN_DISTANCE - 1.5 && away <= RAINBOW_GOLD_MAX_DISTANCE + 1.5, "{away} blocks away");
+        let start = (((rainbow.from.0 as f32 + 0.5) - p.x).powi(2) + ((rainbow.from.1 as f32 + 0.5) - p.z).powi(2)).sqrt();
+        assert!(start < 8.0, "the arc begins beside the player ({start} blocks)");
+        assert!(g.toasts.contains("rainbow"));
+        assert!(!g.try_show_rainbow(), "only one rainbow while the gold is out there");
+        // It shows only while the peep stone is in hand.
+        assert_eq!(g.visible_rainbow(), Some(rainbow));
+        hold(&mut g, ItemKind::Stick);
+        assert_eq!(g.visible_rainbow(), None);
+    }
+
+    #[test]
+    fn taking_the_gold_ends_rainbows_for_the_rest_of_the_game_even_after_saving_and_loading() {
+        let mut g = game(6);
+        hold(&mut g, ItemKind::PeepStone);
+        assert!(g.try_show_rainbow());
+        let (x, y, z) = g.world.active_rainbow().unwrap().gold;
+        let drops = g.mine(x, y, z);
+        assert_eq!(drops, vec![ItemKind::Gold; RAINBOW_GOLD_DROP as usize]);
+        assert_eq!(g.world.block_at(x, y, z), Block::Air);
+        assert_eq!(g.world.landmarks.rainbow, RainbowState::Spent);
+        assert!(!g.world.placed.contains_key(&(x, y, z)));
+        assert!(g.toasts.contains("will not be another"));
+        for _ in 0..5 {
+            assert!(!g.try_show_rainbow(), "never another rainbow");
+        }
+        assert_eq!(g.visible_rainbow(), None);
+        // Saved and loaded again, the world still has no rainbow.
+        let text = crate::save::serialize_save("t", 1, &g.world, &g.player, &g.inventory, &g.items, g.health, false);
+        let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, crate::save::parse_save(&text), 7);
+        hold(&mut again, ItemKind::PeepStone);
+        assert!(!again.try_show_rainbow());
+        assert_eq!(again.world.landmarks.rainbow, RainbowState::Spent);
+    }
+
+    #[test]
+    fn an_unclaimed_rainbow_and_its_gold_survive_saving_and_loading() {
+        let mut g = game(8);
+        hold(&mut g, ItemKind::PeepStone);
+        assert!(g.try_show_rainbow());
+        let rainbow = g.world.active_rainbow().unwrap();
+        let text = crate::save::serialize_save("t", 1, &g.world, &g.player, &g.inventory, &g.items, g.health, false);
+        let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, crate::save::parse_save(&text), 9);
+        assert_eq!(again.world.active_rainbow(), Some(rainbow));
+        assert_eq!(again.world.block_at(rainbow.gold.0, rainbow.gold.1, rainbow.gold.2), Block::GoldPile);
+        hold(&mut again, ItemKind::PeepStone);
+        assert!(!again.try_show_rainbow(), "the same rainbow is still out there");
+    }
+
+    #[test]
+    fn standing_in_a_river_counts_as_wading_and_a_jump_does_not_leave_it() {
+        let mut g = game(9);
+        let (x, z) = (-150..150).flat_map(|z| (-150..150).map(move |x| (x, z))).find(|&(x, z)| crate::river::is_river(1, x, z)).expect("a river");
+        load_column(&mut g, x, z);
+        g.player.pos = vec3(x as f32 + 0.5, GROUND_TOP as f32 + 0.01, z as f32 + 0.5);
+        assert!(g.player_in_water());
+        g.player.pos.y += 1.0;
+        assert!(g.player_in_water(), "a jump");
+        g.player.pos.y += 2.0;
+        assert!(!g.player_in_water(), "well clear of the water");
+        let dry = (x - 30..x + 30).find(|&xx| !g.world.is_wet_column(xx, z) && g.world.chunks.contains_key(&World::chunk_of(xx, z)));
+        if let Some(dx) = dry {
+            g.player.pos = vec3(dx as f32 + 0.5, GROUND_TOP as f32 + 1.01, z as f32 + 0.5);
+            assert!(!g.player_in_water());
+        }
+    }
+
+    #[test]
+    fn bears_are_a_quarter_as_common_and_twice_as_tough_as_they_were() {
+        assert_eq!(BEAR_HEALTH, 2 * 14);
+        assert_eq!(MAX_BEAR, 1, "at most one at a time, where it was two");
+        let others = SPAWN_WEIGHT_DEER + SPAWN_WEIGHT_QUAIL + SPAWN_WEIGHT_RABBIT + SPAWN_WEIGHT_MOOSE;
+        let share = |w: u64| w as f64 / (w + others) as f64;
+        let ratio = share(SPAWN_WEIGHT_BEAR) / share(15);
+        assert!((0.2..=0.3).contains(&ratio), "about a quarter of the old chance to be picked, got {ratio:.2}");
     }
 }

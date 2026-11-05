@@ -7,7 +7,8 @@ use crate::block::Block;
 use crate::chunk::{idx, Chunk};
 use crate::config::*;
 use crate::item::{Hearth, ItemKind};
-use crate::terrain::{berry_bush_is_purple, generate_chunk_blocks};
+use crate::landmarks::{Landmarks, Lake, Mountain, Rainbow, RainbowState};
+use crate::terrain::{berry_bush_is_purple, generate_chunk_with, ground_top_with, is_wet_column};
 
 pub type Pos = (i32, i32, i32);
 
@@ -94,6 +95,8 @@ pub struct World {
     pub berry_picked: HashSet<Pos>,
     /// Whether the world is currently in its night state.
     pub night: bool,
+    /// The lakes, mountains and rainbow the player has brought into the world (persisted to disk).
+    pub landmarks: Landmarks,
 }
 
 /// What a ray hit: the block's cell, the block, and the empty cell the ray came from
@@ -157,6 +160,61 @@ impl World {
             released: Vec::new(),
             berry_picked: HashSet::new(),
             night: false,
+            landmarks: Landmarks::default(),
+        }
+    }
+
+    /// Restore the saved lakes, mountains and rainbow. Call before any chunk is generated.
+    pub fn with_landmarks(mut self, landmarks: Landmarks) -> Self {
+        self.landmarks = landmarks;
+        self
+    }
+
+    /// y of the highest block of the ground in the column (wx, wz), as the land and its landmarks make it
+    /// (trees, plants and the player's blocks stand on top of it).
+    pub fn ground_top(&self, wx: i32, wz: i32) -> i32 {
+        ground_top_with(self.seed, &self.landmarks, wx, wz)
+    }
+
+    /// Whether water (a river or a lake) covers the column (wx, wz).
+    pub fn is_wet_column(&self, wx: i32, wz: i32) -> bool {
+        is_wet_column(self.seed, &self.landmarks, wx, wz)
+    }
+
+    /// Bring a lake into the world. Chunks already generated that it touches are generated again, so it shows at
+    /// once; the player's edits are applied to them as before.
+    pub fn add_lake(&mut self, lake: Lake) {
+        self.landmarks.lakes.push(lake);
+        self.regenerate_landmark_chunks();
+    }
+
+    /// Bring a mountain into the world (see `add_lake`).
+    pub fn add_mountain(&mut self, mountain: Mountain) {
+        self.landmarks.mountains.push(mountain);
+        self.regenerate_landmark_chunks();
+    }
+
+    /// Show the rainbow, or retire it for good once its gold has been taken.
+    pub fn set_rainbow(&mut self, state: RainbowState) {
+        self.landmarks.rainbow = state;
+    }
+
+    /// The rainbow that is out there, if it has been seen and its gold is still lying at its end.
+    pub fn active_rainbow(&self) -> Option<Rainbow> {
+        match self.landmarks.rainbow {
+            RainbowState::Active(rainbow) => Some(rainbow),
+            _ => None,
+        }
+    }
+
+    /// Generate again every loaded chunk that a landmark can touch.
+    fn regenerate_landmark_chunks(&mut self) {
+        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| self.landmarks.touches_chunk(cx, cz)).collect();
+        for &key in &stale {
+            self.chunks.remove(&key);
+        }
+        for &(cx, cz) in &stale {
+            self.ensure_chunk(cx, cz);
         }
     }
 
@@ -279,7 +337,7 @@ impl World {
         if self.chunks.contains_key(&(cx, cz)) {
             return;
         }
-        let mut blocks = generate_chunk_blocks(self.seed, cx, cz);
+        let mut blocks = generate_chunk_with(self.seed, cx, cz, &self.landmarks);
         for &(x, y, z) in &self.removed {
             if Self::chunk_of(x, z) == (cx, cz) {
                 // Only breakable blocks can have been removed. This also protects
@@ -704,7 +762,7 @@ mod tests {
 
     #[test]
     fn stale_saves_cannot_remove_stone_but_removed_wood_stays_removed() {
-        let b = generate_chunk_blocks(5, 0, 0);
+        let b = crate::terrain::generate_chunk_blocks(5, 0, 0);
         let mut removed = HashSet::new();
         removed.insert((4, 0, 4)); // stone
         let mut wood = None;

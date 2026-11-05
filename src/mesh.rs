@@ -6,7 +6,7 @@ use crate::block::Block;
 use crate::chunk::idx;
 use crate::config::*;
 use crate::rng::hash3;
-use crate::terrain::{berry_bush_is_purple, ground_top};
+use crate::terrain::berry_bush_is_purple;
 use crate::world::{in_render_range, World};
 
 pub struct Face {
@@ -161,9 +161,11 @@ impl World {
             let h = hash3(self.seed, wx, y * 8 + fi as i32, wz);
             let (mut r, mut g, mut b) = block.base_color();
             match block {
-                // The ground is grassy on top, except on a river bed, where it is mud under the water.
+                // The ground is grassy on top, except on a river or lake bed, where it is mud under the water.
+                // (Dirt is never covered by anything but air, plants, items and water, so its exposed top is
+                // always the top of the ground.)
                 Block::Dirt if fi == 2 && self.block_at(wx, y + 1, wz).is_wet() => (r, g, b) = (0.40, 0.31, 0.22),
-                Block::Dirt if fi == 2 && y == ground_top(self.seed, wx, wz) => (r, g, b) = (0.28, 0.58, 0.20),
+                Block::Dirt if fi == 2 => (r, g, b) = (0.28, 0.58, 0.20),
                 Block::Leaves if (h >> 20) % 100 < 30 => (r, g, b) = (0.24, 0.62, 0.20),
                 Block::Needles if (h >> 20) % 100 < 30 => (r, g, b) = (0.12, 0.44, 0.27),
                 _ => {}

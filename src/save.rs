@@ -10,6 +10,7 @@ use crate::config::*;
 use crate::dropped::DroppedItem;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
+use crate::landmarks::{Lake, Landmarks, Mountain, Rainbow, RainbowState, MAX_LANDMARK_RADIUS, MOUNTAIN_MAX_HEIGHT};
 use crate::player::Player;
 use crate::rng::clock_seed;
 use crate::world::{Cooking, Pos, Pot, World};
@@ -42,6 +43,8 @@ pub struct SaveData {
     pub pots: HashMap<Pos, Pot>,
     pub berry_picked: HashSet<Pos>,
     pub night: bool,
+    /// Lakes, mountains and the rainbow.
+    pub landmarks: Landmarks,
     pub inventory: Inventory,
     pub items: Vec<DroppedItem>,
     pub health: u32,
@@ -62,6 +65,7 @@ impl SaveData {
             pots: HashMap::new(),
             berry_picked: HashSet::new(),
             night: false,
+            landmarks: Landmarks::default(),
             inventory: Inventory::new(),
             items: Vec::new(),
             health: MAX_HEALTH,
@@ -87,8 +91,12 @@ impl SaveData {
 ///     "berry <x> <y> <z>"          a bush whose berries have been harvested
 ///     "time day|night"             the saved time of day
 ///     "mode dev"                  a dev-mode world (no line: normal mode)
-/// Worlds saved before the inventory existed simply have none of the last six. Animals and arrows
-/// are not saved.
+///     "lake <x> <z> <radius> <phase> <from x> <from z>"   a lake and the channel that joins it to its river
+///     "mountain <x> <z> <radius> <height> <phase>"        a mountain
+///     "rainbow spent"            the rainbow's gold has been taken: there is never another rainbow
+///     "rainbow <from x> <from z> <x> <y> <z>"  the rainbow is out there, its gold at (x, y, z)
+/// Worlds saved before the inventory existed simply have none of the last six, and worlds saved before the
+/// landmarks existed have none of the last three. Animals, arrows and treks in progress are not saved.
 pub fn serialize_save(
     name: &str,
     seed: i64,
@@ -113,6 +121,17 @@ pub fn serialize_save(
     out.push_str(&format!("health {}\n", health));
     if dev_mode {
         out.push_str("mode dev\n");
+    }
+    for l in &world.landmarks.lakes {
+        out.push_str(&format!("lake {} {} {} {} {} {}\n", l.x, l.z, l.radius, l.phase, l.from.0, l.from.1));
+    }
+    for m in &world.landmarks.mountains {
+        out.push_str(&format!("mountain {} {} {} {} {}\n", m.x, m.z, m.radius, m.height, m.phase));
+    }
+    match world.landmarks.rainbow {
+        RainbowState::Unseen => {}
+        RainbowState::Spent => out.push_str("rainbow spent\n"),
+        RainbowState::Active(r) => out.push_str(&format!("rainbow {} {} {} {} {}\n", r.from.0, r.from.1, r.gold.0, r.gold.1, r.gold.2)),
     }
     for (slot, stack) in inventory.slots.iter().enumerate() {
         if let Some(s) = stack {
@@ -162,6 +181,34 @@ pub fn parse_save(text: &str) -> SaveData {
                 if let Some(h) = t.next().and_then(|s| s.parse::<u32>().ok()) {
                     if (1..=MAX_HEALTH).contains(&h) {
                         data.health = h;
+                    }
+                }
+            }
+            Some("lake") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z, radius, phase, fx, fz] = v[..] {
+                    if (1..=MAX_LANDMARK_RADIUS).contains(&radius) {
+                        data.landmarks.lakes.push(Lake { x, z, radius, phase, from: (fx, fz) });
+                    }
+                }
+            }
+            Some("mountain") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z, radius, height, phase] = v[..] {
+                    if (1..=MAX_LANDMARK_RADIUS).contains(&radius) && (1..=MOUNTAIN_MAX_HEIGHT).contains(&height) {
+                        data.landmarks.mountains.push(Mountain { x, z, radius, height, phase });
+                    }
+                }
+            }
+            Some("rainbow") => {
+                let rest: Vec<&str> = t.collect();
+                let v: Vec<i32> = rest.iter().filter_map(|s| s.parse().ok()).collect();
+                if rest == ["spent"] {
+                    data.landmarks.rainbow = RainbowState::Spent;
+                } else if let ([fx, fz, x, y, z], 5) = (&v[..], rest.len()) {
+                    // A world whose gold was taken never gets its rainbow back, whatever order the lines are in.
+                    if data.landmarks.rainbow != RainbowState::Spent {
+                        data.landmarks.rainbow = RainbowState::Active(Rainbow { from: (*fx, *fz), gold: (*x, *y, *z) });
                     }
                 }
             }
@@ -383,6 +430,32 @@ mod tests {
         assert_eq!(data.items.len(), 2);
         assert_eq!((data.items[1].kind, data.items[1].pos), (ItemKind::Stone, vec3(-4.25, 1.11, 8.75)));
         assert!(data.items.iter().all(|i| i.can_pickup(i.pos - vec3(0.0, 0.05, 0.0))));
+    }
+
+    #[test]
+    fn lakes_mountains_and_the_rainbow_survive_a_save_round_trip() {
+        let mut world = World::new(3, HashSet::new());
+        world.landmarks.lakes.push(Lake { x: 300, z: -40, radius: 34, phase: 12, from: (10, 11) });
+        world.landmarks.mountains.push(Mountain { x: -20, z: -400, radius: 46, height: 17, phase: 5 });
+        world.landmarks.rainbow = RainbowState::Active(Rainbow { from: (4, 5), gold: (30, 6, 12) });
+        let text = serialize_save("W", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
+        assert!(text.contains("lake 300 -40 34 12 10 11") && text.contains("mountain -20 -400 46 17 5") && text.contains("rainbow 4 5 30 6 12"));
+        assert_eq!(parse_save(&text).landmarks, world.landmarks);
+        world.landmarks.rainbow = RainbowState::Spent;
+        let text = serialize_save("W", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
+        assert!(text.contains("rainbow spent"));
+        assert_eq!(parse_save(&text).landmarks, world.landmarks);
+        assert_eq!(parse_save("W\n1\n0 6 0 0 0\n").landmarks, Landmarks::default(), "older worlds have none");
+    }
+
+    #[test]
+    fn a_spent_rainbow_stays_spent_and_damaged_landmark_lines_are_ignored() {
+        let text = "W\n1\n0 6 0 0 0\nrainbow spent\nrainbow 1 2 3 4 5\nlake 1 2\nlake 0 0 0 0 0 0\nlake 0 0 9999 0 0 0\nmountain 0 0 40 99 0\nmountain a b c d e\nrainbow x\n";
+        let data = parse_save(text);
+        assert_eq!(data.landmarks.rainbow, RainbowState::Spent);
+        assert!(data.landmarks.lakes.is_empty() && data.landmarks.mountains.is_empty());
+        let late = parse_save("W\n1\n0 6 0 0 0\nrainbow 1 2 3 4 5\nrainbow spent\n");
+        assert_eq!(late.landmarks.rainbow, RainbowState::Spent);
     }
 
     #[test]

@@ -7,9 +7,10 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_flames, draw_meat, draw_pots};
+use crate::effects::{draw_flames, draw_meat, draw_pots, draw_rainbow};
 use crate::game::Game;
-use crate::hud::{draw_hotbar, inventory_screen};
+use crate::item::ItemKind;
+use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
 use crate::player::MoveInput;
 use crate::sky::draw_sky;
 use crate::world::{Hit, World};
@@ -46,6 +47,7 @@ pub fn play_screen(app: &mut App) {
     game.world.rebuild_dirty(game.player.pos, MESH_BUDGET_PER_FRAME);
     let input = if game.inventory_open { MoveInput::default() } else { MoveInput::from_keyboard() };
     game.player.update(&game.world, dt, &input);
+    game.update_landmarks();
 
     let eye = game.player.eye();
     let dir = game.player.look_dir();
@@ -213,6 +215,10 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
             draw_mesh(mesh);
         }
     }
+    // The rainbow shows only to a peep stone in the hand, and over everything, water included.
+    if let Some(rainbow) = game.visible_rainbow() {
+        draw_rainbow(&game.world, &rainbow, get_time() as f32);
+    }
     if let Some(hit) = target {
         // Outline the block's actual shape, so a pebble gets a small box and a trunk a thin one.
         if let Some((lo, hi)) = hit.block.bounds() {
@@ -240,6 +246,9 @@ fn render_hud(game: &mut Game, drawn: usize) {
             draw_break_bar(progress);
         }
         draw_health(game.health);
+        if game.held_item() == Some(ItemKind::Compass) {
+            draw_compass(game.player.yaw, game.treks.compass_progress());
+        }
     }
     game.toasts.draw();
     let p = game.player.pos;

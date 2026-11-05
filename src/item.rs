@@ -69,7 +69,7 @@ pub enum ItemKind {
     CookedMoose,
     /// A rabbit sometimes leaves one. It has no use.
     RabbitFoot,
-    /// A rabbit-foot bonus drop. It has no use yet.
+    /// A rabbit-foot bonus drop. Held in the hand it shows the world's one rainbow, which ends in a pile of gold.
     PeepStone,
     /// A rabbit-foot bonus drop. It has no use yet.
     HollyRod,
@@ -94,7 +94,8 @@ pub enum ItemKind {
     Sling,
     /// A small dark lodestone found lying on the ground. With an iron ore it makes a compass.
     Loadstone,
-    /// A loadstone and an iron ore. It does nothing yet.
+    /// A loadstone and an iron ore. Held in the hand its needle points north; following it ten chunks leads to a
+    /// mountain.
     Compass,
 }
 
@@ -536,12 +537,13 @@ pub struct ItemStack {
 ///
 /// - Leaves and pine needles: one 50% chance of a stick.
 /// - Wood: always one log (the caller checks that the player holds an axe).
-/// - Grass: a 50% chance of one grass. Flowers drop nothing.
+/// - Grass: a `GRASS_DROP_CHANCE` percent chance of one grass. Flowers drop nothing.
 /// - Bush: five independent 50% chances of a berry (0 to 5 berries).
 /// - Placed logs, pebbles, stones, charcoal and planks drop themselves back, always one; so do the
 ///   pebbles and stones lying under water. Clay drops `CLAY_DROP` lumps.
 /// - A boulder drops a stone, a pebble and 1 to 3 iron ore. A clay forge drops `FORGE_CLAY_DROP` clay (and the
-///   charcoal in it, if it was filled but not lit).
+///   charcoal in it, if it was filled but not lit). The rainbow's pile of gold drops `RAINBOW_GOLD_DROP` gold.
+#[cfg(test)]
 pub fn drops_for(block: Block, rng: &mut Rng) -> Vec<ItemKind> {
     drops_for_with_berries(block, ItemKind::Berries, rng)
 }
@@ -590,6 +592,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
                 drops.push(ItemKind::IronOre);
             }
         }
+        Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
         Block::ClayForge => drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize)),
         Block::ForgeCharged => {
             drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize));
@@ -610,7 +613,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
             }
         }
         Block::Ash => drops.push(ItemKind::Ash),
-        Block::Air | Block::Dirt | Block::Stone | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
+        Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
     }
     drops
 }
@@ -660,7 +663,7 @@ mod tests {
     #[test]
     fn unbreakable_air_flower_and_fire_blocks_drop_nothing() {
         let mut rng = Rng::new(13);
-        for block in [Block::Air, Block::Dirt, Block::Stone, Block::Water, Block::Flower, Block::Fire] {
+        for block in [Block::Air, Block::Dirt, Block::Stone, Block::Snow, Block::Water, Block::Flower, Block::Fire] {
             for _ in 0..1000 {
                 assert!(drops_for(block, &mut rng).is_empty());
             }
@@ -690,7 +693,7 @@ mod tests {
     }
 
     #[test]
-    fn grass_drops_one_grass_half_the_time() {
+    fn grass_drops_one_grass_most_of_the_time() {
         let mut rng = Rng::new(15);
         let mut hits = 0;
         for _ in 0..TRIALS {
@@ -698,7 +701,7 @@ mod tests {
             assert!(d.len() <= 1 && d.iter().all(|&k| k == ItemKind::Grass));
             hits += d.len();
         }
-        assert!((rate(hits) - 0.50).abs() < 0.012, "grass rate {}", rate(hits));
+        assert!((rate(hits) - GRASS_DROP_CHANCE as f64 / 100.0).abs() < 0.012, "grass rate {}", rate(hits));
     }
 
     #[test]
@@ -927,7 +930,6 @@ mod tests {
 
     #[test]
     fn loadstone_is_an_item_and_launchers_have_their_ammunition() {
-        let mut rng = Rng::new(21);
         assert_eq!(ItemKind::Bow.ammo(), Some(ItemKind::Arrow));
         assert_eq!(ItemKind::Sling.ammo(), Some(ItemKind::Pebble));
         assert!(ItemKind::Bow.is_launcher() && ItemKind::Sling.is_launcher());

@@ -50,6 +50,10 @@ pub enum Block {
     ForgeCharged,
     /// A burning clay forge. Its remaining time lives in `World::fires`; when it runs out the forge is empty again.
     ForgeLit,
+    /// Snow on a mountain top. A full white cube like dirt: it cannot be broken (yet) and it cannot be made.
+    Snow,
+    /// The pile of gold at the end of the rainbow. Taking it by hand drops gold and ends the rainbow for good.
+    GoldPile,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -145,14 +149,20 @@ macro_rules! forge_parts {
 const FORGE_PARTS: &[Part] = forge_parts!();
 const FORGE_CHARGED_PARTS: &[Part] = forge_parts!((0.12, 0.12, 0.13));
 const FORGE_LIT_PARTS: &[Part] = forge_parts!((0.62, 0.24, 0.07));
+/// Three stacked heaps of gold, narrowing to a peak.
+const GOLD_PILE_PARTS: &[Part] = &[
+    part([0.08, 0.0, 0.10], [0.92, 0.22, 0.90], (0.88, 0.62, 0.14)),
+    part([0.20, 0.22, 0.20], [0.80, 0.42, 0.80], (0.95, 0.73, 0.20)),
+    part([0.34, 0.42, 0.34], [0.66, 0.58, 0.66], (1.00, 0.85, 0.36)),
+];
 const CHARCOAL_PARTS: &[Part] = &[
     part([0.15, 0.0, 0.20], [0.85, 0.25, 0.75], (0.12, 0.12, 0.13)),
     part([0.30, 0.25, 0.30], [0.65, 0.38, 0.62], (0.17, 0.17, 0.18)),
 ];
 
 impl Block {
-    /// Blocks a player can create, which are saved in `World::placed`.
-    pub const PLAYER_MADE: [Block; 11] = [
+    /// Blocks that are saved in `World::placed`: the ones a player can create, and the rainbow's pile of gold.
+    pub const PLAYER_MADE: [Block; 12] = [
         Block::PlacedLog,
         Block::PlacedPebble,
         Block::PlacedStone,
@@ -164,9 +174,10 @@ impl Block {
         Block::ClayForge,
         Block::ForgeCharged,
         Block::ForgeLit,
+        Block::GoldPile,
     ];
 
-    /// Whether a player can break this block with their bare hands. Dirt is not among them.
+    /// Whether a player can break this block with their bare hands. Dirt and snow are not among them.
     pub fn hand_breakable(self) -> bool {
         matches!(
             self,
@@ -186,6 +197,7 @@ impl Block {
                 | Block::WetClay
                 | Block::ClayForge
                 | Block::ForgeCharged
+                | Block::GoldPile
         )
     }
 
@@ -229,12 +241,13 @@ impl Block {
             Block::Planks => BREAK_SECONDS_PLANKS,
             Block::Boulder => BREAK_SECONDS_BOULDER,
             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
-            Block::Air | Block::Dirt | Block::Stone | Block::Water | Block::Fire | Block::Embers | Block::ForgeLit => 0.0,
+            Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
+            Block::Air | Block::Dirt | Block::Stone | Block::Snow | Block::Water | Block::Fire | Block::Embers | Block::ForgeLit => 0.0,
         }
     }
 
     /// Whether this block can ever be broken (by hand or with the right tool).
-    /// Dirt, bedrock stone, water, air and burning fire (or a lit forge) never can.
+    /// Dirt, snow, bedrock stone, water, air and burning fire (or a lit forge) never can.
     pub fn breakable(self) -> bool {
         self.hand_breakable() || matches!(self, Block::Wood | Block::Boulder)
     }
@@ -258,7 +271,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Leaves | Block::Needles | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::Leaves | Block::Needles | Block::Planks)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -268,6 +281,7 @@ impl Block {
             self,
             Block::Dirt
                 | Block::Stone
+                | Block::Snow
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -289,7 +303,7 @@ impl Block {
     /// Solid, built-or-natural cubes that a plank can be attached to from the side or below,
     /// which is what lets a ceiling reach out from the top of a wall. Foliage does not count.
     pub fn anchors_planks(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::Planks)
     }
 
     /// The boxes this block is drawn from. Empty for air and for plain full cubes.
@@ -313,6 +327,7 @@ impl Block {
             Block::ClayForge => FORGE_PARTS,
             Block::ForgeCharged => FORGE_CHARGED_PARTS,
             Block::ForgeLit => FORGE_LIT_PARTS,
+            Block::GoldPile => GOLD_PILE_PARTS,
             _ => &[],
         }
     }
@@ -359,6 +374,7 @@ impl Block {
             Block::ClayForge => Some("clay_forge"),
             Block::ForgeCharged => Some("forge_charged"),
             Block::ForgeLit => Some("forge_lit"),
+            Block::GoldPile => Some("gold_pile"),
             _ => None,
         }
     }
@@ -373,6 +389,7 @@ impl Block {
             Block::Air => (0.0, 0.0, 0.0),
             Block::Dirt => (0.50, 0.34, 0.20),
             Block::Stone => (0.50, 0.50, 0.53),
+            Block::Snow => (0.94, 0.96, 0.99),
             Block::Leaves => (0.16, 0.52, 0.17),
             Block::Needles => (0.09, 0.36, 0.22),
             Block::Planks => (0.72, 0.54, 0.31),
@@ -385,7 +402,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 25] = [
+    const ALL: [Block; 27] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -411,6 +428,8 @@ mod tests {
         Block::ClayForge,
         Block::ForgeCharged,
         Block::ForgeLit,
+        Block::Snow,
+        Block::GoldPile,
     ];
 
     #[test]

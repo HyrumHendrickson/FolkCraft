@@ -1,5 +1,6 @@
 //! Procedural terrain: stone/dirt ground with occasional broad, gentle hills and valleys, winding
-//! rivers, a forest of oak and pine trees, and occasional clearings of grass, flowers and bushes.
+//! rivers, a forest of oak and pine trees, and occasional clearings of grass, flowers and bushes. On top of
+//! that go the landmarks the player has brought into the world (`landmarks.rs`): lakes, and snow-capped mountains.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -7,6 +8,7 @@ use std::collections::HashMap;
 use crate::block::Block;
 use crate::chunk::idx;
 use crate::config::*;
+use crate::landmarks::Landmarks;
 use crate::river::{is_river, river_near};
 use crate::rng::{hash3, Rng};
 
@@ -156,10 +158,22 @@ pub fn relief_for_column(seed: i64, wx: i32, wz: i32) -> Option<Relief> {
     relief_in_region(seed, region(wx), region(wz))
 }
 
-/// y of the highest natural dirt block in the column (wx, wz): the flat ground raised by a hill, lowered
-/// by a valley or by a river bed.
+/// y of the highest natural block of the ground in the column (wx, wz), with no landmarks in the world: the flat
+/// ground raised by a hill, lowered by a valley or by a river bed.
+#[cfg(test)]
 pub fn ground_top(seed: i64, wx: i32, wz: i32) -> i32 {
-    surface(seed, relief_for_column(seed, wx, wz), wx, wz).0
+    ground_top_with(seed, &Landmarks::default(), wx, wz)
+}
+
+/// y of the highest block of the ground in the column (wx, wz), landmarks included: a mountain raises it and a
+/// lake or a river lowers it to the bed.
+pub fn ground_top_with(seed: i64, landmarks: &Landmarks, wx: i32, wz: i32) -> i32 {
+    surface(seed, relief_for_column(seed, wx, wz), landmarks, wx, wz).0
+}
+
+/// Whether water covers the column (wx, wz): a river or a lake.
+pub fn is_wet_column(seed: i64, landmarks: &Landmarks, wx: i32, wz: i32) -> bool {
+    surface(seed, relief_for_column(seed, wx, wz), landmarks, wx, wz).1
 }
 
 /// Whether the bush at a position starts with purple berries during the day.
@@ -167,13 +181,18 @@ pub fn berry_bush_is_purple(seed: i64, wx: i32, wz: i32) -> bool {
     hash3(seed, wx, wz, 0xB3A7) % PURPLE_BUSH_ONE_IN == 0
 }
 
-/// The highest dirt block of the column (wx, wz) and whether a river runs over it, given the relief
-/// that can touch it. Rivers keep off hills and valleys, so the two never add up.
-fn surface(seed: i64, relief: Option<Relief>, wx: i32, wz: i32) -> (i32, bool) {
-    let river = is_river(seed, wx, wz);
-    let rise = relief.map_or(0, |r| r.rise_at(wx, wz));
-    (GROUND_TOP + rise - if river { RIVER_DEPTH } else { 0 }, river)
+/// The highest block of the ground in the column (wx, wz) and whether water covers it, given the relief that can
+/// touch it. Rivers keep off hills and valleys, so those never add up. A lake takes the place of the hills near it
+/// (`Landmarks::relief_scale`), and a mountain stands over any river or lake it covers.
+fn surface(seed: i64, relief: Option<Relief>, landmarks: &Landmarks, wx: i32, wz: i32) -> (i32, bool) {
+    let mountain = landmarks.mountain_rise(wx, wz);
+    let wet = mountain == 0 && (is_river(seed, wx, wz) || landmarks.is_lake(wx, wz));
+    let hill = relief.map_or(0, |r| (r.rise_at(wx, wz) as f32 * landmarks.relief_scale(wx, wz)).round() as i32);
+    (GROUND_TOP + hill + mountain - if wet { LAKE_DEPTH } else { 0 }, wet)
 }
+
+/// y of the lowest snow block: the ground this far up a mountain is white.
+pub const SNOW_Y: i32 = GROUND_TOP + SNOW_LINE_RISE;
 
 /// The clearing (if any) that can touch chunk (cx, cz).
 pub fn clearing_for_chunk(seed: i64, cx: i32, cz: i32) -> Option<Clearing> {
@@ -242,7 +261,14 @@ pub fn place_pine(blocks: &mut [Block], rng: &mut Rng, lx: i32, lz: i32, ground:
     }
 }
 
+/// The blocks of chunk (cx, cz) with no landmarks in the world.
+#[cfg(test)]
 pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
+    generate_chunk_with(seed, cx, cz, &Landmarks::default())
+}
+
+/// The blocks of chunk (cx, cz) as the land and the landmarks make them (before the player's edits).
+pub fn generate_chunk_with(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec<Block> {
     let mut blocks = vec![Block::Air; (CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE) as usize];
 
     // The surface of every column once: the height of its top dirt block, and whether a river covers it.
@@ -250,21 +276,21 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
     let column = |lx: i32, lz: i32| (lz * CHUNK_SIZE + lx) as usize;
     let surfaces: Vec<(i32, bool)> = (0..CHUNK_SIZE)
         .flat_map(|lz| (0..CHUNK_SIZE).map(move |lx| (lx, lz)))
-        .map(|(lx, lz)| surface(seed, relief, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+        .map(|(lx, lz)| surface(seed, relief, landmarks, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
         .collect();
     let top_at = |lx: i32, lz: i32| surfaces[column(lx, lz)].0;
     let wet_at = |lx: i32, lz: i32| surfaces[column(lx, lz)].1;
 
-    // Ground: a stone layer followed by dirt, as high as the hill (or as low as the valley) makes it there.
-    // A river column has its dirt cut down to the bed and the gap up to the surrounding ground filled with
-    // water. Nothing below the stone.
+    // Ground: a stone layer followed by dirt, as high as the hill (or as low as the valley) makes it there,
+    // and white snow from `SNOW_Y` up the side of a mountain. A river or lake column has its dirt cut down to
+    // the bed and the gap up to the surrounding ground filled with water. Nothing below the stone.
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
             for y in 0..STONE_LAYERS {
                 blocks[idx(lx, y, lz)] = Block::Stone;
             }
             for y in STONE_LAYERS..=top_at(lx, lz) {
-                blocks[idx(lx, y, lz)] = Block::Dirt;
+                blocks[idx(lx, y, lz)] = if y >= SNOW_Y { Block::Snow } else { Block::Dirt };
             }
             if wet_at(lx, lz) {
                 for y in top_at(lx, lz) + 1..=GROUND_TOP {
@@ -317,6 +343,10 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
         if wet_at(lx, lz) {
             continue;
         }
+        // Above the tree line the ground is bare (and a pine there would not fit under the sky).
+        if top_at(lx, lz) > GROUND_TOP + TREE_LINE_RISE {
+            continue;
+        }
         if placed
             .iter()
             .any(|&(px, pz)| (px - lx).abs() < 4 && (pz - lz).abs() < 4)
@@ -337,7 +367,7 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
-                if !c.contains(wx, wz) || wet_at(lx, lz) {
+                if !c.contains(wx, wz) || wet_at(lx, lz) || top_at(lx, lz) > GROUND_TOP + TREE_LINE_RISE {
                     continue;
                 }
                 let roll = hash3(seed, wx, wz, 0x91A7) % 100;
@@ -363,7 +393,7 @@ pub fn generate_chunk_blocks(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
     // can be picked up (and put back) the same way.
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
-            if wet_at(lx, lz) {
+            if wet_at(lx, lz) || top_at(lx, lz) >= SNOW_Y {
                 continue;
             }
             let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
@@ -1136,4 +1166,27 @@ mod tests {
         assert!(seen > 500, "{seen} clearings checked");
     }
 
+
+    #[test]
+    fn a_lake_is_flat_one_block_deep_water_and_a_mountain_is_snow_capped_dirt() {
+        let mut marks = Landmarks::default();
+        marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: 30, phase: 3, from: (0, 0) });
+        let b = generate_chunk_with(9, 0, 0, &marks);
+        assert_eq!(b[idx(0, GROUND_TOP, 0)], Block::Water);
+        assert_eq!(b[idx(0, GROUND_TOP - LAKE_DEPTH, 0)], Block::Dirt);
+        assert_eq!(b[idx(0, GROUND_TOP + 1, 0)], Block::Air);
+        assert_eq!(ground_top_with(9, &marks, 0, 0), GROUND_TOP - LAKE_DEPTH);
+        assert!(is_wet_column(9, &marks, 0, 0));
+
+        let mut marks = Landmarks::default();
+        marks.mountains.push(crate::landmarks::Mountain { x: 10, z: 10, radius: 40, height: MOUNTAIN_HEIGHT, phase: 0 });
+        let b = generate_chunk_with(9, 0, 0, &marks);
+        let summit = GROUND_TOP + MOUNTAIN_HEIGHT;
+        assert_eq!(ground_top_with(9, &marks, 10, 10), summit);
+        assert_eq!(b[idx(10, summit, 10)], Block::Snow);
+        assert_eq!(b[idx(10, SNOW_Y - 1, 10)], Block::Dirt);
+        assert_eq!(b[idx(10, summit + 1, 10)], Block::Air);
+        assert_eq!(b[idx(10, 0, 10)], Block::Stone);
+        assert!(!generate_chunk_with(9, 0, 0, &Landmarks::default()).contains(&Block::Snow), "no snow without a mountain");
+    }
 }

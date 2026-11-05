@@ -98,6 +98,48 @@ pub const RIVER_SPAWN_FADE: f32 = 70.0;
 pub const RIVER_RELIEF_MARGIN: i32 = 4;
 pub const RELIEF_PLACEMENT_TRIES: i32 = 8;
 
+// --- Landmarks: lakes, mountains and the rainbow -----------------------------------------
+
+/// A walk this many chunks long through a river, without leaving the water, ends at a lake.
+pub const LAKE_TREK_CHUNKS: i32 = 10;
+/// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter).
+pub const LAKE_RADIUS: i32 = 34;
+/// Gap in blocks between the player and the near shore of a new lake. It is more than `GEN_RADIUS` chunks, so
+/// the lake appears beyond the edge of the generated land instead of in front of the player.
+pub const LAKE_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
+/// Half the width of the stretch of water that joins the river to the lake.
+pub const LAKE_CHANNEL_HALF_WIDTH: f32 = 2.5;
+/// Lakes are one block deep, like rivers.
+pub const LAKE_DEPTH: i32 = RIVER_DEPTH;
+
+/// Following a held compass this many chunks leads to a mountain.
+pub const COMPASS_TREK_CHUNKS: i32 = 10;
+/// The compass needle points this way: north, which is towards smaller z.
+pub const COMPASS_NORTH_BEARING: f32 = -std::f32::consts::FRAC_PI_2;
+pub const MOUNTAIN_RADIUS: i32 = 46;
+/// Blocks the ground is raised at the summit. Hills are at most `HILL_MAX_HEIGHT`.
+pub const MOUNTAIN_HEIGHT: i32 = 17;
+/// Gap in blocks between the player and the foot of a new mountain (see `LAKE_DISTANCE`).
+pub const MOUNTAIN_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
+/// Ground this many blocks above the plain is covered in snow.
+pub const SNOW_LINE_RISE: i32 = 12;
+/// No trees grow where the ground is more than this many blocks above the plain (a pine is ten tall).
+pub const TREE_LINE_RISE: i32 = 6;
+/// Hills and valleys fade out over this many blocks beside a lake or a mountain, so no cliff is left behind.
+pub const LANDMARK_BLEND: i32 = 16;
+
+/// Holding a peep stone shows a rainbow once. Its gold lies this far from the player (min, max), in blocks.
+pub const RAINBOW_GOLD_MIN_DISTANCE: f32 = 26.0;
+pub const RAINBOW_GOLD_MAX_DISTANCE: f32 = 36.0;
+/// Places tried per frame for the rainbow's gold, and how far to the side of the player its arc begins.
+pub const RAINBOW_SPOT_TRIES: usize = 30;
+pub const RAINBOW_START_OFFSET: f32 = 5.0;
+/// How high the rainbow's arc rises above the line between its ends, as a share of the span.
+pub const RAINBOW_ARC_RATIO: f32 = 0.45;
+/// Gold in the pile at the end of the rainbow.
+pub const RAINBOW_GOLD_DROP: u32 = 6;
+pub const BREAK_SECONDS_GOLD_PILE: f32 = 1.5;
+
 // --- Plants, drops and fire -------------------------------------------------------------
 
 pub const GRASS_DROP_CHANCE: u64 = 70;
@@ -196,7 +238,8 @@ pub const QUAIL_FEATHER_DROP: u32 = 3;
 pub const MAX_QUAIL: usize = 9;
 pub const SPAWN_WEIGHT_QUAIL: u64 = 55;
 
-pub const BEAR_HEALTH: i32 = 14;
+/// Twice the health bears had before (14).
+pub const BEAR_HEALTH: i32 = 28;
 pub const BEAR_WALK_SPEED: f32 = 2.2;
 pub const BEAR_RUN_SPEED: f32 = 5.4;
 pub const BEAR_NOTICE_DISTANCE: f32 = 40.0;
@@ -208,8 +251,10 @@ pub const BEAR_DAMAGE: u32 = 2;
 pub const BEAR_ATTACK_COOLDOWN: f32 = 1.2;
 pub const BEAR_MEAT_DROP: u32 = 3;
 pub const BEAR_PELT_DROP: u32 = 1;
-pub const MAX_BEAR: usize = 2;
-pub const SPAWN_WEIGHT_BEAR: u64 = 15;
+/// Bears are a quarter as common as they were: at most one at a time (it was two) and a quarter of the old
+/// spawn weight (it was 15; the weights of the other animals are unchanged).
+pub const MAX_BEAR: usize = 1;
+pub const SPAWN_WEIGHT_BEAR: u64 = 4;
 
 // --- Will-o-whisps ----------------------------------------------------------------------
 

@@ -67,7 +67,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
   generated terrain, so they break by hand, drop themselves, and stay gone (recorded in `World::removed`).
 - A **Rabbit Foot** in the hotbar gives a broken pebble a `RABBIT_FOOT_PEEP_STONE_CHANCE` (20%) chance to
   add a Peep Stone, and leaves or pine needles a `RABBIT_FOOT_HOLLY_ROD_CHANCE` (20%) chance to add a Holly Rod.
-  It also keeps the existing Loadstone and Gold Ore bonuses. Peep Stones and Holly Rods do nothing yet.
+  It also keeps the existing Loadstone and Gold Ore bonuses. Holly Rods do nothing yet. A Peep Stone shows the rainbow, and a Compass leads to a mountain (see "Landmarks" below).
 - **Boulders** (`Block::Boulder`) lie among the stones at `GROUND_BOULDER_PER_MILLE` 2 per mille of columns (twice as often on
   hills). They are solid, rust-streaked rocks that only a **bronze mallet** breaks (`BREAK_SECONDS_BOULDER` 4 s). A broken boulder
   drops one stone, one pebble and `BOULDER_IRON_MIN..=BOULDER_IRON_MAX` (1 to 3) iron ore, and stays gone.
@@ -157,13 +157,13 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     (`ANIMAL_KNOCKBACK_SPEED`, `PLAYER_KNOCKBACK_SPEED`) plus a hop (`KNOCKBACK_HOP`) that decays at `KNOCKBACK_DECAY`.
   - A **quail** hops about. A player or a bear within 10 blocks makes it take off, climb above the treetops, fly
     away for a few seconds, glide down and land. **Every take-off drops a feather** where it was.
-  - A **bear** (`BEAR_HEALTH` 14) wanders with pauses. Within `BEAR_NOTICE_DISTANCE` (40) of the player each walk
+  - A **bear** (`BEAR_HEALTH` 28) wanders with pauses. Within `BEAR_NOTICE_DISTANCE` (40) of the player each walk
     points roughly towards them (within `BEAR_WANDER_SPREAD`). Within `BEAR_CHARGE_DISTANCE` (10) it charges at
-    `BEAR_RUN_SPEED` (6.4, a little slower than the 7.2 sprint) and keeps charging until the player is
+    `BEAR_RUN_SPEED` (5.4, slower than the 8.2 sprint) and keeps charging until the player is
     `BEAR_CALM_DISTANCE` (20) away, then wanders towards them again. A bear that reaches the player stops against
     them and hits for `BEAR_DAMAGE` (2) every `BEAR_ATTACK_COOLDOWN` (1.2 s) (`Animal::try_attack`; dying respawns
     the player). A bear that is hurt charges the player from any distance for `ANIMAL_ALARM_SECONDS`. Bears never
-    chase deer or quail. At most `MAX_BEAR` (2) live nearby; spawns are weighted by `SPAWN_WEIGHT_*`.
+    chase deer or quail. At most `MAX_BEAR` (1) lives nearby; spawns are weighted by `SPAWN_WEIGHT_*` (a bear's weight is 4, about a quarter of its old 15).
   - A **will-o-whisp** appears only while the world is night. It floats about three blocks above the terrain,
     flees at `WILL_O_WHISP_FLEE_SPEED` when the player comes within `WILL_O_WHISP_FLEE_DISTANCE`, and has no
     attacks, drops or weapon interaction yet. At most `MAX_WILL_O_WHISP` live nearby.
@@ -178,7 +178,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     `BOW_COOLDOWN`. With a bow in hand left click never digs or chops (`Block::can_break_with`). Arrows fly
     under gravity (`arrow.rs`) and stop at any solid block. An arrow that hits an animal is used up; one that hits a block or expires lands as a dropped
     arrow item (`Game::update_arrows`, `ARROW_DROP_BACKOFF`) that can be picked up and shot again. `ARROW_DAMAGE` 3.
-  - Health: deer `DEER_HEALTH` 6, quail `QUAIL_HEALTH` 2, bear `BEAR_HEALTH` 14 (seven axe blows or five arrows). A
+  - Health: deer `DEER_HEALTH` 6, quail `QUAIL_HEALTH` 2, bear `BEAR_HEALTH` 28 (seven axe blows or ten arrows). A
     hurt deer or quail flees for `ANIMAL_ALARM_SECONDS` whatever the distance. A **deer** drops 2 venison and 1
     leather; a **quail** drops 1 poultry and `QUAIL_FEATHER_DROP` (3) feathers; a **bear** drops 3 bear meat and 1 bear pelt.
 - Dropped items are small physics boxes; walking near them picks them up (`PICKUP_*` in `config.rs`).
@@ -222,10 +222,11 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `animal_draw.rs` | Box models for animals, and arrows (thin wrapper over `draw_box`). |
 | `play.rs` | The in-game frame: input, simulation step, 3D render, HUD. Calls into `hud.rs` and `effects.rs`. |
 | `hud.rs` | Hotbar, inventory screen (layout, drag and drop, crafting list), item icons, toasts. |
-| `effects.rs` | Animated flames, ember glow, and whatever lies cooking or smelting on a fire (dynamic, so chunk meshes stay static). |
+| `effects.rs` | Animated flames, ember glow, whatever lies cooking or smelting on a fire, and the rainbow (`rainbow_quads` is the geometry, `draw_rainbow` draws it). Dynamic, so chunk meshes stay static. |
 | `dropped.rs` | Items on the ground: spawn, physics, pickup, drawing (`draw_box` is shared with `effects.rs`). |
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
-| `terrain.rs` | Generation: ground (`ground_top`, hills and valleys as `Relief`, river beds and water), trees, clearings and their plants. |
+| `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
+| `landmarks.rs` | `Lake`, `Mountain`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
 | `river.rs` | `is_river`, `river_near`: rivers as zero contours of a smooth noise field. Pure functions of seed and column. |
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG. |
 | `player.rs` | Player state, keyboard input, AABB physics. |
@@ -235,7 +236,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 
 Data flow per frame in `play::play_screen`: input (`E`, hotbar keys, look) -> chunk streaming and
 meshing -> player physics -> raycast -> `handle_attacking` (axe swing, bow shot) -> `handle_breaking` (`Game::update_mining`: hold to break, or ignite) -> `handle_placing` ->
-`Game::update_items` -> `Game::burn_fires` -> `Game::update_animals` -> `Game::update_arrows` -> `Game::update_health` -> autosave -> `render_world` (chunks, items, flames,
+`Game::update_landmarks` (treks, rainbow) -> `Game::update_items` -> `Game::burn_fires` -> `Game::update_animals` -> `Game::update_arrows` -> `Game::update_health` -> autosave -> `render_world` (chunks, items, flames,
 target outline) -> `render_hud`.
 
 ## Conventions and invariants
@@ -317,6 +318,30 @@ independent. Inside the disc: no tree trunks, and each column rolls (by position
 flower or a bush on the ground (`GRASS_PERCENT`, `FLOWER_PERCENT`, `BUSH_PERCENT`). Flower colours are
 picked per position by the mesher. The spawn point is kept clear of trees as before.
 
+## Landmarks: lakes, mountains and the rainbow
+
+The land is a pure function of the seed, except for three things the player brings in by exploring. They live in
+`World::landmarks` (`landmarks.rs`), are saved with the world, and the terrain generator consults them. Adding a lake
+or mountain (`World::add_lake`, `add_mountain`) regenerates the loaded chunks it touches, and the player's edits are
+applied to them again as usual. Every number is in the "Landmarks" section of `config.rs`.
+
+- **Lake.** `Treks::step` is called every frame (`Game::update_landmarks`). Wading (`Game::player_in_water`: water in the
+  feet cell or the two below, so a jump does not count) until the player is `LAKE_TREK_CHUNKS` (10) chunks from where they
+  entered, along either axis, makes a `Lake` ahead of them, beyond `GEN_RADIUS` so it does not pop in. It is a wavy basin of
+  radius about 34, one block deep (`LAKE_DEPTH`), plus a straight channel from the player's column so the water is continuous.
+  Hills fade out beside it (`Landmarks::relief_scale`), so no cliff is left.
+- **Mountain.** Holding a Compass, `Treks` adds the distance walked north (`COMPASS_NORTH_BEARING`, towards smaller z); putting it
+  away resets the count, walking south subtracts. At `COMPASS_TREK_CHUNKS` (10) a `Mountain` of `MOUNTAIN_HEIGHT` 17 appears
+  ahead. Its slope never exceeds one block per column (a test checks this), so it can be climbed by jumping. From
+  `SNOW_LINE_RISE` up the ground is `Block::Snow`: solid, opaque and unbreakable. No trees grow above `TREE_LINE_RISE`.
+  A mountain stands over any river or lake beneath it.
+- **Rainbow.** With a Peep Stone in hand and `RainbowState::Unseen`, `Game::try_show_rainbow` places a `Block::GoldPile`
+  26 to 36 blocks away on dry bare ground (saved like any placed block) and sets `RainbowState::Active`. The arc is drawn
+  only while a Peep Stone is held (`Game::visible_rainbow`). Mining the pile drops `RAINBOW_GOLD_DROP` gold and sets
+  `RainbowState::Spent`, which is saved and never reverts: there is no further rainbow.
+- Trek progress is not saved; it starts over when a world is loaded. A step of more than 12 blocks in one frame (a respawn)
+  also resets it.
+
 ## Save format
 
 Plain text, one record per line, in `saves/<sanitized name>.world`:
@@ -335,6 +360,10 @@ pot <x> <y> <z> <0|1> <meat id or -> <s>   a tin pot on that fire: water (0/1), 
 glow <x> <y> <z> <seconds>       seconds of bellows glow left on the embers at that position
 health <n>                       life points, 1 to 10 (missing or invalid: full health)
 mode dev                         a dev-mode world (no line: normal mode)
+lake <x> <z> <radius> <phase> <from x> <from z>   a lake and its channel to the river
+mountain <x> <z> <radius> <height> <phase>        a mountain
+rainbow spent                    the gold was taken: never another rainbow
+rainbow <from x> <from z> <x> <y> <z>   the rainbow is out, its gold pile at (x, y, z)
 ```
 
 Unknown or malformed records are ignored, and older saves without the later lines still load.
@@ -343,7 +372,7 @@ Old item ids `copper_ore` and `tin_ore` load as `stone` and `pebble` (what smelt
 Item ids come from `ItemKind::id()`: `stick`, `pebble`, `stone`, `log`, `stone_axe`, `grass`, `berries`,
 `twine`, `bow_drill`, `charcoal`, `plank`, `feather`, `bow`, `arrow`, `venison`, `poultry`, `cooked_venison`,
 `cooked_poultry`, `leather`, `bear_meat`, `cooked_bear_meat`, `bear_pelt`, `bellows`, `ash`, `copper`, `tin`, `iron`, `clay`, `iron_ore`, `leather_cord`, `bronze`, `bronze_mallet`, `clay_forge`, `rabbit_meat`, `cooked_rabbit`, `moose_meat`, `cooked_moose`, `rabbit_foot`, `peep_stone`, `holly_rod`, `copper_axe`, `bronze_axe`, `iron_axe`, `tin_pot`, `clay_jar`, `water_jar`, `venison_stew`, `poultry_stew`, `bear_stew`, `rabbit_stew`, `moose_stew`, `red_berry_stew`, `purple_berry_stew`, `sling`, `loadstone`, `compass`. Block ids come from `Block::id()`: `placed_log`,
-`placed_pebble`, `placed_stone`, `fire`, `charcoal`, `planks`, `embers`, `ash`, `clay_forge`, `forge_charged`, `forge_lit`. Animals and arrows are not saved. The selected hotbar slot is not saved (it resets to slot 1 on load).
+`placed_pebble`, `placed_stone`, `fire`, `charcoal`, `planks`, `embers`, `ash`, `clay_forge`, `forge_charged`, `forge_lit`, `gold_pile`. `Snow` is never saved (it is generated). Animals, arrows and treks in progress are not saved. The selected hotbar slot is not saved (it resets to slot 1 on load).
 
 ## How to extend
 

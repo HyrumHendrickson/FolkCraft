@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 use crate::config::*;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
+use crate::landmarks::compass_needle;
 use crate::recipe::{craft, craftable, Recipe};
 use crate::ui::ACCENT;
 
@@ -404,6 +405,22 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
 }
 
 /// An item icon with its stack count in the corner (no frame).
+/// The compass in hand: a dial in the top right whose red needle points north (the way to a mountain) and
+/// whose tail points south, turning as the player turns, with the blocks walked north so far below it.
+pub fn draw_compass(yaw: f32, progress: f32) {
+    let (w, radius) = (screen_width(), 46.0);
+    let (cx, cy) = (w - radius - 24.0, radius + 56.0);
+    draw_circle(cx, cy, radius + 4.0, Color::new(0.0, 0.0, 0.0, 0.6));
+    draw_circle(cx, cy, radius, Color::new(0.90, 0.88, 0.80, 0.95));
+    let (nx, ny) = compass_needle(yaw);
+    draw_line(cx, cy, cx - nx * radius * 0.6, cy - ny * radius * 0.6, 5.0, Color::new(0.96, 0.96, 0.96, 1.0));
+    draw_line(cx, cy, cx + nx * radius * 0.85, cy + ny * radius * 0.85, 5.0, Color::new(0.80, 0.14, 0.14, 1.0));
+    draw_circle(cx, cy, 4.0, Color::new(0.05, 0.05, 0.05, 1.0));
+    draw_text("N", cx + nx * (radius + 12.0) - 6.0, cy + ny * (radius + 12.0) + 6.0, 22.0, WHITE);
+    let line = format!("North {:.0}/{} blocks", progress.min((COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32), COMPASS_TREK_CHUNKS * CHUNK_SIZE);
+    draw_text(&line, cx - radius - 12.0, cy + radius + 26.0, 20.0, WHITE);
+}
+
 fn draw_stack(r: Rect, s: &ItemStack) {
     draw_item_icon(s.kind, r);
     if s.count > 1 {

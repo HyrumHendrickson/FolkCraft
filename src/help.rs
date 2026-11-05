@@ -52,14 +52,28 @@ pub fn help_lines() -> Vec<Line> {
             "Right click food to eat it when you are hurt: berries +{BERRY_HEAL}, cooked venison +{VENISON_HEAL}, cooked poultry +{POULTRY_HEAL}, cooked bear meat +{BEAR_MEAT_HEAL}. Raw meat cannot be eaten: cook it first."
         )),
         heading("The land"),
-        item("The world is forest, with clearings full of grass, flowers and berry bushes, broad gentle hills and valleys, and winding rivers."),
-        item("The ground cannot be dug. You can walk up any one-block step by jumping."),
+        item("The world is forest, with clearings full of grass, flowers and berry bushes, broad gentle hills and valleys, and winding rivers. Lakes and mountains are not found by chance: see Exploring."),
+        item("The ground cannot be dug. You can walk up any one-block step by jumping, which is how you climb a hill or a mountain."),
         item("Rivers are one block deep: wade straight through them, and jump to climb out the other side. Look down at the river bed to see what lies on it."),
+        heading("Exploring"),
+        text("Three things reward you for going out and looking. Each is found by doing something, and each is told here so you can find it on purpose."),
+        item(format!(
+            "Lake: step into a river and wade along it, without leaving the water, until you are {LAKE_TREK_CHUNKS} chunks ({} blocks) from where you entered, counting along either direction. Jumping while you wade is fine; stepping out onto the bank starts you over. The river then opens out into a large lake, still only one block deep, a little way ahead. Wade on to reach it. The top line of the screen shows your chunk.",
+            LAKE_TREK_CHUNKS * CHUNK_SIZE
+        )),
+        item(format!(
+            "Mountain: hold a Compass (a Loadstone and an Iron Ore). A dial appears in the top right with a red needle that points north, and it turns as you turn. Walk north, the way the needle points, for {COMPASS_TREK_CHUNKS} chunks ({} blocks): the dial counts your progress. Putting the compass away starts the count over, and walking south takes progress back. A tall mountain then rises ahead. You can climb it one block at a time by jumping, and the top is covered in snow. Snow cannot be mined yet.",
+            COMPASS_TREK_CHUNKS * CHUNK_SIZE
+        )),
+        item(format!(
+            "Rainbow: hold a Peep Stone (a Rabbit Foot gives them, see Gathering). A rainbow appears nearby, rising beside you and coming down on a pile of gold about {} to {} blocks away. It shows only while the Peep Stone is in your hand. Walk to the end and hold left mouse on the pile to take {RAINBOW_GOLD_DROP} gold. There is only one rainbow in a world: once its gold is taken you will never see another.",
+            RAINBOW_GOLD_MIN_DISTANCE as i32, RAINBOW_GOLD_MAX_DISTANCE as i32
+        )),
         heading("Gathering"),
         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
         item("Stones and pebbles lie on the ground everywhere, and on the river bed under the water. Hold left mouse on one to pick it up."),
-        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, boulders a {}% chance to drop Gold Ore, pebbles a {}% chance to add a Peep Stone, and leaves or pine needles a {}% chance to add a Holly Rod. Peep Stones and Holly Rods do nothing yet. Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass, which does nothing yet.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE, RABBIT_FOOT_PEEP_STONE_CHANCE, RABBIT_FOOT_HOLLY_ROD_CHANCE)),
+        item(format!("A Rabbit Foot in your hotbar gives broken stones a {}% chance to drop a Loadstone, boulders a {}% chance to drop Gold Ore, pebbles a {}% chance to add a Peep Stone, and leaves or pine needles a {}% chance to add a Holly Rod. Holly Rods do nothing yet. Gold Ore smelts like Iron Ore. A Loadstone and an Iron Ore make a Compass. See \"Exploring\" below for the Peep Stone and the Compass.", RABBIT_FOOT_LOADSTONE_CHANCE, RABBIT_FOOT_GOLD_CHANCE, RABBIT_FOOT_PEEP_STONE_CHANCE, RABBIT_FOOT_HOLLY_ROD_CHANCE)),
         item(format!("Clay lies on the river bed. Hold left mouse on a lump to dig {CLAY_DROP} clay out of it. Clay makes a clay forge.")),
         item(format!(
             "Boulders are big grey rocks, a little wider than a block, scattered on the ground (more on hills). Only a Bronze Mallet breaks one: hold left mouse on it for {} seconds. It drops a stone, a pebble and {BOULDER_IRON_MIN} to {BOULDER_IRON_MAX} iron ore.",
@@ -113,7 +127,7 @@ pub fn help_lines() -> Vec<Line> {
             "Deer ({DEER_HEALTH} health) and quail ({QUAIL_HEALTH} health) run or fly away from you, and from bears. Deer are faster than you even when you sprint."
         )),
         item(format!(
-            "Bears ({BEAR_HEALTH} health) are dangerous. Within {} blocks of you a bear wanders towards you. Within {} blocks it charges, and it keeps charging until you are {} blocks away. It runs a little slower than you sprint, so you can outrun it.",
+            "Bears ({BEAR_HEALTH} health) are rare and dangerous. Within {} blocks of you a bear wanders towards you. Within {} blocks it charges, and it keeps charging until you are {} blocks away. It runs a little slower than you sprint, so you can outrun it.",
             BEAR_NOTICE_DISTANCE as i32, BEAR_CHARGE_DISTANCE as i32, BEAR_CALM_DISTANCE as i32
         )),
         item(format!(
@@ -137,6 +151,9 @@ pub fn help_lines() -> Vec<Line> {
         item("A Sling is made of one leather and slings pebbles the way a bow shoots arrows: a pebble that hits an animal is used up, and one that misses lands on the ground to be picked up again."),
         heading("Tips"),
         item("Start with grass for twine, sticks from leaves, and a stone from the ground: that is a Stone Axe. Then logs, a Bow Drill, a fire, and food."),
+        item("Hearts come back only by eating. Cook meat before a long trip, and carry berries, which need no cooking."),
+        item("Look at what you are aiming at: a black outline means a click will do something, a red one means it will not."),
+        item("Take a Bow or a Sling and plenty of ammunition when you go exploring. Bears are rare, but they have a lot of health and hit hard."),
         item("Keep an eye out for bears before you wander far from your fire, and keep your bow stocked with arrows or your sling with pebbles."),
         item("On the menu, the Delete button beside a world removes it for good, after asking you to confirm."),
     ]);
@@ -309,11 +326,11 @@ mod tests {
         let t = all_text();
         for word in [
             "W A S D", "Shift", "Space", "Left mouse", "Right mouse", "inventory", "Esc", "hearts", "Bow Drill", "Bellows", "bears",
-            "Rivers", "Clay", "Delete", "Stone Axe", "Bronze Mallet", "Boulders", "Sling", "Loadstone", "Compass", "clay forge", "Tin Pot", "Clay Jar", "Moose", "Rabbits", "stew", "Iron Axe",
+            "Rivers", "Exploring", "Lake:", "Mountain:", "Rainbow:", "Peep Stone", "Clay", "Delete", "Stone Axe", "Bronze Mallet", "Boulders", "Sling", "Loadstone", "Compass", "clay forge", "Tin Pot", "Clay Jar", "Moose", "Rabbits", "stew", "Iron Axe",
         ] {
             assert!(t.contains(word), "the help mentions {word:?}");
         }
-        for heading in ["Controls", "Crafting", "Fire and cooking", "Smelting metal", "Water and stew", "Animals and hunting"] {
+        for heading in ["Controls", "Exploring", "Crafting", "Fire and cooking", "Smelting metal", "Water and stew", "Animals and hunting"] {
             assert!(help_lines().contains(&Line::Heading(heading.into())), "{heading}");
         }
     }
@@ -354,6 +371,22 @@ mod tests {
         }
         assert!(t.contains(&format!("{} seconds", SMELT_SECONDS as i32)) && t.contains(&format!("{} seconds", COOK_SECONDS as i32)));
         assert!(t.contains(&format!("{} blocks away", BEAR_CALM_DISTANCE as i32)));
+    }
+
+    #[test]
+    fn the_help_explains_how_to_find_a_lake_a_mountain_and_the_rainbow() {
+        let t = all_text();
+        let parts = [
+            format!("{LAKE_TREK_CHUNKS} chunks ({} blocks)", LAKE_TREK_CHUNKS * CHUNK_SIZE),
+            format!("{COMPASS_TREK_CHUNKS} chunks ({} blocks)", COMPASS_TREK_CHUNKS * CHUNK_SIZE),
+            "Snow cannot be mined yet".to_string(),
+            "only one rainbow in a world".to_string(),
+            "shows only while the Peep Stone is in your hand".to_string(),
+        ];
+        for part in &parts {
+            assert!(t.contains(part.as_str()), "the help says {part:?}");
+        }
+        assert!(!t.contains("Peep Stones and Holly Rods do nothing yet") && !t.contains("Compass, which does nothing yet"), "stale text is gone");
     }
 
     #[test]

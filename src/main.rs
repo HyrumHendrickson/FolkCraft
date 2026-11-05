@@ -40,6 +40,7 @@ mod help;
 mod hud;
 mod inventory;
 mod item;
+mod landmarks;
 mod menu;
 mod mesh;
 mod play;
