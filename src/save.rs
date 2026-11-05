@@ -43,6 +43,8 @@ pub struct SaveData {
     pub inventory: Inventory,
     pub items: Vec<DroppedItem>,
     pub health: u32,
+    /// Dev mode: the inventory lists every item to take. Chosen when the world is created.
+    pub dev_mode: bool,
 }
 
 impl SaveData {
@@ -59,6 +61,7 @@ impl SaveData {
             inventory: Inventory::new(),
             items: Vec::new(),
             health: MAX_HEALTH,
+            dev_mode: false,
         }
     }
 }
@@ -77,6 +80,7 @@ impl SaveData {
 ///                                 with the seconds of heat still needed (0 once it is done)
 ///     "glow <x> <y> <z> <secs>"   seconds of bellows glow left on the embers at that position
 ///     "health <n>"                the player's life points (1..=MAX_HEALTH)
+///     "mode dev"                  a dev-mode world (no line: normal mode)
 /// Worlds saved before the inventory existed simply have none of the last six. Animals and arrows
 /// are not saved.
 pub fn serialize_save(
@@ -87,6 +91,7 @@ pub fn serialize_save(
     inventory: &Inventory,
     items: &[DroppedItem],
     health: u32,
+    dev_mode: bool,
 ) -> String {
     let mut out = format!(
         "{}\n{}\n{} {} {} {} {}\n",
@@ -96,6 +101,9 @@ pub fn serialize_save(
         out.push_str(&format!("{} {} {}\n", x, y, z));
     }
     out.push_str(&format!("health {}\n", health));
+    if dev_mode {
+        out.push_str("mode dev\n");
+    }
     for (slot, stack) in inventory.slots.iter().enumerate() {
         if let Some(s) = stack {
             out.push_str(&format!("inv {} {} {}\n", slot, s.kind.id(), s.count));
@@ -139,6 +147,7 @@ pub fn parse_save(text: &str) -> SaveData {
     for line in lines {
         let mut t = line.split_whitespace();
         match t.next() {
+            Some("mode") => data.dev_mode = t.next() == Some("dev"),
             Some("health") => {
                 if let Some(h) = t.next().and_then(|s| s.parse::<u32>().ok()) {
                     if (1..=MAX_HEALTH).contains(&h) {
@@ -234,8 +243,9 @@ pub fn save_world(
     inventory: &Inventory,
     items: &[DroppedItem],
     health: u32,
+    dev_mode: bool,
 ) {
-    let out = serialize_save(&info.name, info.seed, world, player, inventory, items, health);
+    let out = serialize_save(&info.name, info.seed, world, player, inventory, items, health, dev_mode);
     if let Err(e) = fs::create_dir_all(SAVE_DIR).and_then(|_| fs::write(&info.path, out)) {
         eprintln!("Failed to save world: {e}");
     }
@@ -341,7 +351,7 @@ mod tests {
             DroppedItem::at_rest(ItemKind::Stone, vec3(-4.25, 1.11, 8.75)),
         ];
 
-        let text = serialize_save("My World", 42, &world, &player, &inv, &items, MAX_HEALTH);
+        let text = serialize_save("My World", 42, &world, &player, &inv, &items, MAX_HEALTH, false);
         let data = parse_save(&text);
         assert_eq!(data.removed, removed);
         assert_eq!(data.player.pos, player.pos);
@@ -359,7 +369,7 @@ mod tests {
         inv.add(ItemKind::Log, 9);
         inv.slots[3] = Some(ItemStack { kind: ItemKind::StoneAxe, count: 1 });
         let items = vec![DroppedItem::at_rest(ItemKind::Log, vec3(1.5, 6.1, 2.5))];
-        let text = serialize_save("W", 1, &world, &Player::new(), &inv, &items, MAX_HEALTH);
+        let text = serialize_save("W", 1, &world, &Player::new(), &inv, &items, MAX_HEALTH, false);
         assert!(text.contains("inv 3 stone_axe 1") && text.contains("item log "));
         let data = parse_save(&text);
         assert_eq!(data.inventory, inv);
@@ -376,7 +386,7 @@ mod tests {
         world.placed.insert((1, 6, 1), Block::Fire);
         world.placed.insert((2, 6, 2), Block::Charcoal);
         world.fires.insert((1, 6, 1), 42.5);
-        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH);
+        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         assert!(text.contains("place 4 6 5 placed_log") && text.contains("fire 1 6 1 42.5"));
         let data = parse_save(&text);
         assert_eq!(data.placed, world.placed);
@@ -398,7 +408,7 @@ mod tests {
             .expect("a tree");
         world.break_block(trunk.0, trunk.1, trunk.2);
         world.update_fires(20.0);
-        let text = serialize_save("W", 1, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH);
+        let text = serialize_save("W", 1, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         let data = parse_save(&text);
         let mut loaded = World::with_edits(1, data.removed, data.placed, data.fires);
         loaded.ensure_chunk(0, 0);
@@ -423,7 +433,7 @@ mod tests {
             inv.slots[i] = Some(ItemStack { kind, count: i as u32 + 1 });
         }
         let items = vec![DroppedItem::at_rest(ItemKind::Feather, vec3(1.5, 6.02, 2.5))];
-        let text = serialize_save("W", 9, &world, &Player::new(), &inv, &items, MAX_HEALTH);
+        let text = serialize_save("W", 9, &world, &Player::new(), &inv, &items, MAX_HEALTH, false);
         assert!(text.contains("place 4 6 5 planks") && text.contains("inv 4 venison 5"));
         let data = parse_save(&text);
         assert_eq!(data.placed, world.placed);
@@ -437,7 +447,7 @@ mod tests {
         world.placed.insert((1, 6, 1), Block::Fire);
         world.fires.insert((1, 6, 1), 40.0);
         world.cooking.insert((1, 6, 1), Cooking { raw: ItemKind::Poultry, left: 2.5 });
-        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH);
+        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         assert!(text.contains("cook 1 6 1 poultry 2.5"));
         let data = parse_save(&text);
         assert_eq!(data.cooking, world.cooking);
@@ -458,7 +468,7 @@ mod tests {
         world.glow.insert((1, 6, 1), 12.5);
         world.cooking.insert((1, 6, 1), Cooking { raw: ItemKind::Tin, left: 4.0 });
         world.cooking.insert((7, 6, 1), Cooking { raw: ItemKind::Stone, left: 6.0 });
-        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH);
+        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         assert!(text.contains("place 1 6 1 forge_lit") && text.contains("place 3 6 1 clay_forge") && text.contains("place 5 6 1 forge_charged"));
         assert!(text.contains("glow 1 6 1 12.5") && text.contains("cook 1 6 1 tin 4") && text.contains("cook 7 6 1 stone 6"));
         let data = parse_save(&text);
@@ -479,7 +489,7 @@ mod tests {
             inv.slots[i] = Some(ItemStack { kind, count: i as u32 + 2 });
         }
         let world = World::new(9, HashSet::new());
-        let text = serialize_save("W", 9, &world, &Player::new(), &inv, &[], MAX_HEALTH);
+        let text = serialize_save("W", 9, &world, &Player::new(), &inv, &[], MAX_HEALTH, false);
         assert!(text.contains("inv 0 leather_cord 2") && text.contains("inv 2 bronze_mallet 4") && text.contains("inv 3 clay_forge 5"));
         let data = parse_save(&text);
         assert_eq!(data.inventory, inv);
@@ -526,7 +536,7 @@ mod tests {
     #[test]
     fn health_round_trips_and_defaults_to_full() {
         let world = World::new(1, HashSet::new());
-        let text = serialize_save("W", 1, &world, &Player::new(), &Inventory::new(), &[], 4);
+        let text = serialize_save("W", 1, &world, &Player::new(), &Inventory::new(), &[], 4, false);
         assert!(text.contains("health 4"));
         assert_eq!(parse_save(&text).health, 4);
         assert_eq!(parse_save("W\n1\n0 6 0 0 0\n").health, MAX_HEALTH, "old saves are at full health");
@@ -560,7 +570,7 @@ mod tests {
         world.placed.insert((1, 6, 1), Block::Fire);
         world.fires.insert((1, 6, 1), 40.0);
         world.pots.insert((1, 6, 1), Pot { water: true, meat: Some(ItemKind::RabbitMeat), left: 4.5 });
-        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH);
+        let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         assert!(text.contains("pot 1 6 1 1 rabbit_meat 4.5"));
         let data = parse_save(&text);
         assert_eq!(data.pots, world.pots);
@@ -571,5 +581,19 @@ mod tests {
         let bad = "W\n1\n0 6 0 0 0\npot 1 2 3 1 cooked_venison 3\npot 1 2 3 2 venison 3\npot 1 2 3 1 venison -1\npot 1 2 3 1 venison inf\npot a 2 3 1 venison 3\npot 1 2 3 1 venison\n";
         let data = parse_save(bad);
         assert!(data.pots.is_empty() && data.removed.is_empty());
+    }
+
+    #[test]
+    fn dev_mode_is_saved_and_a_world_without_the_line_is_normal() {
+        let world = World::new(3, HashSet::new());
+        let dev = serialize_save("D", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, true);
+        assert!(dev.lines().any(|l| l == "mode dev"));
+        assert!(parse_save(&dev).dev_mode);
+        let normal = serialize_save("N", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
+        assert!(!normal.contains("mode"));
+        assert!(!parse_save(&normal).dev_mode);
+        assert!(!parse_save("Old\n1\n0 6 0 0 0\nhealth 5\n").dev_mode, "older saves are normal");
+        assert!(!parse_save("W\n1\n0 6 0 0 0\nmode nonsense\n").dev_mode);
+        assert!(!SaveData::new().dev_mode);
     }
 }

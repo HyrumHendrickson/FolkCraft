@@ -76,6 +76,7 @@ pub fn worlds_screen(app: &mut App) {
     if button(create_rect, "Create New World", !modal) {
         app.name.clear();
         app.seed.clear();
+        app.dev_mode = false;
         app.error.clear();
         app.field = Field::Name;
         app.mode = Mode::Create;
@@ -171,8 +172,17 @@ pub fn create_screen(app: &mut App) {
     text_field(name_rect, &app.name, app.field == Field::Name);
     text_field(seed_rect, &app.seed, app.field == Field::Seed);
 
+    // Game mode: a button that flips between normal and dev mode.
+    draw_text("Game mode", fx, 400.0, 26.0, LIGHTGRAY);
+    let mode_label = if app.dev_mode { "Dev mode" } else { "Normal" };
+    if button(Rect::new(fx, 410.0, fw, 52.0), mode_label, true) {
+        app.dev_mode = !app.dev_mode;
+    }
+    let mode_note = if app.dev_mode { "The inventory lists every item; click one to add it." } else { "The usual game." };
+    draw_text(mode_note, fx, 490.0, 22.0, GRAY);
+
     if !app.error.is_empty() {
-        text_centered(&app.error, w / 2.0, 395.0, 24, Color::new(0.95, 0.4, 0.4, 1.0));
+        text_centered(&app.error, w / 2.0, 530.0, 24, Color::new(0.95, 0.4, 0.4, 1.0));
     }
 
     let can_create = !app.name.trim().is_empty();
@@ -192,7 +202,7 @@ pub fn create_screen(app: &mut App) {
             return;
         }
         let info = WorldInfo { name, seed: parse_seed(&app.seed), path };
-        save_world(&info, &World::new(info.seed, HashSet::new()), &Player::new(), &Inventory::new(), &[], crate::config::MAX_HEALTH);
+        save_world(&info, &World::new(info.seed, HashSet::new()), &Player::new(), &Inventory::new(), &[], crate::config::MAX_HEALTH, app.dev_mode);
         app.enter_game(info);
     }
 }

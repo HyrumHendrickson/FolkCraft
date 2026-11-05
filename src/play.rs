@@ -211,7 +211,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
     set_default_camera();
     let (w, h) = (screen_width(), screen_height());
     if game.inventory_open {
-        inventory_screen(&mut game.inventory, &mut game.inventory_ui, game.selected, &mut game.toasts);
+        inventory_screen(&mut game.inventory, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode);
     } else {
         draw_line(w / 2.0 - 10.0, h / 2.0, w / 2.0 + 10.0, h / 2.0, 2.0, WHITE);
         draw_line(w / 2.0, h / 2.0 - 10.0, w / 2.0, h / 2.0 + 10.0, 2.0, WHITE);

@@ -44,6 +44,7 @@ pub fn help_lines() -> Vec<Line> {
         item("Right mouse: place the item you hold, eat it, or work a fire (see below)."),
         item("1 to 9 or the mouse wheel: choose what you hold from the hotbar. E: open the inventory. Esc: close it, or save and return to the menu."),
         item("Inventory: drag a stack onto another slot to move or merge it. The panel on the right lists everything you can make right now; click one to make it."),
+        item("Dev mode: when you create a world you can choose Dev mode instead of Normal. The game is the same, except that in the inventory you can scroll the list on the right past the recipes to a list of every item; click one to add it, right click to add a stack."),
         heading("Staying alive"),
         item(format!("You have {MAX_HEALTH} hearts. A fire burns you for {FIRE_DAMAGE} heart every second you touch it, and a bear that reaches you takes {BEAR_DAMAGE}.")),
         item("If you run out of hearts you start again at the beginning of the world. You keep your inventory."),

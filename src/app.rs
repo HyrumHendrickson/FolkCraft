@@ -25,6 +25,8 @@ pub struct App {
     pub scroll: f32,
     pub name: String,
     pub seed: String,
+    /// The game mode chosen on the create screen: `true` for dev mode.
+    pub dev_mode: bool,
     pub field: Field,
     pub error: String,
     pub backspace_hold: f32,
@@ -43,6 +45,7 @@ impl App {
             scroll: 0.0,
             name: String::new(),
             seed: String::new(),
+            dev_mode: false,
             field: Field::Name,
             error: String::new(),
             backspace_hold: 0.0,

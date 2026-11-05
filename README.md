@@ -177,6 +177,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
   - Bronze Mallet = 2 Bronze + 1 Leather Cord + 1 Stick.
   - Arrow = 1 Pebble + 1 Stick + 1 Feather.
   Bear pelts and iron have no further use yet. The recipe list scrolls with the mouse wheel when it has more entries than rows.
+- **Dev mode** is chosen on the create-world screen (`App::dev_mode`, saved as the `mode dev` record, `Game::dev_mode`). It changes only the inventory screen: after the craftable recipes, the right-hand list continues with every `ItemKind::ALL` item (`hud::craft_entries`); a click adds one (`hud::dev_give`), a right click a stack. Normal mode is unchanged.
 - Controls: WASD, mouse or arrow keys to look, Space jump, Shift sprint (`SPRINT_SPEED` 7.2), left mouse break/attack/shoot,
   right mouse place/eat/cook, `E` inventory,
   `Esc` closes the inventory, or saves and returns to the menu when it is closed.
@@ -309,6 +310,7 @@ cook <x> <y> <z> <item id> <s>   meat, stone, pebble, tin or iron ore on that fi
 pot <x> <y> <z> <0|1> <meat id or -> <s>   a tin pot on that fire: water (0/1), raw meat in it, seconds of heat the stew still needs
 glow <x> <y> <z> <seconds>       seconds of bellows glow left on the embers at that position
 health <n>                       life points, 1 to 10 (missing or invalid: full health)
+mode dev                         a dev-mode world (no line: normal mode)
 ```
 
 Unknown or malformed records are ignored, and older saves without the later lines still load.

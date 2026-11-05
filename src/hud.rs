@@ -6,7 +6,7 @@ use macroquad::prelude::*;
 use crate::config::*;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
-use crate::recipe::{craft, craftable};
+use crate::recipe::{craft, craftable, Recipe};
 use crate::ui::ACCENT;
 
 const SLOT_SIZE: f32 = 48.0;
@@ -522,7 +522,7 @@ fn wrap_totals(parts: &[String], max_width: f32) -> Vec<String> {
 /// - press on a stack and release over another slot to move, merge or swap stacks;
 /// - click an entry in the crafting list to craft it once.
 /// Also shows a tooltip on hover.
-pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts) {
+pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) {
     let (w, h) = (screen_width(), screen_height());
     let lay = layout();
     let (mx, my) = mouse_position();
@@ -568,37 +568,60 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
         }
     }
 
-    // --- Crafting list: every recipe the current items can pay for ---
-    let recipes = craftable(inventory);
+    // --- Right-hand list: every recipe the current items can pay for and, in dev mode, then every item ---
+    let entries = craft_entries(craftable(inventory), dev_mode);
     let max_rows = ((grid_size().y + CRAFT_ROW_GAP) / (CRAFT_ROW_H + CRAFT_ROW_GAP)) as usize;
     let wheel = mouse_wheel().1;
     if wheel != 0.0 {
-        let step = if wheel < 0.0 { 1 } else { -1 };
+        // The item list is long, so dev mode scrolls a few rows to the notch.
+        let step = if dev_mode { 3 } else { 1 } * if wheel < 0.0 { 1 } else { -1 };
         ui.craft_scroll = (ui.craft_scroll as i32 + step).max(0) as usize;
     }
-    ui.craft_scroll = ui.craft_scroll.min(recipes.len().saturating_sub(max_rows));
-    if recipes.len() > max_rows {
-        draw_text("Mouse wheel: more recipes", lay.craft.x + 130.0, panel.y + pad + 20.0, 18.0, LIGHTGRAY);
+    ui.craft_scroll = ui.craft_scroll.min(entries.len().saturating_sub(max_rows));
+    if entries.len() > max_rows {
+        draw_text(if dev_mode { "Mouse wheel: recipes, then every item" } else { "Mouse wheel: more recipes" }, lay.craft.x + 130.0, panel.y + pad + 20.0, 18.0, LIGHTGRAY);
     }
-    if recipes.is_empty() {
+    if entries.is_empty() {
         draw_text("Nothing to craft yet.", lay.craft.x, lay.craft.y + 24.0, 22.0, LIGHTGRAY);
     }
-    let mut crafted: Option<&'static str> = None;
-    for (i, recipe) in recipes.iter().skip(ui.craft_scroll).take(max_rows).enumerate() {
+    let mut message: Option<String> = None;
+    for (i, entry) in entries.iter().skip(ui.craft_scroll).take(max_rows).enumerate() {
         let r = Rect::new(lay.craft.x, lay.craft.y + i as f32 * (CRAFT_ROW_H + CRAFT_ROW_GAP), CRAFT_W, CRAFT_ROW_H);
         let hover = r.contains(mouse);
         draw_rectangle(r.x, r.y, r.w, r.h, if hover { Color::new(0.26, 0.31, 0.26, 1.0) } else { Color::new(0.07, 0.08, 0.07, 0.85) });
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if hover { ACCENT } else { Color::new(0.35, 0.38, 0.35, 1.0) });
         let icon = Rect::new(r.x + 4.0, r.y + 4.0, r.h - 8.0, r.h - 8.0);
-        draw_item_icon(recipe.output, icon);
-        draw_text(recipe.output.name(), r.x + r.h, r.y + 25.0, 24.0, WHITE);
-        draw_text(&recipe.describe(), r.x + r.h, r.y + 46.0, 18.0, LIGHTGRAY);
-        if hover && is_mouse_button_pressed(MouseButton::Left) && craft(inventory, recipe) {
-            crafted = Some(recipe.output.name());
+        match *entry {
+            CraftEntry::Recipe(recipe) => {
+                draw_item_icon(recipe.output, icon);
+                draw_text(recipe.output.name(), r.x + r.h, r.y + 25.0, 24.0, WHITE);
+                draw_text(&recipe.describe(), r.x + r.h, r.y + 46.0, 18.0, LIGHTGRAY);
+                if hover && is_mouse_button_pressed(MouseButton::Left) && craft(inventory, recipe) {
+                    message = Some(format!("Crafted {}", recipe.output.name()));
+                }
+            }
+            CraftEntry::Item(kind) => {
+                draw_item_icon(kind, icon);
+                draw_text(kind.name(), r.x + r.h, r.y + 25.0, 24.0, WHITE);
+                draw_text("Dev: click adds 1, right click adds a stack", r.x + r.h, r.y + 46.0, 18.0, LIGHTGRAY);
+                let count = if hover && is_mouse_button_pressed(MouseButton::Left) {
+                    1
+                } else if hover && is_mouse_button_pressed(MouseButton::Right) {
+                    MAX_STACK
+                } else {
+                    0
+                };
+                if count > 0 {
+                    message = Some(match dev_give(inventory, kind, count) {
+                        0 => "Inventory full".to_string(),
+                        n => format!("+{n} {}", kind.name()),
+                    });
+                }
+            }
         }
     }
-    if let Some(name) = crafted {
-        toasts.push(format!("Crafted {name}"));
+    if let Some(message) = message {
+        toasts.push(message);
     }
 
     // --- Footer: totals and hints ---
@@ -611,7 +634,7 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
         draw_text(line, lay.grid.x, panel.y + panel.h - 76.0 + i as f32 * 20.0, 20.0, LIGHTGRAY);
     }
     draw_text(
-        "Drag items to move them. Click a recipe to craft. E or Esc to close.",
+        if dev_mode { "Drag items to move them. Click a recipe to craft, or an item to add it. E or Esc to close." } else { "Drag items to move them. Click a recipe to craft. E or Esc to close." },
         lay.grid.x,
         panel.y + panel.h - 12.0,
         20.0,
@@ -628,6 +651,24 @@ pub fn inventory_screen(inventory: &mut Inventory, ui: &mut InventoryUi, selecte
         draw_rectangle(tx - 6.0, ty - 20.0, d.width + 12.0, 28.0, Color::new(0.0, 0.0, 0.0, 0.85));
         draw_text(&label, tx, ty, 24.0, WHITE);
     }
+}
+
+/// One row of the list beside the inventory: a recipe the inventory can pay for or, in dev mode, an item to take.
+#[derive(Clone, Copy)]
+enum CraftEntry {
+    Recipe(&'static Recipe),
+    Item(ItemKind),
+}
+
+/// The rows of that list: the craftable recipes, followed in dev mode by every item in the game.
+fn craft_entries(recipes: Vec<&'static Recipe>, dev_mode: bool) -> Vec<CraftEntry> {
+    let items = if dev_mode { ItemKind::ALL.as_slice() } else { &[] };
+    recipes.into_iter().map(CraftEntry::Recipe).chain(items.iter().copied().map(CraftEntry::Item)).collect()
+}
+
+/// Put up to `count` of `kind` into the inventory (dev mode). Returns how many fitted.
+fn dev_give(inventory: &mut Inventory, kind: ItemKind, count: u32) -> u32 {
+    count - inventory.add(kind, count)
 }
 
 /// Short-lived messages such as "+1 Stick".
@@ -717,5 +758,43 @@ mod tests {
         assert_eq!(t.len(), Toasts::MAX_VISIBLE);
         t.update(0.2);
         assert_eq!(t.len(), 0);
+    }
+
+    #[test]
+    fn dev_mode_lists_every_item_after_the_recipes_and_normal_mode_does_not() {
+        let mut inv = Inventory::new();
+        inv.add(ItemKind::Grass, 3);
+        let recipes = craftable(&inv);
+        assert!(!recipes.is_empty());
+        let normal = craft_entries(craftable(&inv), false);
+        assert_eq!(normal.len(), recipes.len());
+        assert!(normal.iter().all(|e| matches!(e, CraftEntry::Recipe(_))));
+        let dev = craft_entries(craftable(&inv), true);
+        assert_eq!(dev.len(), recipes.len() + ItemKind::ALL.len());
+        assert!(dev[..recipes.len()].iter().all(|e| matches!(e, CraftEntry::Recipe(_))), "recipes first");
+        let items: Vec<ItemKind> = dev[recipes.len()..].iter().map(|e| match e { CraftEntry::Item(k) => *k, _ => panic!("recipe among the items") }).collect();
+        assert_eq!(items, ItemKind::ALL.to_vec(), "every item, once");
+        // With nothing craftable the dev list is still the whole item list.
+        assert_eq!(craft_entries(Vec::new(), true).len(), ItemKind::ALL.len());
+        assert!(craft_entries(Vec::new(), false).is_empty());
+    }
+
+    #[test]
+    fn taking_an_item_in_dev_mode_adds_it_and_reports_what_fitted() {
+        for kind in ItemKind::ALL {
+            let mut fresh = Inventory::new();
+            assert_eq!(dev_give(&mut fresh, kind, 1), 1, "{kind:?}");
+            assert_eq!(fresh.count(kind), 1, "{kind:?}");
+        }
+        let mut inv = Inventory::new();
+        assert_eq!(dev_give(&mut inv, ItemKind::Stick, 1), 1);
+        assert_eq!(dev_give(&mut inv, ItemKind::Stick, 1), 1);
+        assert_eq!(inv.count(ItemKind::Stick), 2);
+        assert_eq!(dev_give(&mut inv, ItemKind::Stone, MAX_STACK), MAX_STACK);
+        // A full inventory takes nothing more.
+        let mut full = Inventory::new();
+        full.add(ItemKind::Stone, INVENTORY_SLOTS as u32 * MAX_STACK);
+        assert_eq!(dev_give(&mut full, ItemKind::Stick, 1), 0);
+        assert_eq!(dev_give(&mut full, ItemKind::Stone, 5), 0);
     }
 }

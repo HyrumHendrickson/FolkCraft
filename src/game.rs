@@ -29,6 +29,8 @@ pub struct Mining {
 
 pub struct Game {
     pub info: WorldInfo,
+    /// Dev mode: the inventory screen lists every item to add.
+    pub dev_mode: bool,
     pub world: World,
     pub player: Player,
     pub inventory: Inventory,
@@ -72,10 +74,12 @@ impl Game {
         world.stream_chunks(data.player.pos);
         world.rebuild_dirty(data.player.pos, usize::MAX);
         let health = data.health;
+        let dev_mode = data.dev_mode;
         let mut player = data.player;
         player.lift_out_of_blocks(&world);
         Game {
             info,
+            dev_mode,
             world,
             player,
             inventory: data.inventory,
@@ -98,7 +102,7 @@ impl Game {
     }
 
     pub fn save(&self) {
-        save_world(&self.info, &self.world, &self.player, &self.inventory, &self.items, self.health);
+        save_world(&self.info, &self.world, &self.player, &self.inventory, &self.items, self.health, self.dev_mode);
     }
 
     /// The item in the selected hotbar slot, if any.
@@ -2935,5 +2939,14 @@ mod tests {
         let dir = vec3(0.0, 0.0, 1.0);
         assert!(!g.attack(eye(&g), dir, true, true, true));
         assert!(!g.eat_held());
+    }
+
+    #[test]
+    fn a_dev_world_loads_as_dev_mode_and_a_normal_one_does_not() {
+        let mut data = SaveData::new();
+        data.dev_mode = true;
+        let info = WorldInfo { name: "dev".into(), seed: 1, path: PathBuf::new() };
+        assert!(Game::from_save(info, data, 1).dev_mode);
+        assert!(!game(190).dev_mode);
     }
 }
