@@ -1,0 +1,802 @@
+//! Item kinds, item stacks, and what blocks drop when broken.
+
+use macroquad::prelude::Color;
+
+use crate::block::Block;
+use crate::config::*;
+use crate::rng::Rng;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ItemKind {
+    Stick,
+    Pebble,
+    Stone,
+    Log,
+    StoneAxe,
+    Grass,
+    Berries,
+    Twine,
+    BowDrill,
+    Charcoal,
+    /// Made from a log; builds walls and ceilings.
+    Plank,
+    /// Dropped by a quail when it flies away; fletches arrows.
+    Feather,
+    /// Shoots arrows (left click). Made of twine and a stick.
+    Bow,
+    Arrow,
+    /// Raw meat. It has to be cooked on a burning log before it can be eaten.
+    Venison,
+    Poultry,
+    CookedVenison,
+    CookedPoultry,
+    Leather,
+    /// Raw bear meat, cooked like the other meats.
+    BearMeat,
+    CookedBearMeat,
+    /// The thick hide of a bear.
+    BearPelt,
+    /// Pumps air into embers (left click) so they glow hot enough to smelt. Twine, leather, sticks.
+    Bellows,
+    /// What burnt-out charcoal leaves; it can be broken and picked up.
+    Ash,
+    /// Smelted from a stone on burning charcoal.
+    Copper,
+    /// Smelted from a pebble on burning charcoal.
+    Tin,
+    /// Smelted from iron ore in a lit clay forge worked with bellows.
+    Iron,
+    /// Dug from the river bed.
+    Clay,
+    /// Broken out of a boulder with a bronze mallet.
+    IronOre,
+    /// Cut from a piece of leather (three to a piece).
+    LeatherCord,
+    /// One tin and one copper smelted together in a lit clay forge.
+    Bronze,
+    /// Two bronze, a leather cord and a stick. Breaks boulders and hurts animals.
+    BronzeMallet,
+    /// Clay shaped into a forge: put down, filled with charcoal and lit, it smelts bronze and iron.
+    ClayForge,
+    /// Dropped by a rabbit. Cooked like the other meats.
+    RabbitMeat,
+    CookedRabbit,
+    /// Dropped by a moose.
+    MooseMeat,
+    CookedMoose,
+    /// A rabbit sometimes leaves one. It has no use.
+    RabbitFoot,
+    /// Axes of metal: each hits one harder than the one before (stone, copper, bronze, iron).
+    CopperAxe,
+    BronzeAxe,
+    IronAxe,
+    /// Tin shaped into a pot, set on a burning log or charcoal to make stew.
+    TinPot,
+    /// Clay shaped into a jar. Right click water with it to fill it.
+    ClayJar,
+    WaterJar,
+    /// A pot of water and raw meat, cooked. Restores twice as much life as the cooked meat.
+    VenisonStew,
+    PoultryStew,
+    BearStew,
+    RabbitStew,
+    MooseStew,
+}
+
+impl ItemKind {
+    pub const ALL: [ItemKind; 49] = [
+        ItemKind::Stick,
+        ItemKind::Pebble,
+        ItemKind::Stone,
+        ItemKind::Log,
+        ItemKind::StoneAxe,
+        ItemKind::Grass,
+        ItemKind::Berries,
+        ItemKind::Twine,
+        ItemKind::BowDrill,
+        ItemKind::Charcoal,
+        ItemKind::Plank,
+        ItemKind::Feather,
+        ItemKind::Bow,
+        ItemKind::Arrow,
+        ItemKind::Venison,
+        ItemKind::Poultry,
+        ItemKind::CookedVenison,
+        ItemKind::CookedPoultry,
+        ItemKind::Leather,
+        ItemKind::BearMeat,
+        ItemKind::CookedBearMeat,
+        ItemKind::BearPelt,
+        ItemKind::Bellows,
+        ItemKind::Ash,
+        ItemKind::Copper,
+        ItemKind::Tin,
+        ItemKind::Iron,
+        ItemKind::Clay,
+        ItemKind::IronOre,
+        ItemKind::LeatherCord,
+        ItemKind::Bronze,
+        ItemKind::BronzeMallet,
+        ItemKind::ClayForge,
+        ItemKind::RabbitMeat,
+        ItemKind::CookedRabbit,
+        ItemKind::MooseMeat,
+        ItemKind::CookedMoose,
+        ItemKind::RabbitFoot,
+        ItemKind::CopperAxe,
+        ItemKind::BronzeAxe,
+        ItemKind::IronAxe,
+        ItemKind::TinPot,
+        ItemKind::ClayJar,
+        ItemKind::WaterJar,
+        ItemKind::VenisonStew,
+        ItemKind::PoultryStew,
+        ItemKind::BearStew,
+        ItemKind::RabbitStew,
+        ItemKind::MooseStew,
+    ];
+
+    /// Display name.
+    pub fn name(self) -> &'static str {
+        match self {
+            ItemKind::Stick => "Stick",
+            ItemKind::Pebble => "Pebble",
+            ItemKind::Stone => "Stone",
+            ItemKind::Log => "Log",
+            ItemKind::StoneAxe => "Stone Axe",
+            ItemKind::Grass => "Grass",
+            ItemKind::Berries => "Berries",
+            ItemKind::Twine => "Twine",
+            ItemKind::BowDrill => "Bow Drill",
+            ItemKind::Charcoal => "Charcoal",
+            ItemKind::Plank => "Wooden Plank",
+            ItemKind::Feather => "Feather",
+            ItemKind::Bow => "Bow",
+            ItemKind::Arrow => "Arrow",
+            ItemKind::Venison => "Venison",
+            ItemKind::Poultry => "Poultry",
+            ItemKind::CookedVenison => "Cooked Venison",
+            ItemKind::CookedPoultry => "Cooked Poultry",
+            ItemKind::Leather => "Leather",
+            ItemKind::BearMeat => "Bear Meat",
+            ItemKind::CookedBearMeat => "Cooked Bear Meat",
+            ItemKind::BearPelt => "Bear Pelt",
+            ItemKind::Bellows => "Bellows",
+            ItemKind::Ash => "Ash",
+            ItemKind::Copper => "Copper",
+            ItemKind::Tin => "Tin",
+            ItemKind::Iron => "Iron",
+            ItemKind::Clay => "Clay",
+            ItemKind::IronOre => "Iron Ore",
+            ItemKind::LeatherCord => "Leather Cord",
+            ItemKind::Bronze => "Bronze",
+            ItemKind::BronzeMallet => "Bronze Mallet",
+            ItemKind::ClayForge => "Clay Forge",
+            ItemKind::RabbitMeat => "Rabbit Meat",
+            ItemKind::CookedRabbit => "Cooked Rabbit",
+            ItemKind::MooseMeat => "Moose Meat",
+            ItemKind::CookedMoose => "Cooked Moose",
+            ItemKind::RabbitFoot => "Rabbit's Foot",
+            ItemKind::CopperAxe => "Copper Axe",
+            ItemKind::BronzeAxe => "Bronze Axe",
+            ItemKind::IronAxe => "Iron Axe",
+            ItemKind::TinPot => "Tin Pot",
+            ItemKind::ClayJar => "Clay Jar",
+            ItemKind::WaterJar => "Jar of Water",
+            ItemKind::VenisonStew => "Venison Stew",
+            ItemKind::PoultryStew => "Poultry Stew",
+            ItemKind::BearStew => "Bear Stew",
+            ItemKind::RabbitStew => "Rabbit Stew",
+            ItemKind::MooseStew => "Moose Stew",
+        }
+    }
+
+    /// Stable identifier used in save files.
+    pub fn id(self) -> &'static str {
+        match self {
+            ItemKind::Stick => "stick",
+            ItemKind::Pebble => "pebble",
+            ItemKind::Stone => "stone",
+            ItemKind::Log => "log",
+            ItemKind::StoneAxe => "stone_axe",
+            ItemKind::Grass => "grass",
+            ItemKind::Berries => "berries",
+            ItemKind::Twine => "twine",
+            ItemKind::BowDrill => "bow_drill",
+            ItemKind::Charcoal => "charcoal",
+            ItemKind::Plank => "plank",
+            ItemKind::Feather => "feather",
+            ItemKind::Bow => "bow",
+            ItemKind::Arrow => "arrow",
+            ItemKind::Venison => "venison",
+            ItemKind::Poultry => "poultry",
+            ItemKind::CookedVenison => "cooked_venison",
+            ItemKind::CookedPoultry => "cooked_poultry",
+            ItemKind::Leather => "leather",
+            ItemKind::BearMeat => "bear_meat",
+            ItemKind::CookedBearMeat => "cooked_bear_meat",
+            ItemKind::BearPelt => "bear_pelt",
+            ItemKind::Bellows => "bellows",
+            ItemKind::Ash => "ash",
+            ItemKind::Copper => "copper",
+            ItemKind::Tin => "tin",
+            ItemKind::Iron => "iron",
+            ItemKind::Clay => "clay",
+            ItemKind::IronOre => "iron_ore",
+            ItemKind::LeatherCord => "leather_cord",
+            ItemKind::Bronze => "bronze",
+            ItemKind::BronzeMallet => "bronze_mallet",
+            ItemKind::ClayForge => "clay_forge",
+            ItemKind::RabbitMeat => "rabbit_meat",
+            ItemKind::CookedRabbit => "cooked_rabbit",
+            ItemKind::MooseMeat => "moose_meat",
+            ItemKind::CookedMoose => "cooked_moose",
+            ItemKind::RabbitFoot => "rabbit_foot",
+            ItemKind::CopperAxe => "copper_axe",
+            ItemKind::BronzeAxe => "bronze_axe",
+            ItemKind::IronAxe => "iron_axe",
+            ItemKind::TinPot => "tin_pot",
+            ItemKind::ClayJar => "clay_jar",
+            ItemKind::WaterJar => "water_jar",
+            ItemKind::VenisonStew => "venison_stew",
+            ItemKind::PoultryStew => "poultry_stew",
+            ItemKind::BearStew => "bear_stew",
+            ItemKind::RabbitStew => "rabbit_stew",
+            ItemKind::MooseStew => "moose_stew",
+        }
+    }
+
+    /// The item with this save id. The veined stones of older saves come back as the plain stone and pebble
+    /// that smelt into the same metal now.
+    pub fn from_id(id: &str) -> Option<ItemKind> {
+        match id {
+            "copper_ore" => Some(ItemKind::Stone),
+            "tin_ore" => Some(ItemKind::Pebble),
+            id => ItemKind::ALL.into_iter().find(|k| k.id() == id),
+        }
+    }
+
+    pub fn color(self) -> Color {
+        match self {
+            ItemKind::Stick => Color::new(0.55, 0.38, 0.18, 1.0),
+            ItemKind::Pebble => Color::new(0.64, 0.64, 0.66, 1.0),
+            ItemKind::Stone => Color::new(0.42, 0.42, 0.46, 1.0),
+            ItemKind::Log => Color::new(0.40, 0.27, 0.13, 1.0),
+            ItemKind::StoneAxe => Color::new(0.50, 0.50, 0.54, 1.0),
+            ItemKind::Grass => Color::new(0.36, 0.66, 0.24, 1.0),
+            ItemKind::Berries => Color::new(0.72, 0.14, 0.30, 1.0),
+            ItemKind::Twine => Color::new(0.80, 0.70, 0.45, 1.0),
+            ItemKind::BowDrill => Color::new(0.52, 0.36, 0.20, 1.0),
+            ItemKind::Charcoal => Color::new(0.14, 0.14, 0.15, 1.0),
+            ItemKind::Plank => Color::new(0.72, 0.54, 0.31, 1.0),
+            ItemKind::Feather => Color::new(0.88, 0.84, 0.76, 1.0),
+            ItemKind::Bow => Color::new(0.50, 0.33, 0.16, 1.0),
+            ItemKind::Arrow => Color::new(0.62, 0.50, 0.30, 1.0),
+            ItemKind::Venison => Color::new(0.66, 0.20, 0.24, 1.0),
+            ItemKind::Poultry => Color::new(0.90, 0.64, 0.58, 1.0),
+            ItemKind::CookedVenison => Color::new(0.45, 0.25, 0.14, 1.0),
+            ItemKind::CookedPoultry => Color::new(0.76, 0.52, 0.24, 1.0),
+            ItemKind::Leather => Color::new(0.58, 0.38, 0.22, 1.0),
+            ItemKind::BearMeat => Color::new(0.56, 0.16, 0.20, 1.0),
+            ItemKind::CookedBearMeat => Color::new(0.38, 0.20, 0.12, 1.0),
+            ItemKind::BearPelt => Color::new(0.26, 0.18, 0.12, 1.0),
+            ItemKind::Bellows => Color::new(0.55, 0.38, 0.22, 1.0),
+            ItemKind::Ash => Color::new(0.66, 0.64, 0.62, 1.0),
+            ItemKind::Copper => Color::new(0.80, 0.46, 0.25, 1.0),
+            ItemKind::Tin => Color::new(0.72, 0.76, 0.82, 1.0),
+            ItemKind::Iron => Color::new(0.40, 0.42, 0.47, 1.0),
+            ItemKind::Clay => Color::new(0.68, 0.54, 0.45, 1.0),
+            ItemKind::IronOre => Color::new(0.62, 0.24, 0.14, 1.0),
+            ItemKind::LeatherCord => Color::new(0.48, 0.30, 0.16, 1.0),
+            ItemKind::Bronze => Color::new(0.74, 0.55, 0.22, 1.0),
+            ItemKind::BronzeMallet => Color::new(0.70, 0.52, 0.24, 1.0),
+            ItemKind::ClayForge => Color::new(0.68, 0.54, 0.45, 1.0),
+            ItemKind::RabbitMeat => Color::new(0.80, 0.35, 0.35, 1.0),
+            ItemKind::CookedRabbit => Color::new(0.65, 0.42, 0.22, 1.0),
+            ItemKind::MooseMeat => Color::new(0.60, 0.14, 0.18, 1.0),
+            ItemKind::CookedMoose => Color::new(0.40, 0.22, 0.12, 1.0),
+            ItemKind::RabbitFoot => Color::new(0.82, 0.76, 0.66, 1.0),
+            ItemKind::CopperAxe => Color::new(0.80, 0.46, 0.25, 1.0),
+            ItemKind::BronzeAxe => Color::new(0.74, 0.55, 0.22, 1.0),
+            ItemKind::IronAxe => Color::new(0.34, 0.36, 0.42, 1.0),
+            ItemKind::TinPot => Color::new(0.72, 0.76, 0.82, 1.0),
+            ItemKind::ClayJar => Color::new(0.68, 0.54, 0.45, 1.0),
+            ItemKind::WaterJar => Color::new(0.55, 0.62, 0.78, 1.0),
+            ItemKind::VenisonStew => Color::new(0.55, 0.30, 0.16, 1.0),
+            ItemKind::PoultryStew => Color::new(0.80, 0.62, 0.30, 1.0),
+            ItemKind::BearStew => Color::new(0.42, 0.22, 0.14, 1.0),
+            ItemKind::RabbitStew => Color::new(0.62, 0.42, 0.26, 1.0),
+            ItemKind::MooseStew => Color::new(0.48, 0.30, 0.20, 1.0),
+        }
+    }
+
+    /// The block this item becomes when placed on the ground, if it can be placed.
+    pub fn placeable_block(self) -> Option<Block> {
+        match self {
+            ItemKind::Log => Some(Block::PlacedLog),
+            ItemKind::Pebble => Some(Block::PlacedPebble),
+            ItemKind::Stone => Some(Block::PlacedStone),
+            ItemKind::Plank => Some(Block::Planks),
+            ItemKind::Charcoal => Some(Block::Charcoal),
+            ItemKind::ClayForge => Some(Block::ClayForge),
+            _ => None,
+        }
+    }
+
+    /// For raw meat, what it becomes once cooked on a fire.
+    pub fn cooked(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::Venison => Some(ItemKind::CookedVenison),
+            ItemKind::Poultry => Some(ItemKind::CookedPoultry),
+            ItemKind::BearMeat => Some(ItemKind::CookedBearMeat),
+            ItemKind::RabbitMeat => Some(ItemKind::CookedRabbit),
+            ItemKind::MooseMeat => Some(ItemKind::CookedMoose),
+            _ => None,
+        }
+    }
+
+    /// For raw meat, the stew it makes in a pot of water on a fire.
+    pub fn stewed(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::Venison => Some(ItemKind::VenisonStew),
+            ItemKind::Poultry => Some(ItemKind::PoultryStew),
+            ItemKind::BearMeat => Some(ItemKind::BearStew),
+            ItemKind::RabbitMeat => Some(ItemKind::RabbitStew),
+            ItemKind::MooseMeat => Some(ItemKind::MooseStew),
+            _ => None,
+        }
+    }
+
+    /// For a stew, the cooked meat it is made of.
+    pub fn stew_base(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::VenisonStew => Some(ItemKind::CookedVenison),
+            ItemKind::PoultryStew => Some(ItemKind::CookedPoultry),
+            ItemKind::BearStew => Some(ItemKind::CookedBearMeat),
+            ItemKind::RabbitStew => Some(ItemKind::CookedRabbit),
+            ItemKind::MooseStew => Some(ItemKind::CookedMoose),
+            _ => None,
+        }
+    }
+
+    /// Whether this is an axe: it chops trees and hurts animals.
+    pub fn is_axe(self) -> bool {
+        matches!(self, ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe)
+    }
+
+    /// Whether this can be added to a burning log or embers to extend the fire by `FIRE_SECONDS`.
+    pub fn is_fuel(self) -> bool {
+        matches!(self, ItemKind::Log | ItemKind::Charcoal)
+    }
+
+    /// The metal this item smelts into: a stone makes copper and a pebble tin (on burning charcoal), tin
+    /// (with a copper beside it) makes bronze and iron ore makes iron (both in a lit clay forge).
+    pub fn smelted(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::Stone => Some(ItemKind::Copper),
+            ItemKind::Pebble => Some(ItemKind::Tin),
+            ItemKind::Tin => Some(ItemKind::Bronze),
+            ItemKind::IronOre => Some(ItemKind::Iron),
+            _ => None,
+        }
+    }
+
+    /// What this item turns into when left on a fire: cooked meat, or smelted metal.
+    pub fn processed(self) -> Option<ItemKind> {
+        self.cooked().or(self.smelted())
+    }
+
+    /// The kind of fire this item must lie on to make progress (`None` if it does not cook or smelt).
+    pub fn hearth(self) -> Option<Hearth> {
+        if self.cooked().is_some() {
+            return Some(Hearth::AnyFire);
+        }
+        match self {
+            ItemKind::Stone | ItemKind::Pebble => Some(Hearth::Embers),
+            ItemKind::Tin => Some(Hearth::Forge),
+            ItemKind::IronOre => Some(Hearth::GlowingForge),
+            _ => None,
+        }
+    }
+
+    /// Whether the fire must glow brighter (a forge worked with bellows) for this item to make progress.
+    pub fn needs_glow(self) -> bool {
+        self.hearth() == Some(Hearth::GlowingForge)
+    }
+
+    /// Seconds this item needs on a fire to cook or smelt.
+    pub fn heat_seconds(self) -> f32 {
+        if self.smelted().is_some() { SMELT_SECONDS } else { COOK_SECONDS }
+    }
+
+    /// Damage of one swing when this is held, for the items that hurt animals up close.
+    pub fn melee_damage(self) -> Option<i32> {
+        match self {
+            ItemKind::StoneAxe => Some(AXE_DAMAGE),
+            ItemKind::CopperAxe => Some(AXE_DAMAGE + 1),
+            ItemKind::BronzeAxe => Some(AXE_DAMAGE + 2),
+            ItemKind::IronAxe => Some(AXE_DAMAGE + 3),
+            ItemKind::BronzeMallet => Some(MALLET_DAMAGE),
+            _ => None,
+        }
+    }
+
+    /// Seconds between swings of a melee item.
+    pub fn melee_cooldown(self) -> f32 {
+        if self == ItemKind::BronzeMallet { MALLET_COOLDOWN } else { AXE_COOLDOWN }
+    }
+
+    /// Life points restored by eating this item, if it can be eaten. Raw meat cannot.
+    pub fn heal_amount(self) -> Option<u32> {
+        match self {
+            ItemKind::Berries => Some(BERRY_HEAL),
+            ItemKind::CookedVenison => Some(VENISON_HEAL),
+            ItemKind::CookedPoultry => Some(POULTRY_HEAL),
+            ItemKind::CookedBearMeat => Some(BEAR_MEAT_HEAL),
+            ItemKind::CookedRabbit => Some(RABBIT_MEAT_HEAL),
+            ItemKind::CookedMoose => Some(MOOSE_MEAT_HEAL),
+            stew => stew.stew_base().and_then(ItemKind::heal_amount).map(|h| h * STEW_HEAL_FACTOR),
+        }
+    }
+}
+
+/// Where something has to lie to cook or smelt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hearth {
+    /// Any burning log or charcoal (meat).
+    AnyFire,
+    /// Burning charcoal in the open (stones and pebbles).
+    Embers,
+    /// A lit clay forge (bronze).
+    Forge,
+    /// A lit clay forge that bellows keep glowing (iron).
+    GlowingForge,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ItemStack {
+    pub kind: ItemKind,
+    pub count: u32,
+}
+
+/// Roll the items dropped by breaking `block`.
+///
+/// - Leaves and pine needles: one 50% chance of a stick.
+/// - Wood: always one log (the caller checks that the player holds an axe).
+/// - Grass: a 50% chance of one grass. Flowers drop nothing.
+/// - Bush: five independent 50% chances of a berry (0 to 5 berries).
+/// - Placed logs, pebbles, stones, charcoal and planks drop themselves back, always one; so do the
+///   pebbles and stones lying under water. Clay drops `CLAY_DROP` lumps.
+/// - A boulder drops a stone, a pebble and 1 to 3 iron ore. A clay forge drops `FORGE_CLAY_DROP` clay (and the
+///   charcoal in it, if it was filled but not lit).
+pub fn drops_for(block: Block, rng: &mut Rng) -> Vec<ItemKind> {
+    let mut drops = Vec::new();
+    match block {
+        Block::Leaves | Block::Needles => {
+            if rng.chance(LEAF_STICK_CHANCE) {
+                drops.push(ItemKind::Stick);
+            }
+        }
+        Block::Wood | Block::PlacedLog => drops.push(ItemKind::Log),
+        Block::PlacedPebble | Block::WetPebble => drops.push(ItemKind::Pebble),
+        Block::PlacedStone | Block::WetStone => drops.push(ItemKind::Stone),
+        Block::WetClay => drops.extend(std::iter::repeat(ItemKind::Clay).take(CLAY_DROP as usize)),
+        Block::Boulder => {
+            drops.push(ItemKind::Stone);
+            drops.push(ItemKind::Pebble);
+            for _ in 0..rng.range(BOULDER_IRON_MIN, BOULDER_IRON_MAX + 1) {
+                drops.push(ItemKind::IronOre);
+            }
+        }
+        Block::ClayForge => drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize)),
+        Block::ForgeCharged => {
+            drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize));
+            drops.push(ItemKind::Charcoal);
+        }
+        Block::Charcoal => drops.push(ItemKind::Charcoal),
+        Block::Planks => drops.push(ItemKind::Plank),
+        Block::Grass => {
+            if rng.chance(GRASS_DROP_CHANCE) {
+                drops.push(ItemKind::Grass);
+            }
+        }
+        Block::Bush => {
+            for _ in 0..BUSH_BERRY_ROLLS {
+                if rng.chance(BUSH_BERRY_CHANCE) {
+                    drops.push(ItemKind::Berries);
+                }
+            }
+        }
+        Block::Ash => drops.push(ItemKind::Ash),
+        Block::Air | Block::Dirt | Block::Stone | Block::Water | Block::Flower | Block::Fire | Block::Embers | Block::ForgeLit => {}
+    }
+    drops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TRIALS: usize = 40_000;
+
+    fn rate(hits: usize) -> f64 {
+        hits as f64 / TRIALS as f64
+    }
+
+    #[test]
+    fn leaves_drop_a_stick_half_the_time_and_nothing_else() {
+        let mut rng = Rng::new(11);
+        let mut sticks = 0;
+        for block in [Block::Leaves, Block::Needles] {
+            for _ in 0..TRIALS {
+                let d = drops_for(block, &mut rng);
+                assert!(d.len() <= 1 && d.iter().all(|&k| k == ItemKind::Stick));
+                sticks += d.len();
+            }
+        }
+        let r = sticks as f64 / (2 * TRIALS) as f64;
+        assert!((r - 0.50).abs() < 0.01, "stick rate {r}");
+    }
+
+    #[test]
+    fn unbreakable_air_flower_and_fire_blocks_drop_nothing() {
+        let mut rng = Rng::new(13);
+        for block in [Block::Air, Block::Dirt, Block::Stone, Block::Water, Block::Flower, Block::Fire] {
+            for _ in 0..1000 {
+                assert!(drops_for(block, &mut rng).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn wood_always_drops_exactly_one_log() {
+        let mut rng = Rng::new(14);
+        for _ in 0..1000 {
+            assert_eq!(drops_for(Block::Wood, &mut rng), vec![ItemKind::Log]);
+        }
+    }
+
+    #[test]
+    fn drops_are_deterministic_for_a_seed() {
+        let a: Vec<_> = (0..50).map(|_| drops_for(Block::Bush, &mut Rng::new(5))).collect();
+        assert!(a.windows(2).all(|w| w[0] == w[1]));
+    }
+
+    #[test]
+    fn ids_round_trip() {
+        for k in ItemKind::ALL {
+            assert_eq!(ItemKind::from_id(k.id()), Some(k));
+        }
+        assert_eq!(ItemKind::from_id("diamond"), None);
+    }
+
+    #[test]
+    fn grass_drops_one_grass_half_the_time() {
+        let mut rng = Rng::new(15);
+        let mut hits = 0;
+        for _ in 0..TRIALS {
+            let d = drops_for(Block::Grass, &mut rng);
+            assert!(d.len() <= 1 && d.iter().all(|&k| k == ItemKind::Grass));
+            hits += d.len();
+        }
+        assert!((rate(hits) - 0.50).abs() < 0.012, "grass rate {}", rate(hits));
+    }
+
+    #[test]
+    fn bushes_roll_five_berry_chances_at_fifty_percent() {
+        let mut rng = Rng::new(16);
+        let mut counts = [0usize; 6];
+        for _ in 0..TRIALS {
+            let d = drops_for(Block::Bush, &mut rng);
+            assert!(d.len() <= 5 && d.iter().all(|&k| k == ItemKind::Berries));
+            counts[d.len()] += 1;
+        }
+        // Binomial(5, 0.5): 1, 5, 10, 10, 5, 1 out of 32.
+        for (n, ways) in [1.0, 5.0, 10.0, 10.0, 5.0, 1.0].iter().enumerate() {
+            let expected = ways / 32.0;
+            assert!((rate(counts[n]) - expected).abs() < 0.012, "P({n} berries) = {}", rate(counts[n]));
+        }
+    }
+
+    #[test]
+    fn placed_blocks_drop_exactly_themselves_back() {
+        let mut rng = Rng::new(17);
+        for (block, item) in [
+            (Block::PlacedLog, ItemKind::Log),
+            (Block::PlacedPebble, ItemKind::Pebble),
+            (Block::PlacedStone, ItemKind::Stone),
+            (Block::Charcoal, ItemKind::Charcoal),
+            (Block::Planks, ItemKind::Plank),
+            (Block::Ash, ItemKind::Ash),
+        ] {
+            for _ in 0..100 {
+                assert_eq!(drops_for(block, &mut rng), vec![item]);
+            }
+        }
+    }
+
+    #[test]
+    fn logs_pebbles_and_stones_are_placeable_and_round_trip() {
+        for (item, block) in [
+            (ItemKind::Log, Block::PlacedLog),
+            (ItemKind::Pebble, Block::PlacedPebble),
+            (ItemKind::Stone, Block::PlacedStone),
+            (ItemKind::Plank, Block::Planks),
+            (ItemKind::Charcoal, Block::Charcoal),
+        ] {
+            assert_eq!(item.placeable_block(), Some(block));
+            assert_eq!(drops_for(block, &mut Rng::new(1)), vec![item]);
+        }
+        for item in [ItemKind::Stick, ItemKind::StoneAxe, ItemKind::Twine, ItemKind::BowDrill, ItemKind::Ash] {
+            assert_eq!(item.placeable_block(), None, "{item:?}");
+        }
+        for item in [
+            ItemKind::Bow,
+            ItemKind::Arrow,
+            ItemKind::Feather,
+            ItemKind::Venison,
+            ItemKind::Leather,
+            ItemKind::BearMeat,
+            ItemKind::CookedBearMeat,
+            ItemKind::BearPelt,
+            ItemKind::Bellows,
+            ItemKind::Copper,
+            ItemKind::Tin,
+            ItemKind::Iron,
+            ItemKind::Clay,
+            ItemKind::IronOre,
+            ItemKind::LeatherCord,
+            ItemKind::Bronze,
+            ItemKind::BronzeMallet,
+        ] {
+            assert_eq!(item.placeable_block(), None, "{item:?}");
+        }
+        assert_eq!(ItemKind::ClayForge.placeable_block(), Some(Block::ClayForge));
+    }
+
+    #[test]
+    fn only_cooked_meat_and_berries_can_be_eaten() {
+        assert_eq!(ItemKind::Berries.heal_amount(), Some(BERRY_HEAL));
+        assert_eq!(ItemKind::CookedVenison.heal_amount(), Some(VENISON_HEAL));
+        assert_eq!(ItemKind::CookedPoultry.heal_amount(), Some(POULTRY_HEAL));
+        assert_eq!(ItemKind::CookedBearMeat.heal_amount(), Some(BEAR_MEAT_HEAL));
+        for k in [ItemKind::Venison, ItemKind::Poultry, ItemKind::BearMeat, ItemKind::Leather, ItemKind::BearPelt, ItemKind::Feather, ItemKind::Stick] {
+            assert_eq!(k.heal_amount(), None, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn stones_pebbles_tin_and_iron_ore_smelt_each_in_their_own_place() {
+        assert_eq!(ItemKind::Stone.smelted(), Some(ItemKind::Copper));
+        assert_eq!(ItemKind::Pebble.smelted(), Some(ItemKind::Tin));
+        assert_eq!(ItemKind::Tin.smelted(), Some(ItemKind::Bronze));
+        assert_eq!(ItemKind::IronOre.smelted(), Some(ItemKind::Iron));
+        for k in ItemKind::ALL {
+            let smelts = matches!(k, ItemKind::Stone | ItemKind::Pebble | ItemKind::Tin | ItemKind::IronOre);
+            assert_eq!(k.smelted().is_some(), smelts, "{k:?}");
+            assert_eq!(k.needs_glow(), k == ItemKind::IronOre, "only iron needs the bellows: {k:?}");
+        }
+        assert_eq!(ItemKind::Stone.hearth(), Some(Hearth::Embers));
+        assert_eq!(ItemKind::Pebble.hearth(), Some(Hearth::Embers));
+        assert_eq!(ItemKind::Tin.hearth(), Some(Hearth::Forge));
+        assert_eq!(ItemKind::IronOre.hearth(), Some(Hearth::GlowingForge));
+        assert_eq!(ItemKind::Venison.hearth(), Some(Hearth::AnyFire));
+        assert_eq!(ItemKind::Copper.hearth(), None, "copper is only ever smelted along with a tin");
+        assert_eq!(ItemKind::Venison.processed(), Some(ItemKind::CookedVenison));
+        assert!(!ItemKind::Venison.needs_glow(), "meat cooks on any fire");
+        assert_eq!((ItemKind::Venison.heat_seconds(), ItemKind::Pebble.heat_seconds()), (COOK_SECONDS, SMELT_SECONDS));
+        for k in [ItemKind::Copper, ItemKind::Iron, ItemKind::Bronze, ItemKind::Clay, ItemKind::Ash, ItemKind::Charcoal, ItemKind::Log] {
+            assert_eq!(k.processed(), None, "{k:?}");
+            assert_eq!(k.hearth(), None, "{k:?}");
+            assert_eq!(k.heal_amount(), None, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn the_axe_and_the_bronze_mallet_are_the_melee_items() {
+        assert_eq!(ItemKind::StoneAxe.melee_damage(), Some(AXE_DAMAGE));
+        assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
+        assert_eq!((ItemKind::StoneAxe.melee_cooldown(), ItemKind::BronzeMallet.melee_cooldown()), (AXE_COOLDOWN, MALLET_COOLDOWN));
+        for k in ItemKind::ALL {
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || k == ItemKind::BronzeMallet, "{k:?}");
+        }
+    }
+
+    #[test]
+    fn old_veined_stones_in_a_save_come_back_as_the_stone_and_pebble_that_smelt_into_the_same_metal() {
+        assert_eq!(ItemKind::from_id("copper_ore"), Some(ItemKind::Stone));
+        assert_eq!(ItemKind::from_id("tin_ore"), Some(ItemKind::Pebble));
+        assert_eq!(ItemKind::from_id("iron_ore"), Some(ItemKind::IronOre));
+        assert_eq!(ItemKind::Stone.smelted(), Some(ItemKind::Copper));
+        assert_eq!(ItemKind::Pebble.smelted(), Some(ItemKind::Tin));
+    }
+
+    #[test]
+    fn a_boulder_drops_a_stone_a_pebble_and_one_to_three_iron_ore() {
+        let mut rng = Rng::new(19);
+        let mut seen = [0usize; 4];
+        for _ in 0..2000 {
+            let d = drops_for(Block::Boulder, &mut rng);
+            assert_eq!(&d[..2], &[ItemKind::Stone, ItemKind::Pebble]);
+            let iron = d.len() - 2;
+            assert!(d[2..].iter().all(|&k| k == ItemKind::IronOre));
+            assert!((1..=3).contains(&iron), "{iron}");
+            seen[iron] += 1;
+        }
+        assert!(seen[1] > 400 && seen[2] > 400 && seen[3] > 400, "each count turns up: {seen:?}");
+    }
+
+    #[test]
+    fn a_clay_forge_gives_back_four_clay_and_no_forge_and_a_lit_one_gives_nothing() {
+        let mut rng = Rng::new(20);
+        assert_eq!(drops_for(Block::ClayForge, &mut rng), vec![ItemKind::Clay; 4]);
+        let mut filled = drops_for(Block::ForgeCharged, &mut rng);
+        filled.sort_by_key(|k| k.id());
+        assert_eq!(filled, vec![ItemKind::Charcoal, ItemKind::Clay, ItemKind::Clay, ItemKind::Clay, ItemKind::Clay]);
+        assert!(drops_for(Block::ForgeLit, &mut rng).is_empty());
+    }
+
+    #[test]
+    fn things_under_the_water_drop_what_they_are_and_clay_drops_lumps() {
+        let mut rng = Rng::new(18);
+        assert_eq!(drops_for(Block::WetPebble, &mut rng), vec![ItemKind::Pebble]);
+        assert_eq!(drops_for(Block::WetStone, &mut rng), vec![ItemKind::Stone]);
+        assert_eq!(drops_for(Block::WetClay, &mut rng), vec![ItemKind::Clay; CLAY_DROP as usize]);
+        assert!(CLAY_DROP >= 1);
+        assert!(drops_for(Block::Water, &mut rng).is_empty());
+    }
+
+    #[test]
+    fn raw_meat_cooks_into_its_cooked_form_and_nothing_else_cooks() {
+        assert_eq!(ItemKind::Venison.cooked(), Some(ItemKind::CookedVenison));
+        assert_eq!(ItemKind::Poultry.cooked(), Some(ItemKind::CookedPoultry));
+        assert_eq!(ItemKind::BearMeat.cooked(), Some(ItemKind::CookedBearMeat));
+        assert_eq!(ItemKind::RabbitMeat.cooked(), Some(ItemKind::CookedRabbit));
+        assert_eq!(ItemKind::MooseMeat.cooked(), Some(ItemKind::CookedMoose));
+        for k in ItemKind::ALL {
+            if !matches!(k, ItemKind::Venison | ItemKind::Poultry | ItemKind::BearMeat | ItemKind::RabbitMeat | ItemKind::MooseMeat) {
+                assert_eq!(k.cooked(), None, "{k:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rabbit_and_moose_meat_cook_and_every_raw_meat_makes_a_stew_that_heals_double() {
+        assert_eq!(ItemKind::RabbitMeat.cooked(), Some(ItemKind::CookedRabbit));
+        assert_eq!(ItemKind::MooseMeat.cooked(), Some(ItemKind::CookedMoose));
+        assert_eq!(ItemKind::RabbitMeat.hearth(), Some(Hearth::AnyFire));
+        assert_eq!(ItemKind::CookedRabbit.heal_amount(), Some(RABBIT_MEAT_HEAL));
+        assert_eq!(ItemKind::CookedMoose.heal_amount(), Some(MOOSE_MEAT_HEAL));
+        assert_eq!(STEW_HEAL_FACTOR, 2);
+        let pairs = [
+            (ItemKind::Venison, ItemKind::VenisonStew, ItemKind::CookedVenison),
+            (ItemKind::Poultry, ItemKind::PoultryStew, ItemKind::CookedPoultry),
+            (ItemKind::BearMeat, ItemKind::BearStew, ItemKind::CookedBearMeat),
+            (ItemKind::RabbitMeat, ItemKind::RabbitStew, ItemKind::CookedRabbit),
+            (ItemKind::MooseMeat, ItemKind::MooseStew, ItemKind::CookedMoose),
+        ];
+        for (raw, stew, cooked) in pairs {
+            assert_eq!(raw.stewed(), Some(stew));
+            assert_eq!(stew.stew_base(), Some(cooked));
+            assert_eq!(stew.heal_amount(), Some(cooked.heal_amount().unwrap() * 2), "{stew:?}");
+            assert_eq!(raw.heal_amount(), None, "raw meat cannot be eaten");
+            assert_eq!(stew.stewed(), None);
+        }
+        for k in ItemKind::ALL {
+            assert_eq!(k.stewed().is_some(), pairs.iter().any(|p| p.0 == k), "{k:?}");
+        }
+        for k in [ItemKind::TinPot, ItemKind::ClayJar, ItemKind::WaterJar, ItemKind::RabbitFoot] {
+            assert_eq!((k.heal_amount(), k.placeable_block(), k.melee_damage()), (None, None, None), "{k:?}");
+        }
+    }
+
+    #[test]
+    fn each_axe_hits_one_harder_than_the_one_before_and_all_chop() {
+        let axes = [ItemKind::StoneAxe, ItemKind::CopperAxe, ItemKind::BronzeAxe, ItemKind::IronAxe];
+        for (i, axe) in axes.into_iter().enumerate() {
+            assert_eq!(axe.melee_damage(), Some(AXE_DAMAGE + i as i32), "{axe:?}");
+            assert!(axe.is_axe() && Block::Wood.can_break_with(Some(axe)), "{axe:?}");
+        }
+        assert!(!ItemKind::BronzeMallet.is_axe() && !Block::Wood.can_break_with(Some(ItemKind::BronzeMallet)));
+    }
+}
