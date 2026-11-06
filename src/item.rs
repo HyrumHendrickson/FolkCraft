@@ -108,7 +108,7 @@ pub enum ItemKind {
     /// The armour of the throne room. Worn, it halves all the damage the player takes.
     RoyalArmor,
     /// Found on a stand in the mines under the mountain. Used on the locked door of a silver tower, it opens it for good
-    /// (and is used up).
+    /// (the key is kept). A ghost in the graveyard gives one too.
     SilverKey,
     /// Broken out of the pink salt crystals that stud the walls of the mines. It has no use yet.
     PinkSalt,
@@ -118,14 +118,21 @@ pub enum ItemKind {
     AncientCrown,
     /// The relic at the top of the silver tower in the Skylands. It does nothing yet.
     HornOfTheHunt,
-    /// Sometimes left by a deer (one time in five). Three bones and a twine make musical pipes.
+    /// Sometimes left by a deer (one time in five). Three bones make musical pipes.
     DeerBone,
     /// Pipes cut from deer bones. They do nothing yet.
     MusicalPipes,
+    /// Tin shaped into a pan. Held while breaking river clay it sometimes turns up gold.
+    TinPan,
+    /// The sword from the stone in the ruined castle. The best weapon in the game.
+    Excalibur,
+    /// Leather and leather cord sewn into a pack. Worn on the back (right click it, or the Pack slot of the inventory), it gives
+    /// two more rows of inventory slots, for as long as it is worn.
+    LeatherBackpack,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 70] = [
+    pub const ALL: [ItemKind; 73] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -196,6 +203,9 @@ impl ItemKind {
         ItemKind::HornOfTheHunt,
         ItemKind::DeerBone,
         ItemKind::MusicalPipes,
+        ItemKind::TinPan,
+        ItemKind::Excalibur,
+        ItemKind::LeatherBackpack,
     ];
 
     /// Display name.
@@ -267,10 +277,13 @@ impl ItemKind {
             ItemKind::SilverKey => "Silver Key",
             ItemKind::PinkSalt => "Pink Salt",
             ItemKind::PhilosophersStone => "Philosopher's Stone",
-            ItemKind::AncientCrown => "Ancient Crown",
+            ItemKind::AncientCrown => "King's Crown",
             ItemKind::HornOfTheHunt => "Horn of the Hunt",
             ItemKind::DeerBone => "Deer Bone",
             ItemKind::MusicalPipes => "Musical Pipes",
+            ItemKind::TinPan => "Tin Pan",
+            ItemKind::Excalibur => "Excalibur",
+            ItemKind::LeatherBackpack => "Leather Backpack",
         }
     }
 
@@ -347,6 +360,9 @@ impl ItemKind {
             ItemKind::HornOfTheHunt => "horn_of_the_hunt",
             ItemKind::DeerBone => "deer_bone",
             ItemKind::MusicalPipes => "musical_pipes",
+            ItemKind::TinPan => "tin_pan",
+            ItemKind::Excalibur => "excalibur",
+            ItemKind::LeatherBackpack => "leather_backpack",
         }
     }
 
@@ -432,6 +448,9 @@ impl ItemKind {
             ItemKind::HornOfTheHunt => Color::new(0.90, 0.84, 0.68, 1.0),
             ItemKind::DeerBone => Color::new(0.93, 0.90, 0.82, 1.0),
             ItemKind::MusicalPipes => Color::new(0.88, 0.82, 0.68, 1.0),
+            ItemKind::TinPan => Color::new(0.72, 0.76, 0.82, 1.0),
+            ItemKind::Excalibur => Color::new(0.86, 0.90, 0.98, 1.0),
+            ItemKind::LeatherBackpack => Color::new(0.50, 0.32, 0.18, 1.0),
         }
     }
 
@@ -491,9 +510,14 @@ impl ItemKind {
         matches!(self, ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe)
     }
 
-    /// Whether this can be worn. A player wears one thing at a time: a pelt cloak or the royal armour.
+    /// Whether this can be worn. A player wears one thing at a time: a pelt cloak, the royal armour or the king's crown.
     pub fn is_wearable(self) -> bool {
-        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor)
+        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown)
+    }
+
+    /// Whether this is a backpack: worn in its own place, on the back, alongside a cloak, armour or crown.
+    pub fn is_backpack(self) -> bool {
+        self == ItemKind::LeatherBackpack
     }
 
     /// Whether this shoots something when the left button is clicked: a bow (arrows) or a sling (pebbles).
@@ -564,13 +588,23 @@ impl ItemKind {
             ItemKind::BronzeAxe => Some(BRONZE_AXE_DAMAGE),
             ItemKind::IronAxe => Some(IRON_AXE_DAMAGE),
             ItemKind::BronzeMallet => Some(MALLET_DAMAGE),
+            ItemKind::Excalibur => Some(EXCALIBUR_DAMAGE),
             _ => None,
         }
     }
 
     /// Seconds between swings of a melee item.
     pub fn melee_cooldown(self) -> f32 {
-        if self == ItemKind::BronzeMallet { MALLET_COOLDOWN } else { AXE_COOLDOWN }
+        match self {
+            ItemKind::BronzeMallet => MALLET_COOLDOWN,
+            ItemKind::Excalibur => EXCALIBUR_COOLDOWN,
+            _ => AXE_COOLDOWN,
+        }
+    }
+
+    /// How far a swing of this melee item reaches.
+    pub fn melee_reach(self) -> f32 {
+        if self == ItemKind::Excalibur { EXCALIBUR_REACH } else { AXE_REACH }
     }
 
     /// Life points restored by eating this item, if it can be eaten. Raw meat cannot.
@@ -670,6 +704,8 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
         Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(PINK_SALT_DROP as usize)),
         Block::KeyStand => drops.push(ItemKind::SilverKey),
+        Block::GoldBoulder => drops.extend(std::iter::repeat(ItemKind::Gold).take(GOLD_BOULDER_GOLD_DROP as usize)),
+        Block::AltarLoadstone => drops.push(ItemKind::Loadstone),
         Block::StonePlinth => drops.push(ItemKind::PhilosophersStone),
         Block::HornPlinth => drops.push(ItemKind::HornOfTheHunt),
         Block::CrownPlinth => drops.push(ItemKind::AncientCrown),
@@ -705,6 +741,11 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::SilverStone
         | Block::TowerDoor
         | Block::TowerDoorTop
+        | Block::AncientAltar
+        | Block::SwordInStone
+        | Block::SwordHilt
+        | Block::PulledStone
+        | Block::MayaStone
         | Block::Water
         | Block::Flower
         | Block::Fire
@@ -918,7 +959,7 @@ mod tests {
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         assert_eq!((ItemKind::StoneAxe.melee_cooldown(), ItemKind::BronzeMallet.melee_cooldown()), (AXE_COOLDOWN, MALLET_COOLDOWN));
         for k in ItemKind::ALL {
-            assert_eq!(k.melee_damage().is_some(), k.is_axe() || k == ItemKind::BronzeMallet, "{k:?}");
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur), "{k:?}");
         }
     }
 
@@ -1050,7 +1091,7 @@ mod tests {
         }
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         for k in ItemKind::ALL {
-            assert_eq!(k.melee_damage().is_some(), k.is_axe() || k == ItemKind::BronzeMallet, "{k:?}");
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur), "{k:?}");
         }
     }
 }

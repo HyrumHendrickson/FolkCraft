@@ -15,6 +15,7 @@ use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKi
 use crate::horizen::{self, Dimension};
 use crate::tower::Tower;
 use crate::skylands;
+use crate::{ghosts, stonehenge};
 use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
@@ -163,6 +164,8 @@ pub struct Game {
     /// The one thing the player wears: a pelt cloak (bears leave them alone unless hit first) or the royal armour (all
     /// damage halved).
     pub worn: Option<ItemKind>,
+    /// The backpack on the player's back, if they wear one (it gives the inventory its two extra rows).
+    pub worn_back: Option<ItemKind>,
     /// A dimension the player is not in, once they have been somewhere else (see `Away`).
     pub away: Option<Away>,
     /// A second parked dimension, when the player has been to all three.
@@ -171,9 +174,9 @@ pub struct Game {
     pub cyclone_timer: f32,
     /// The white screen of the Skylands, if one is up.
     pub whiteout: Option<Whiteout>,
-    /// The one fire tornado currently active in the Horizen, if it is daytime there.
+    /// The one fire tornado currently active in the Skylands, if it is daytime there.
     pub tornado: Option<FireTornado>,
-    /// Seconds since the previous Horizen tornado spawned.
+    /// Seconds since the previous Skylands tornado spawned.
     pub tornado_timer: f32,
     /// Whether the daytime will-o-whisp storm clouds have gathered.
     pub storm_active: bool,
@@ -184,6 +187,14 @@ pub struct Game {
     storm_lightning_pos: Vec3,
     /// Fade in progress after the player reaches the bottom of the well.
     pub horizen_transition: Option<f32>,
+    /// Quail the player has killed. A Mother of Quail comes for every `QUAIL_KILLS_PER_MOTHER`.
+    pub quail_kills: u32,
+    /// What a ghost is saying now, and for how many more seconds (shown as text on the screen: ghosts are not seen).
+    pub ghost_text: Option<(String, f32)>,
+    /// Whether the player is inside the graveyard (so that its ghost speaks when they walk in, not every frame).
+    pub in_graveyard: bool,
+    /// Mothers of Quail that are due but have not yet found a place to appear (or were left behind in another dimension).
+    pub mothers_owed: u32,
 }
 
 impl Game {
@@ -205,6 +216,14 @@ impl Game {
         let health = data.health;
         let dev_mode = data.dev_mode;
         let worn = data.worn;
+        let worn_back = data.back;
+        let mut inventory = data.inventory;
+        // The rows of the pack are there exactly while a pack is worn.
+        if worn_back.is_some() {
+            inventory.add_pack_rows();
+        } else if inventory.has_pack_rows() && !inventory.remove_pack_rows() {
+            inventory.slots.truncate(INVENTORY_SLOTS);
+        }
         let mut player = data.player;
         player.lift_out_of_blocks(&world);
         let items = data.items;
@@ -229,7 +248,7 @@ impl Game {
             dev_mode,
             world,
             player,
-            inventory: data.inventory,
+            inventory,
             items,
             rng: Rng::new(rng_seed),
             inventory_open: false,
@@ -248,6 +267,7 @@ impl Game {
             skip_look_frames: 0,
             blackout: None,
             worn,
+            worn_back,
             away,
             shelf,
             cyclone_timer: 0.0,
@@ -261,6 +281,10 @@ impl Game {
             storm_lightning_flash: 0.0,
             storm_lightning_pos: Vec3::ZERO,
             horizen_transition: None,
+            quail_kills: data.quail_kills,
+            ghost_text: None,
+            in_graveyard: false,
+            mothers_owed: 0,
         };
         // A world saved away from the overworld picks up the dimension it was saved in.
         if in_horizen {
@@ -287,10 +311,12 @@ impl Game {
         let over = find(Dimension::Overworld).unwrap_or(current);
         let extras = SaveExtras {
             worn: self.worn,
+            back: self.worn_back,
             in_horizen: self.in_horizen(),
             horizen: find(Dimension::Horizen),
             in_skylands: self.in_skylands(),
             skylands: find(Dimension::Skylands),
+            quail_kills: self.quail_kills,
         };
         serialize_save_full(&self.info.name, self.info.seed, over.0, over.1, &self.inventory, over.2, self.health, self.dev_mode, &extras)
     }
@@ -365,7 +391,12 @@ impl Game {
         if !block.can_break_with(self.held_item()) {
             return Vec::new();
         }
-        self.world.break_block(x, y, z);
+        if block == Block::AltarLoadstone {
+            // The altar stays; only its loadstone goes.
+            self.world.set_block(x, y, z, Block::AncientAltar);
+        } else {
+            self.world.break_block(x, y, z);
+        }
         let mut drops = drops_for_with_bonuses(
             block,
             if block == Block::Bush { self.world.berry_kind_at(x, z) } else { ItemKind::Berries },
@@ -386,6 +417,13 @@ impl Game {
                         *kind = ItemKind::GoldOre;
                     }
                 }
+            }
+        }
+        if block == Block::WetClay && self.held_item() == Some(ItemKind::TinPan) {
+            // Panning the clay: one time in twenty a gold turns up, one in five with a rabbit's foot in the hotbar.
+            let chance = if self.rabbit_foot_in_hotbar() { TIN_PAN_RABBIT_FOOT_GOLD_CHANCE } else { TIN_PAN_GOLD_CHANCE };
+            if self.rng.chance(chance) {
+                drops.push(ItemKind::Gold);
             }
         }
         if block == Block::GoldPile && self.world.active_rainbow().map_or(false, |r| r.gold == (x, y, z)) {
@@ -509,6 +547,8 @@ impl Game {
             for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Moose) {
                 a.calm();
             }
+            // The fight is over: the Mother of Quail has won.
+            self.animals.retain(|a| a.kind != AnimalKind::MotherOfQuail);
             return true;
         }
         false
@@ -590,6 +630,11 @@ impl Game {
 
     /// Change the sky and the world now.
     fn apply_night(&mut self, night: bool) {
+        // Night in the cave is too much: the player blacks out and wakes beside the well they came in by.
+        if self.in_horizen() && night {
+            self.faint_in_cave();
+            return;
+        }
         let changed = self.world.night != night;
         self.world.set_night(night);
         if self.in_horizen() && night {
@@ -604,6 +649,23 @@ impl Game {
         if changed {
             self.toasts.push(if night { "Night falls".to_string() } else { "Day breaks".to_string() });
         }
+    }
+
+    /// Night falls in the Horizen: the player blacks out and comes to in the ring of Stonehenge in the overworld. The cave stays day for the next visit, and the blackout already under way carries on to fade back in.
+    fn faint_in_cave(&mut self) {
+        let blackout = self.blackout;
+        self.travel_to(Dimension::Overworld);
+        self.blackout = blackout;
+        self.whiteout = None;
+        // They wake in the ring of Stonehenge, five chunks from where the world began.
+        let (ax, az) = stonehenge::arrival(self.info.seed);
+        let (x, z) = (ax.floor() as i32, az.floor() as i32);
+        self.world.stream_chunks(vec3(ax, 6.0, az));
+        self.player.pos = vec3(ax, self.world.ground_top(x, z) as f32 + 1.01, az);
+        self.player.vel = Vec3::ZERO;
+        self.world.stream_chunks(self.player.pos);
+        self.world.rebuild_dirty(self.player.pos, usize::MAX);
+        self.toasts.push("Night falls in the cave. You black out, and wake among the standing stones of Stonehenge.".to_string());
     }
 
     /// Advance the blackout: once the screen is black the world changes to day or night, and the blackout ends after
@@ -640,7 +702,14 @@ impl Game {
     /// Whether the held item lets the player do something to `block` with the left mouse
     /// button: break it, light it with a bow drill, or work a lit forge with bellows.
     pub fn can_interact(&self, block: Block) -> bool {
-        block.can_break_with(self.held_item()) || self.can_ignite(block) || self.can_blow(block) || self.can_unlock(block)
+        block.can_break_with(self.held_item()) || self.can_ignite(block) || self.can_blow(block) || self.can_unlock(block) || self.can_use_relic(block)
+    }
+
+    /// Whether a right click with what is held (or worn) does something to the block: the Philosopher's Stone on a boulder, a
+    /// crowned head on the sword in the stone.
+    fn can_use_relic(&self, block: Block) -> bool {
+        (block == Block::Boulder && self.held_item() == Some(ItemKind::PhilosophersStone))
+            || (matches!(block, Block::SwordInStone | Block::SwordHilt) && self.worn == Some(ItemKind::AncientCrown))
     }
 
     /// Whether the held silver key fits the block (the lock of a tower's door).
@@ -653,7 +722,7 @@ impl Game {
         (x, z - TOWER_HALF)
     }
 
-    /// Use the held silver key on the locked door at `pos`: the door opens for good and the key is used up. Without a key
+    /// Use the held silver key on the locked door at `pos`: the door opens for good and the player keeps the key. Without a key
     /// the player is told what is needed. Returns whether the door opened.
     pub fn try_unlock(&mut self, pos: Pos) -> bool {
         if !matches!(self.world.block_at(pos.0, pos.1, pos.2), Block::TowerDoor | Block::TowerDoorTop) {
@@ -664,7 +733,7 @@ impl Game {
             return false;
         }
         let (x, z) = self.tower_of_door(pos);
-        self.inventory.take_from_slot(self.selected);
+        // The key only turns the lock: the player keeps it.
         self.world.unlock_tower(x, z);
         self.toasts.push("The silver key turns. The door swings open.".to_string());
         true
@@ -950,6 +1019,12 @@ impl Game {
         if matches!(hit.block, Block::TowerDoor | Block::TowerDoorTop) {
             return self.try_unlock((hit.x, hit.y, hit.z));
         }
+        if hit.block == Block::Boulder && self.held_item() == Some(ItemKind::PhilosophersStone) {
+            return self.turn_boulder_to_gold((hit.x, hit.y, hit.z));
+        }
+        if matches!(hit.block, Block::SwordInStone | Block::SwordHilt) {
+            return self.try_pull_sword((hit.x, hit.y, hit.z));
+        }
         let Some(kind) = self.held_item() else { return false };
         let Some(block) = kind.placeable_block() else { return false };
         let (x, y, z) = hit.prev;
@@ -1002,7 +1077,7 @@ impl Game {
         if !self.held_item().map_or(false, |k| k.melee_damage().is_some()) {
             return None;
         }
-        self.animal_along(eye, dir, AXE_REACH)
+        self.animal_along(eye, dir, self.held_item().map_or(AXE_REACH, ItemKind::melee_reach))
     }
 
     /// Hurt animals (index, damage). The ones that die are removed and drop their loot; the others are knocked back
@@ -1029,12 +1104,43 @@ impl Game {
         dead.sort_unstable_by(|a, b| b.cmp(a));
         for i in dead {
             let animal = self.animals.remove(i);
+            if animal.kind == AnimalKind::Quail {
+                self.note_quail_killed();
+            }
             let drops = animal.kind.drops(&mut self.rng);
             for kind in drops {
                 let spot = animal.pos + vec3(0.0, 0.5, 0.0);
                 self.items.push(DroppedItem::spawn_at(kind, spot, &mut self.rng));
             }
             self.boss_slain(&animal);
+        }
+        self.summon_mothers();
+    }
+
+    /// Count a quail the player has killed: every `QUAIL_KILLS_PER_MOTHER`th one calls a Mother of Quail.
+    fn note_quail_killed(&mut self) {
+        self.quail_kills += 1;
+        if self.quail_kills % QUAIL_KILLS_PER_MOTHER == 0 {
+            self.mothers_owed += 1;
+        }
+    }
+
+    /// Bring out the Mothers of Quail that are due, each `MOTHER_OF_QUAIL_SPAWN_DISTANCE` from the player on open ground.
+    /// One that finds no place now is tried again with the next wildlife spawn.
+    fn summon_mothers(&mut self) {
+        while self.mothers_owed > 0 && self.in_overworld() {
+            let p = self.player.pos;
+            let first = self.rng.unit() * std::f32::consts::TAU;
+            let placed = (0..24).any(|i| {
+                let a = first + i as f32 * std::f32::consts::TAU / 24.0;
+                let (x, z) = ((p.x + a.cos() * MOTHER_OF_QUAIL_SPAWN_DISTANCE).floor() as i32, (p.z + a.sin() * MOTHER_OF_QUAIL_SPAWN_DISTANCE).floor() as i32);
+                self.spawn_animal(AnimalKind::MotherOfQuail, x, z)
+            });
+            if !placed {
+                return;
+            }
+            self.mothers_owed -= 1;
+            self.toasts.push("A great shadow falls: the Mother of Quail comes for you.".to_string());
         }
     }
 
@@ -1143,6 +1249,7 @@ impl Game {
         // The other dimensions have one silver tower each (and no other landmarks); the totem does nothing there.
         if self.in_horizen() {
             self.try_show_horizen_tower();
+            self.update_cave_visits();
             return;
         }
         if self.in_skylands() {
@@ -1158,6 +1265,8 @@ impl Game {
         }
         self.try_show_rainbow();
         self.try_show_grand_castle();
+        self.try_show_ruined_castle();
+        self.update_graveyard_ghost();
         self.try_show_well_or_graveyard();
         self.update_dimension();
     }
@@ -1197,6 +1306,22 @@ impl Game {
         let site = sites.iter().copied().find(|c| self.world.landmarks.has_room_for(c)).unwrap_or(sites[0]);
         self.world.add_grand_castle(site);
         self.toasts.push("A ghostly trail winds away through the dark.".to_string());
+        true
+    }
+
+    /// Wearing the king's crown in the overworld, and only if the world has no ruined castle yet, bring one out beyond the
+    /// edge of the land, straight ahead of the way the player faces (or as near that as clear ground allows): they walk into
+    /// it. The sword in the stone at its centre comes out for the crown. Returns whether the castle appeared.
+    pub fn try_show_ruined_castle(&mut self) -> bool {
+        if self.world.landmarks.ruined_castle.is_some() || !self.in_overworld() || self.worn != Some(ItemKind::AncientCrown) {
+            return false;
+        }
+        let p = self.player.pos;
+        let facing = self.player.yaw;
+        let sites: Vec<GrandCastle> = (0..16).map(|i| GrandCastle::ahead((p.x, p.z), facing + i as f32 * std::f32::consts::TAU / 16.0)).collect();
+        let site = sites.iter().copied().find(|c| self.world.landmarks.has_room_for_ruins(c)).unwrap_or(sites[0]);
+        self.world.add_ruined_castle(site);
+        self.toasts.push("The crown grows warm. Far ahead, the ruins of a castle wait.".to_string());
         true
     }
 
@@ -1245,10 +1370,15 @@ impl Game {
     /// the graveyard. `None` when neither is in hand, nothing is out there to lead to, or the player is in the Horizen.
     pub fn trail_path(&self) -> Option<Vec<(f32, f32)>> {
         let start = (self.player.pos.x, self.player.pos.z);
-        // In the Horizen a peep stone leads by day to the silver tower.
+        // In the Horizen a peep stone leads along the tunnel to the silver tower in the great cavern.
         if self.in_horizen() {
             let tower = self.world.landmarks.horizen_tower?;
-            return (self.held_item() == Some(ItemKind::PeepStone) && !self.world.night).then(|| vec![start, tower.approach(), tower.middle()]);
+            if self.held_item() != Some(ItemKind::PeepStone) {
+                return None;
+            }
+            let mut path = horizen::route(self.info.seed, start);
+            path.extend([tower.approach(), tower.middle()]);
+            return Some(path);
         }
         if !self.in_overworld() {
             return None;
@@ -1311,26 +1441,52 @@ impl Game {
         true
     }
 
-    /// With a peep stone in hand by day in the Horizen, and only if it has no tower yet, bring its one silver tower out
-    /// beyond the edge of the land, on dry ground, with the ghostly trail to it shown by the peep stone. If no dry site is
-    /// found this frame the next frame tries again. Returns whether the tower appeared.
+    /// With a peep stone in hand in the Horizen, and only if it has no tower yet, bring its one silver tower out in the middle
+    /// of the great cavern (`horizen::cavern_centre`), with the ghostly trail to it shown by the peep stone. There is no sky in
+    /// the cave to tell day from night by, so the stone works at any hour. Returns whether the tower appeared.
     pub fn try_show_horizen_tower(&mut self) -> bool {
-        if !self.in_horizen() || self.world.night || self.world.landmarks.horizen_tower.is_some() || self.held_item() != Some(ItemKind::PeepStone) {
+        if !self.in_horizen() || self.world.landmarks.horizen_tower.is_some() || self.held_item() != Some(ItemKind::PeepStone) {
             return false;
         }
+        let (x, z) = horizen::cavern_centre(self.info.seed);
+        self.world.add_horizen_tower(Tower { x, z });
+        self.toasts.push("A pale golden trail leads away down the tunnel.".to_string());
+        true
+    }
+
+    /// In the Horizen: note a cave the player comes into. The arrival chamber is the first; every `HORIZEN_CAMP_EVERY`th
+    /// cave entered (the great cavern only counts) has a camp set up in it: a burning log with a tin pot of red or purple
+    /// berry stew, ready to eat. Returns whether a camp was made.
+    pub fn update_cave_visits(&mut self) -> bool {
         let p = self.player.pos;
-        let first = self.rng.unit() * std::f32::consts::TAU;
-        for extra in 0..12 {
-            for i in 0..16 {
-                let tower = Tower::ahead((p.x, p.z), first + i as f32 * std::f32::consts::TAU / 16.0, extra as f32 * 6.0);
-                if horizen::site_is_dry(self.info.seed, tower.x, tower.z) {
-                    self.world.add_horizen_tower(tower);
-                    self.toasts.push("A pale golden trail leads away across the plain.".to_string());
-                    return true;
-                }
-            }
+        let Some(cave) = horizen::cave_at(self.info.seed, p.x.floor() as i32, p.z.floor() as i32) else { return false };
+        if self.world.landmarks.caves_visited.contains(&cave.cell) {
+            return false;
         }
-        false
+        self.world.landmarks.caves_visited.push(cave.cell);
+        if self.world.landmarks.caves_visited.len() % HORIZEN_CAMP_EVERY != 0 || cave.great {
+            return false;
+        }
+        self.build_camp(cave)
+    }
+
+    /// Set a camp in `cave`: a log on dry floor near its middle, alight, with a pot of water and berries on it, the stew done.
+    fn build_camp(&mut self, cave: horizen::Cave) -> bool {
+        let (cx, cz) = (cave.x.floor() as i32, cave.z.floor() as i32);
+        let seed = self.info.seed;
+        let spot = (0..=6_i32).find_map(|r| {
+            (-r..=r).flat_map(|dz| (-r..=r).map(move |dx| (dx, dz))).filter(|&(dx, dz)| dx.abs().max(dz.abs()) == r).map(|(dx, dz)| (cx + dx, cz + dz)).find(|&(x, z)| {
+                self.world.chunks.contains_key(&World::chunk_of(x, z)) && horizen::air_height(seed, x, z) >= HORIZEN_MIN_AIR && !horizen::is_pond(seed, x, z)
+            })
+        });
+        let Some((x, z)) = spot else { return false };
+        let y = GROUND_TOP + 1;
+        self.world.set_block(x, y, z, Block::PlacedLog);
+        self.world.ignite((x, y, z), HORIZEN_CAMP_FIRE_SECONDS);
+        let berries = if self.rng.chance(50) { ItemKind::Berries } else { ItemKind::PurpleBerries };
+        self.world.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0 });
+        self.toasts.push("You come on a camp: a fire, and a pot of stew still hot.".to_string());
+        true
     }
 
     /// In the Skylands: note the island the player stands on, and once they have walked on `SKY_TOWER_VISITS` different
@@ -1367,11 +1523,163 @@ impl Game {
         if dx.abs() + dz.abs() < 1e-3 { COMPASS_NORTH_BEARING } else { dz.atan2(dx) }
     }
 
+    // --- The pipes and the ghosts -------------------------------------------------------------
+
+    /// Say something as a ghost: words on the screen for `GHOST_TEXT_SECONDS`.
+    fn ghost_says(&mut self, text: &str) {
+        self.ghost_text = Some((text.to_string(), GHOST_TEXT_SECONDS));
+    }
+
+    /// Whether the player stands in the graveyard (inside its square).
+    fn in_graveyard_square(&self) -> bool {
+        let p = self.player.pos;
+        self.in_overworld() && self.world.landmarks.near_graveyard(p.x.floor() as i32, p.z.floor() as i32, 0)
+    }
+
+    /// The graveyard's ghost asks for a song when the player walks in, until it has had one.
+    pub fn update_graveyard_ghost(&mut self) {
+        let inside = self.in_graveyard_square();
+        if inside && !self.in_graveyard && !self.world.landmarks.graveyard_rested {
+            self.ghost_says(ghosts::GRAVEYARD_ASKS);
+        }
+        self.in_graveyard = inside;
+    }
+
+    /// Whether the column and height the player stands at is inside the tower centred on (`cx`, `cz`) whose floor is `base`.
+    fn inside_tower(&self, cx: i32, cz: i32, base: i32) -> bool {
+        let p = self.player.pos;
+        (p.x - (cx as f32 + 0.5)).abs() <= TOWER_HALF as f32 + 0.5 && (p.z - (cz as f32 + 0.5)).abs() <= TOWER_HALF as f32 + 0.5 && p.y >= base as f32 - 0.5 && p.y <= (base + TOWER_HEIGHT) as f32
+    }
+
+    /// What the ghost of the silver tower the player is in would say, if they are in one: the Skylands' tower, the Horizen's
+    /// tower in the cave, or the tower on a lake's island.
+    pub fn tower_ghost_here(&self) -> Option<&'static str> {
+        let marks = &self.world.landmarks;
+        match self.world.dimension {
+            Dimension::Horizen => marks.horizen_tower.filter(|t| self.inside_tower(t.x, t.z, GROUND_TOP + 1)).map(|_| ghosts::CAVE_TOWER_GHOST),
+            Dimension::Skylands => marks.sky_tower.map(|cell| skylands::island_in_cell(self.info.seed, cell.0, cell.1)).filter(|i| self.inside_tower(i.x, i.z, i.top + 1)).map(|_| ghosts::SKY_TOWER_GHOST),
+            Dimension::Overworld => marks.lakes.iter().filter(|l| l.has_tower()).find(|l| self.inside_tower(l.x, l.z, self.world.ground_top(l.x, l.z) + 1)).map(|_| ghosts::LAKE_TOWER_GHOST),
+        }
+    }
+
+    /// Play a tune on the musical pipes in hand (right click). In the graveyard it is the song its ghost asked for: the ghost
+    /// thanks the player, gives them a silver key and rests, for good. In a silver tower a ghostly voice answers with a hint. By
+    /// day, every quail and crow within `PIPES_CALL_RANGE` flies to the player, lands near them and stands still for
+    /// `PIPES_CALM_SECONDS`. Returns whether a tune was played.
+    pub fn play_pipes(&mut self) -> bool {
+        if self.held_item() != Some(ItemKind::MusicalPipes) {
+            return false;
+        }
+        self.toasts.push("You play a tune on the pipes.".to_string());
+        if self.in_graveyard_square() && !self.world.landmarks.graveyard_rested {
+            self.world.landmarks.graveyard_rested = true;
+            let at = self.player.pos;
+            self.give_or_drop(ItemKind::SilverKey, (at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32));
+            self.ghost_says(ghosts::GRAVEYARD_THANKS);
+        } else if let Some(line) = self.tower_ghost_here() {
+            self.ghost_says(line);
+        }
+        if self.in_overworld() && !self.world.night {
+            let p = self.player.pos;
+            for i in 0..self.animals.len() {
+                let a = &self.animals[i];
+                if !matches!(a.kind, AnimalKind::Quail | AnimalKind::Crow) || vec2(a.pos.x - p.x, a.pos.z - p.z).length() > PIPES_CALL_RANGE {
+                    continue;
+                }
+                let angle = self.rng.unit() * std::f32::consts::TAU;
+                let dist = PIPES_LAND_MIN + self.rng.unit() * (PIPES_LAND_MAX - PIPES_LAND_MIN);
+                let target = vec3(p.x + angle.cos() * dist, p.y, p.z + angle.sin() * dist);
+                self.animals[i].call_to(target);
+            }
+        }
+        true
+    }
+
+    // --- Crows and the ancient altar -------------------------------------------------------
+
+    /// Whether an altar can stand on the column (x, z): loaded, dry, bare ground (plants may be cleared).
+    fn altar_fits(&self, x: i32, z: i32) -> bool {
+        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || self.world.is_wet_column(x, z) {
+            return false;
+        }
+        let ground = self.world.ground_top(x, z);
+        self.world.block_at(x, ground, z) == Block::Dirt && matches!(self.world.block_at(x, ground + 1, z), Block::Air | Block::Grass | Block::Flower)
+    }
+
+    /// The nearest column to (x, z) (within `ALTAR_SEARCH_RADIUS`) where an altar fits.
+    fn altar_site_near(&self, x: i32, z: i32) -> Option<(i32, i32)> {
+        (0..=ALTAR_SEARCH_RADIUS).find_map(|r| {
+            (-r..=r).flat_map(|dz| (-r..=r).map(move |dx| (dx, dz))).filter(|&(dx, dz)| dx.abs().max(dz.abs()) == r).map(|(dx, dz)| (x + dx, z + dz)).find(|&(ax, az)| self.altar_fits(ax, az))
+        })
+    }
+
+    /// A crow that the player has followed west for `CROW_ALTAR_WEST_BLOCKS` comes down on a new ancient altar: a small altar
+    /// with a loadstone on it, built where it lands. If there is no room there it flies on a little and tries again.
+    fn land_crows_at_altars(&mut self) {
+        let due: Vec<usize> = (0..self.animals.len()).filter(|&i| self.animals[i].kind == AnimalKind::Crow && self.animals[i].is_landing() && self.animals[i].west_followed >= CROW_ALTAR_WEST_BLOCKS).collect();
+        for i in due {
+            let at = self.animals[i].pos;
+            match self.altar_site_near(at.x.floor() as i32, at.z.floor() as i32) {
+                Some((x, z)) => {
+                    let y = self.world.ground_top(x, z) + 1;
+                    self.world.set_block(x, y, z, Block::AltarLoadstone);
+                    let perch = vec3(x as f32 + 0.5, y as f32 + 0.62, z as f32 + 0.5);
+                    self.animals[i].land_at(perch, &mut self.rng);
+                    self.toasts.push("The crow settles on an ancient altar.".to_string());
+                }
+                None => self.animals[i].west_followed = CROW_ALTAR_WEST_BLOCKS - 6.0,
+            }
+        }
+    }
+
+    // --- Relics: gold boulders and the sword in the stone ---------------------------------------
+
+    /// Right click a boulder with the Philosopher's Stone: it turns to gold (the stone is kept).
+    fn turn_boulder_to_gold(&mut self, (x, y, z): Pos) -> bool {
+        if self.world.block_at(x, y, z) != Block::Boulder {
+            return false;
+        }
+        self.world.break_block(x, y, z);
+        self.world.set_block(x, y, z, Block::GoldBoulder);
+        self.toasts.push("The Philosopher's Stone turns the boulder to gold.".to_string());
+        true
+    }
+
+    /// Right click the sword in the stone. Only a player wearing the king's crown can draw it: the stone is left bare and
+    /// Excalibur is theirs.
+    pub fn try_pull_sword(&mut self, (x, y, z): Pos) -> bool {
+        let base = match self.world.block_at(x, y, z) {
+            Block::SwordInStone => (x, y, z),
+            Block::SwordHilt => (x, y - 1, z),
+            _ => return false,
+        };
+        if self.worn != Some(ItemKind::AncientCrown) {
+            self.toasts.push("The sword will not move. Only a king can draw it.".to_string());
+            return false;
+        }
+        self.world.set_block(base.0, base.1, base.2, Block::PulledStone);
+        self.world.break_block(base.0, base.1 + 1, base.2);
+        self.give_or_drop(ItemKind::Excalibur, (base.0, base.1 + 1, base.2));
+        self.toasts.push("The crown shines. You draw Excalibur from the stone.".to_string());
+        true
+    }
+
     // --- Wearing -------------------------------------------------------------------------
 
     /// Put on the pelt cloak or royal armour in hand, taking one from the stack. Whatever was worn goes back into the
     /// inventory (or on the ground if it is full). Returns whether something was put on.
     pub fn wear_held(&mut self) -> bool {
+        if let Some(pack) = self.held_item().filter(|k| k.is_backpack()) {
+            if self.worn_back.is_some() {
+                self.toasts.push("You already wear a backpack".to_string());
+                return false;
+            }
+            self.inventory.take_from_slot(self.selected);
+            self.worn_back = Some(pack);
+            self.inventory.add_pack_rows();
+            self.toasts.push("You put on the backpack: two more rows of slots".to_string());
+            return true;
+        }
         let Some(kind) = self.held_item().filter(|k| k.is_wearable()) else { return false };
         self.inventory.take_from_slot(self.selected);
         if let Some(old) = self.worn.replace(kind) {
@@ -1529,7 +1837,8 @@ impl Game {
     /// The dry column nearest the middle of the jungle, where a fall out of the Skylands lands.
     pub fn jungle_landing(&self) -> (i32, i32) {
         let (cx, cz) = crate::terrain::jungle_centre(self.info.seed);
-        for r in 0..40_i32 {
+        // Beside the temple, not on it.
+        for r in crate::temple::TEMPLE_REACH + 3..crate::temple::TEMPLE_REACH + 40 {
             for dz in -r..=r {
                 for dx in -r..=r {
                     if dx.abs().max(dz.abs()) == r && !self.world.is_wet_column(cx + dx, cz + dz) {
@@ -1618,6 +1927,7 @@ impl Game {
             return;
         }
         let seed = self.info.seed;
+        let from = self.world.dimension;
         let mut other = self.take_parked(target).unwrap_or_else(|| Away::fresh(target, seed));
         let (yaw, pitch) = (self.player.yaw, self.player.pitch);
         std::mem::swap(&mut self.world, &mut other.world);
@@ -1629,6 +1939,13 @@ impl Game {
         self.player.vel = Vec3::ZERO;
         self.player.knock = Vec3::ZERO;
         self.park(other);
+        // Leaving the Skylands wakes the Yeti again: it must be killed anew before the summit cyclone returns.
+        if from == Dimension::Skylands && target == Dimension::Overworld && self.world.landmarks.yeti_slain {
+            self.world.landmarks.yeti_slain = false;
+            self.toasts.push("Far below, the Yeti stirs on the summit once more.".to_string());
+        }
+        // A Mother of Quail left behind comes again (whole) when the player is back in the overworld.
+        self.mothers_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::MotherOfQuail).count() as u32;
         self.animals.clear();
         self.arrows.clear();
         self.mining = None;
@@ -1640,6 +1957,10 @@ impl Game {
         self.treks = Treks::new();
         self.world.stream_chunks(self.player.pos);
         self.world.rebuild_dirty(self.player.pos, usize::MAX);
+        // A Horizen saved before it was a cave may leave the player inside the rock: back to the arrival pool.
+        if target == Dimension::Horizen && !horizen::is_open(seed, self.player.pos.x.floor() as i32, self.player.pos.z.floor() as i32) {
+            self.player.pos = Player::new().pos;
+        }
         self.player.lift_out_of_blocks(&self.world);
     }
 
@@ -1649,6 +1970,8 @@ impl Game {
             return;
         }
         self.travel_to(Dimension::Horizen);
+        // Whatever it was when it was left, the cave is day when you come in.
+        self.world.set_night(false);
         self.horizen_transition = Some(0.0);
         self.toasts.push("You fall through the water into the Horizen.".to_string());
     }
@@ -1709,12 +2032,14 @@ impl Game {
             AnimalKind::Moose => MAX_MOOSE,
             AnimalKind::WillOWhisp => MAX_WILL_O_WHISP,
             // The bosses are never wildlife.
-            AnimalKind::Yeti | AnimalKind::LochNessMonster => 0,
+            AnimalKind::Crow => MAX_CROW,
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => 0,
         }
         .saturating_sub(count(kind));
         let mut open: Vec<(AnimalKind, u64)> = [
             (AnimalKind::Deer, MAX_DEER, SPAWN_WEIGHT_DEER),
             (AnimalKind::Quail, MAX_QUAIL, SPAWN_WEIGHT_QUAIL),
+            (AnimalKind::Crow, MAX_CROW, SPAWN_WEIGHT_CROW),
             (AnimalKind::Bear, MAX_BEAR, SPAWN_WEIGHT_BEAR),
             (AnimalKind::Rabbit, MAX_RABBIT, SPAWN_WEIGHT_RABBIT),
             (AnimalKind::Moose, MAX_MOOSE, SPAWN_WEIGHT_MOOSE),
@@ -1757,12 +2082,13 @@ impl Game {
     pub fn update_animals(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         match self.world.dimension {
-            Dimension::Horizen => {
-                self.update_horizen_tornado(dt);
+            // Nothing lives in the cave of the Horizen.
+            Dimension::Horizen => return,
+            // Nothing lives in the Skylands either, but fire tornadoes sweep across them by day.
+            Dimension::Skylands => {
+                self.update_sky_tornado(dt);
                 return;
             }
-            // Nothing lives in the Skylands.
-            Dimension::Skylands => return,
             Dimension::Overworld => {}
         }
         let player = self.player.pos;
@@ -1781,7 +2107,7 @@ impl Game {
         let flat = |a: &Animal| vec2(a.pos.x - player.x, a.pos.z - player.z).length();
         // Whisps go with the night, except the ones that follow the player.
         self.animals.retain(|a| {
-            flat(a) < if a.kind.is_boss() { BOSS_DESPAWN_DISTANCE } else { ANIMAL_DESPAWN_DISTANCE } && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
+            a.kind == AnimalKind::MotherOfQuail || flat(a) < if a.kind.is_boss() { BOSS_DESPAWN_DISTANCE } else { ANIMAL_DESPAWN_DISTANCE } && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
         });
         let cloaked = self.worn == Some(ItemKind::PeltCloak);
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Bear) {
@@ -1790,7 +2116,7 @@ impl Game {
         let bears: Vec<Vec3> = self.animals.iter().filter(|a| a.kind == AnimalKind::Bear).map(|a| a.pos).collect();
         let mut strikes: Vec<(Vec3, u32, &'static str)> = Vec::new();
         for a in &mut self.animals {
-            let near = vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
+            let near = a.kind == AnimalKind::MotherOfQuail || vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
             if !near || !self.world.chunks.contains_key(&World::chunk_of_pos(a.pos)) {
                 continue;
             }
@@ -1800,13 +2126,23 @@ impl Game {
             } else {
                 player
             };
+            let before_x = a.pos.x;
             if let Some(kind) = a.update(&self.world, threat, dt, &mut self.rng) {
                 self.items.push(DroppedItem::spawn_at(kind, a.pos + vec3(0.0, 0.3, 0.0), &mut self.rng));
+            }
+            if a.kind == AnimalKind::Crow {
+                let gap = vec2(a.pos.x - player.x, a.pos.z - player.z).length();
+                if gap > CROW_LOSE_DISTANCE {
+                    a.west_followed = 0.0;
+                } else if a.mode == crate::animal::Mode::Fly && gap <= CROW_FOLLOW_DISTANCE {
+                    a.west_followed += (before_x - a.pos.x).max(0.0);
+                }
             }
             if a.try_attack(player) {
                 strikes.push((a.pos, a.kind.attack_damage(), a.kind.death_message()));
             }
         }
+        self.land_crows_at_altars();
         for (from, damage, death) in strikes {
             if !self.hurt_player(damage, death) {
                 self.knock_player(from);
@@ -1817,6 +2153,7 @@ impl Game {
             self.spawn_timer = 0.0;
             self.spawn_wildlife();
             self.spawn_bosses();
+            self.summon_mothers();
         }
     }
 
@@ -1943,18 +2280,18 @@ impl Game {
         true
     }
 
-    /// Spawn and advance the Horizen's single daytime tornado. The target is captured at spawn time, so walking
+    /// Spawn and advance the Skylands' single daytime tornado. The target is captured at spawn time, so walking
     /// away does not make the tornado chase the player. It is replaced, not removed, by the next 30-second spawn.
-    fn update_horizen_tornado(&mut self, dt: f32) {
+    fn update_sky_tornado(&mut self, dt: f32) {
         if self.world.night {
             self.tornado = None;
             self.tornado_timer = 0.0;
             return;
         }
         self.tornado_timer += dt;
-        if self.tornado_timer >= HORIZEN_TORNADO_INTERVAL {
+        if self.tornado_timer >= SKY_TORNADO_INTERVAL {
             self.tornado_timer = 0.0;
-            self.spawn_horizen_tornado();
+            self.spawn_sky_tornado();
         }
         let player = self.player.pos;
         if let Some(tornado) = self.tornado.as_mut() {
@@ -1965,7 +2302,7 @@ impl Game {
         if let Some(tornado) = self.tornado.as_mut() {
             if tornado.hits(player) {
                 tornado.damage_timer += dt;
-                if tornado.damage_timer >= HORIZEN_TORNADO_DAMAGE_INTERVAL {
+                if tornado.damage_timer >= SKY_TORNADO_DAMAGE_INTERVAL {
                     tornado.damage_timer = 0.0;
                     damage = true;
                     source = tornado.pos;
@@ -1974,31 +2311,18 @@ impl Game {
                 tornado.damage_timer = 0.0;
             }
         }
-        if damage && !self.hurt_player(HORIZEN_TORNADO_DAMAGE, "The fire tornado burns you") {
+        if damage && !self.hurt_player(SKY_TORNADO_DAMAGE, "The fire tornado burns you") {
             self.knock_player(source);
         }
     }
 
-    fn spawn_horizen_tornado(&mut self) {
+    /// Start a tornado `SKY_TORNADO_SPAWN_DISTANCE` blocks from the player, in a random direction, at the height the player
+    /// stands at (the sky has no ground to stand it on, and the islands lie at different heights): it sweeps across the
+    /// islands and the gaps between them to where the player was.
+    fn spawn_sky_tornado(&mut self) {
         let target = self.player.pos;
-        let mut angle = self.rng.unit() * std::f32::consts::TAU;
-        let mut x = (target.x + angle.cos() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
-        let mut z = (target.z + angle.sin() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
-        // Prefer dry ground, but preserve the exact forty-block ring if every tested direction is a pond.
-        for _ in 0..16 {
-            if !self.world.is_wet_column(x, z) {
-                break;
-            }
-            angle += std::f32::consts::TAU / 16.0;
-            x = (target.x + angle.cos() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
-            z = (target.z + angle.sin() * HORIZEN_TORNADO_SPAWN_DISTANCE).floor() as i32;
-        }
-        let y = (self.world.ground_top(x, z) + 1) as f32;
-        let start = vec3(
-            target.x + angle.cos() * HORIZEN_TORNADO_SPAWN_DISTANCE,
-            y,
-            target.z + angle.sin() * HORIZEN_TORNADO_SPAWN_DISTANCE,
-        );
+        let angle = self.rng.unit() * std::f32::consts::TAU;
+        let start = vec3(target.x + angle.cos() * SKY_TORNADO_SPAWN_DISTANCE, target.y, target.z + angle.sin() * SKY_TORNADO_SPAWN_DISTANCE);
         self.tornado = Some(FireTornado::new(start, target));
     }
 
@@ -2012,6 +2336,12 @@ impl Game {
         }
         self.limit_items();
         self.toasts.update(dt);
+        if let Some((_, left)) = self.ghost_text.as_mut() {
+            *left -= dt;
+        }
+        if self.ghost_text.as_ref().map_or(false, |(_, left)| *left <= 0.0) {
+            self.ghost_text = None;
+        }
     }
 
     /// Keep at most `MAX_DROPPED_ITEMS` items on the ground: when there are more, the oldest vanish first, judged by
@@ -5026,20 +5356,34 @@ mod totem_horizen_and_wear_tests {
     }
 
     #[test]
-    fn a_daytime_horizen_tornado_spawns_on_the_forty_block_ring_and_night_clears_it() {
+    fn a_daytime_sky_tornado_spawns_on_the_forty_block_ring_and_night_clears_it() {
         let mut g = game(31);
-        fall_in_the_well(&mut g);
+        g.travel_to(Dimension::Skylands);
+        g.world.night = false;
         let target = g.player.pos;
-        g.update_animals(HORIZEN_TORNADO_INTERVAL - 0.01);
+        g.update_animals(SKY_TORNADO_INTERVAL - 0.01);
         assert!(g.tornado.is_none(), "the tornado has not spawned early");
         g.update_animals(0.01);
         let tornado = g.tornado.expect("the first daytime tornado");
         let distance = vec2(tornado.pos.x - target.x, tornado.pos.z - target.z).length();
-        assert!((distance - HORIZEN_TORNADO_SPAWN_DISTANCE).abs() < 1.5, "spawn ring distance: {distance}");
+        assert!((distance - SKY_TORNADO_SPAWN_DISTANCE).abs() < 1.5, "spawn ring distance: {distance}");
+        assert!((tornado.pos.y - target.y).abs() < 1e-5, "it sweeps at the player's height");
         assert!((tornado.target - target).length() < 1e-5, "target is the captured player position");
         g.world.set_night(true);
         g.update_animals(0.0);
         assert!(g.tornado.is_none(), "night removes the tornado");
+    }
+
+    #[test]
+    fn there_are_no_fire_tornadoes_in_the_horizen_or_the_overworld() {
+        let mut g = game(32);
+        g.world.night = false;
+        g.update_animals(SKY_TORNADO_INTERVAL + 1.0);
+        assert!(g.tornado.is_none(), "not in the overworld");
+        fall_in_the_well(&mut g);
+        g.world.night = false;
+        g.update_animals(SKY_TORNADO_INTERVAL + 1.0);
+        assert!(g.tornado.is_none(), "not in the Horizen");
     }
 
     #[test]
@@ -5078,13 +5422,16 @@ mod totem_horizen_and_wear_tests {
         for _ in 0..90 {
             g.update_blackout(1.0 / 60.0);
         }
-        assert!(g.blackout.is_none() && g.world.night, "the purple stew brings night to the Horizen");
+        assert!(g.blackout.is_none() && g.in_overworld(), "the purple stew brings night, and the player blacks out and wakes in the overworld");
+        assert!(g.parked(Dimension::Horizen).map_or(false, |a| !a.world.night), "the cave itself stays day");
+        g.enter_horizen();
+        assert!(!g.world.night, "and it is day again when they come back");
         g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::RedBerryStew, count: 1 });
         g.eat_held();
         for _ in 0..90 {
             g.update_blackout(1.0 / 60.0);
         }
-        assert!(g.blackout.is_none() && !g.world.night, "the red stew brings day to the Horizen");
+        assert!(g.blackout.is_none() && !g.world.night && g.in_horizen(), "the red stew keeps it day, and keeps the player in the Horizen");
         for item in [ItemKind::BoneTotem, ItemKind::Compass] {
             hold(&mut g, item);
             for _ in 0..3 {
@@ -5520,12 +5867,50 @@ mod boss_and_skylands_tests {
             g.update_travel(0.1);
         }
         assert!(g.in_overworld(), "back in the overworld");
-        let c = g.cyclone().unwrap();
-        assert!(!c.contains(g.player.pos), "set down beside the cyclone, not in it");
+        assert!(g.cyclone().is_none(), "the Yeti is back, so the summit cyclone is gone");
         for _ in 0..80 {
             g.update_travel(0.1);
         }
-        assert!(g.in_overworld(), "and it does not take them again");
+        assert!(g.in_overworld(), "and nothing takes them again");
+    }
+
+    #[test]
+    fn leaving_the_skylands_wakes_the_yeti_and_it_must_be_killed_again_for_the_cyclone() {
+        let mut g = on_the_summit();
+        let (sx, sz) = g.world.landmarks.summit().unwrap();
+        in_the_cyclone(&mut g);
+        assert!(g.world.landmarks.yeti_slain && g.cyclone().is_some());
+        g.enter_skylands();
+        g.whiteout = None;
+        g.leave_skylands();
+        assert!(!g.world.landmarks.yeti_slain, "the Yeti lives again");
+        assert!(g.cyclone().is_none());
+        g.player.pos = vec3(sx as f32 + 5.5, g.world.ground_top(sx, sz) as f32 + 1.0, sz as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.spawn_bosses();
+        let yeti = g.animals.iter().position(|a| a.kind == AnimalKind::Yeti).expect("it is back on the summit");
+        g.hurt_animals(&[(yeti, YETI_HEALTH)]);
+        assert!(g.world.landmarks.yeti_slain && g.cyclone().is_some(), "killed again, the cyclone returns");
+        // Falling out of the Skylands, or dying there, wakes it just the same.
+        g.enter_skylands();
+        g.whiteout = None;
+        assert!(g.hurt_player(MAX_HEALTH, "dead"));
+        assert!(!g.world.landmarks.yeti_slain);
+    }
+
+    #[test]
+    fn each_lake_has_its_own_monster_and_a_dead_one_never_comes_back() {
+        let mut g = game();
+        let a = Lake { x: 0, z: 0, radius: 130, phase: 3, from: (0, 0) };
+        let b = Lake { x: 900, z: 0, radius: 130, phase: 5, from: (900, 0) };
+        g.world.landmarks.lakes = vec![a, b];
+        assert!(a.has_tower() && b.has_tower());
+        assert!(g.world.landmarks.monster_alive(&a) && g.world.landmarks.monster_alive(&b));
+        g.world.record_monster_slain(&a);
+        assert!(!g.world.landmarks.monster_alive(&a), "the first lake's monster is dead for good");
+        assert!(g.world.landmarks.monster_alive(&b), "the other lake's monster is another one, still alive");
+        let again = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, parse_save(&g.save_text()), 3);
+        assert!(!again.world.landmarks.monster_alive(&a) && again.world.landmarks.monster_alive(&b), "and it stays dead after a reload");
     }
 
     #[test]
@@ -5584,14 +5969,14 @@ mod boss_and_skylands_tests {
         assert_eq!(gate_cell(&g, &lake), Block::TowerDoor, "still locked");
         g.spawn_bosses();
         assert!(g.animals.iter().all(|a| a.kind != AnimalKind::LochNessMonster), "it does not come back");
-        // A silver key in the hand opens both halves of the door for good, and is used up.
-        g.inventory.slots[g.selected] = Some(crate::item::ItemStack { kind: ItemKind::SilverKey, count: 2 });
+        // A silver key in the hand opens both halves of the door for good, and is kept.
+        g.inventory.slots[g.selected] = Some(crate::item::ItemStack { kind: ItemKind::SilverKey, count: 1 });
         assert!(g.can_interact(Block::TowerDoorTop));
         let hit = Hit { x: door.0, y: door.1 + 1, z: door.2, block: Block::TowerDoorTop, prev: (door.0, door.1 + 1, door.2 + 1) };
         assert!(g.use_held(&hit));
         assert_eq!(gate_cell(&g, &lake), Block::Air, "open");
         assert_eq!(g.world.block_at(door.0, door.1 + 1, door.2), Block::Air);
-        assert_eq!(g.inventory.count(ItemKind::SilverKey), 1, "one key is used up");
+        assert_eq!(g.inventory.count(ItemKind::SilverKey), 1, "the key is not used up: it only turns the lock");
         // The door stays open after a reload.
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let mut again = Game::from_save(info, parse_save(&g.save_text()), 3);
@@ -5644,7 +6029,7 @@ mod silver_tower_tests {
     }
 
     #[test]
-    fn a_peep_stone_by_day_in_the_horizen_brings_out_one_tower_and_a_trail_to_it() {
+    fn a_peep_stone_in_the_horizen_brings_out_one_tower_in_the_great_cavern_and_a_trail_down_the_tunnel() {
         let mut g = game();
         g.enter_horizen();
         g.world.night = false;
@@ -5653,27 +6038,23 @@ mod silver_tower_tests {
         assert_eq!(g.trail_path(), None, "nothing out there yet");
         assert!(g.try_show_horizen_tower());
         let tower = g.world.landmarks.horizen_tower.expect("the tower is out");
-        let (dx, dz) = ((tower.x as f32 - g.player.pos.x).abs(), (tower.z as f32 - g.player.pos.z).abs());
-        assert!(dx.max(dz) >= tower_distance_for_test(), "beyond the generated land: {dx} {dz}");
-        assert!(horizen::site_is_dry(g.info.seed, tower.x, tower.z), "on dry ground");
+        assert_eq!((tower.x, tower.z), horizen::cavern_centre(g.info.seed), "in the middle of the great cavern");
+        assert!(horizen::air_height(g.info.seed, tower.x, tower.z) > TOWER_HEIGHT, "under a high roof");
         let path = g.trail_path().expect("the peep stone leads there");
         assert_eq!(path.last().copied(), Some(tower.middle()));
+        assert!(path.len() > 5, "the trail follows the winding tunnel");
         assert!(!g.try_show_horizen_tower(), "only one");
-        // By night the peep stone shows nothing in the Horizen.
+        // There is no sky in the cave to tell night by: the stone leads at any hour.
         g.world.night = true;
-        assert_eq!(g.trail_path(), None);
-        // The tower is built where the trail ends, and it survives a save and reload with its door unlocked.
+        assert!(g.trail_path().is_some());
+        // The tower survives a save and reload with its door unlocked.
         g.world.night = false;
         g.world.unlock_tower(tower.x, tower.z);
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let again = Game::from_save(info, parse_save(&g.save_text()), 3);
-        let horizen = again.parked(Dimension::Overworld).map(|_| ()).and(Some(())).map(|_| &again.world).unwrap_or(&again.world);
-        assert_eq!(horizen.landmarks.horizen_tower, Some(tower));
-        assert!(horizen.landmarks.is_unlocked(tower.x, tower.z));
-    }
-
-    fn tower_distance_for_test() -> f32 {
-        crate::tower::tower_distance() as f32
+        assert!(again.in_horizen());
+        assert_eq!(again.world.landmarks.horizen_tower, Some(tower));
+        assert!(again.world.landmarks.is_unlocked(tower.x, tower.z));
     }
 
     #[test]
@@ -5751,5 +6132,769 @@ mod silver_tower_tests {
         assert_eq!(crate::item::drops_for(Block::PinkSalt, &mut Rng::new(1)), vec![ItemKind::PinkSalt; PINK_SALT_DROP as usize]);
         g.inventory.slots[0] = None;
         assert!(Block::PinkSalt.can_break_with(None), "salt is taken by hand");
+    }
+}
+
+#[cfg(test)]
+mod crow_pan_relic_and_mother_tests {
+    use super::*;
+    use crate::chunk::idx;
+    use crate::item::ItemStack;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut g = Game::from_save(info, SaveData::new(), 5);
+        g.world.stream_chunks(g.player.pos);
+        g
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind) {
+        g.inventory.slots[0] = Some(ItemStack { kind, count: 1 });
+        g.select_slot(0);
+    }
+
+    fn put(g: &mut Game, (x, y, z): (i32, i32, i32), block: Block) {
+        g.world.chunks.get_mut(&World::chunk_of(x, z)).unwrap().blocks[idx(x.rem_euclid(CHUNK_SIZE), y, z.rem_euclid(CHUNK_SIZE))] = block;
+    }
+
+    /// Open sky over the spawn area: every block above the ground is air.
+    fn clear_sky(g: &mut Game) {
+        for chunk in g.world.chunks.values_mut() {
+            for y in GROUND_TOP + 1..WORLD_HEIGHT {
+                for z in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        chunk.blocks[idx(x, y, z)] = Block::Air;
+                    }
+                }
+            }
+        }
+    }
+
+    fn count(g: &Game, kind: ItemKind) -> u32 {
+        g.inventory.count(kind) + g.items.iter().filter(|i| i.kind == kind).count() as u32
+    }
+
+    // --- The tin pan ---
+
+    #[test]
+    fn a_tin_pan_is_two_tin_and_the_pan_finds_gold_in_clay_one_time_in_twenty_or_one_in_five_with_a_rabbit_foot() {
+        let r = crate::recipe::recipe_for(ItemKind::TinPan);
+        assert_eq!(r.inputs, &[(ItemKind::Tin, 2)]);
+        let trials = 4000;
+        let pan = |foot: bool, held: ItemKind| {
+            let mut g = game();
+            clear_sky(&mut g);
+            if foot {
+                g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::RabbitFoot, count: 1 });
+            }
+            hold(&mut g, held);
+            let mut clay = 0;
+            for i in 0..trials {
+                let at = (12 + i % 3, 6, 12);
+                put(&mut g, at, Block::WetClay);
+                clay += g.mine(at.0, at.1, at.2).iter().filter(|&&k| k == ItemKind::Clay).count();
+            }
+            assert_eq!(clay, trials as usize * CLAY_DROP as usize, "clay drops as ever");
+            count(&g, ItemKind::Gold) as f64 / trials as f64
+        };
+        let plain = pan(false, ItemKind::TinPan);
+        let lucky = pan(true, ItemKind::TinPan);
+        assert!((plain - 0.05).abs() < 0.02, "one in twenty: {plain}");
+        assert!((lucky - 0.20).abs() < 0.03, "one in five: {lucky}");
+        assert_eq!(pan(true, ItemKind::Stick), 0.0, "only the pan pans");
+    }
+
+    // --- The Philosopher's Stone ---
+
+    #[test]
+    fn the_philosophers_stone_turns_a_boulder_to_gold_that_breaks_by_hand_into_gold_and_stays_gone() {
+        let mut g = game();
+        let at = (12, 6, 12);
+        put(&mut g, at, Block::Boulder);
+        let hit = Hit { x: 12, y: 6, z: 12, block: Block::Boulder, prev: (12, 7, 12) };
+        hold(&mut g, ItemKind::Stick);
+        assert!(!g.use_held(&hit), "nothing happens without the stone");
+        hold(&mut g, ItemKind::PhilosophersStone);
+        assert!(g.can_interact(Block::Boulder));
+        assert!(g.use_held(&hit));
+        assert_eq!(g.world.block_at(12, 6, 12), Block::GoldBoulder);
+        assert_eq!(g.held_item(), Some(ItemKind::PhilosophersStone), "the stone is not used up");
+        // It survives a save; after it is broken it neither returns as gold nor as the boulder.
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info.clone(), parse_save(&g.save_text()), 3);
+        again.world.ensure_chunk(0, 0);
+        assert_eq!(again.world.block_at(12, 6, 12), Block::GoldBoulder);
+        hold(&mut again, ItemKind::Stick);
+        assert_eq!(again.mine(12, 6, 12), vec![ItemKind::Gold; GOLD_BOULDER_GOLD_DROP as usize]);
+        let mut last = Game::from_save(info, parse_save(&again.save_text()), 3);
+        last.world.ensure_chunk(0, 0);
+        assert_eq!(last.world.block_at(12, 6, 12), Block::Air);
+    }
+
+    // --- Crows and the altar ---
+
+    #[test]
+    fn a_crow_leaves_only_feathers() {
+        let drops = AnimalKind::Crow.drops(&mut Rng::new(1));
+        assert_eq!(drops, vec![ItemKind::Feather; CROW_FEATHER_DROP as usize]);
+        assert!(AnimalKind::Quail.drops(&mut Rng::new(1)).contains(&ItemKind::Poultry));
+    }
+
+    #[test]
+    fn a_startled_crow_flies_west_wherever_the_player_stands_and_a_quail_flies_away() {
+        for (player_dx, player_dz) in [(5.0, 0.0), (-5.0, 0.0), (0.0, 5.0), (0.0, -5.0)] {
+            let mut g = game();
+            clear_sky(&mut g);
+            let start = vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5);
+            let mut crow = Animal::new(AnimalKind::Crow, start, &mut Rng::new(3));
+            let mut quail = Animal::new(AnimalKind::Quail, start, &mut Rng::new(3));
+            let player = start + vec3(player_dx, 0.0, player_dz);
+            let mut rng = Rng::new(9);
+            for _ in 0..60 {
+                crow.update(&g.world, player, 1.0 / 60.0, &mut rng);
+                quail.update(&g.world, player, 1.0 / 60.0, &mut rng);
+            }
+            for _ in 0..60 {
+                crow.update(&g.world, player, 1.0 / 60.0, &mut rng);
+                quail.update(&g.world, player, 1.0 / 60.0, &mut rng);
+            }
+            assert!(crow.pos.x < start.x - 4.0, "the crow went west: {:?} (player at {player_dx},{player_dz})", crow.pos);
+            assert!((crow.pos.z - start.z).abs() < 0.5, "straight west");
+            if player_dx > 0.0 {
+                assert!(quail.pos.x < start.x, "a quail flees from the player, here westwards too");
+            } else if player_dx < 0.0 {
+                assert!(quail.pos.x > start.x, "a quail flees from the player, here eastwards");
+            }
+            g.animals.push(crow);
+        }
+    }
+
+    #[test]
+    fn a_crow_with_the_way_west_shut_flies_away_like_a_quail() {
+        let mut g = game();
+        clear_sky(&mut g);
+        let start = vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5);
+        // A high wall across the whole of the way west.
+        for z in 0..CHUNK_SIZE * 2 {
+            for y in GROUND_TOP + 1..GROUND_TOP + 30 {
+                put(&mut g, (20, y, z), Block::CastleStone);
+            }
+        }
+        let mut crow = Animal::new(AnimalKind::Crow, start, &mut Rng::new(3));
+        let mut rng = Rng::new(9);
+        let player = start + vec3(-5.0, 0.0, 0.0);
+        for _ in 0..90 {
+            crow.update(&g.world, player, 1.0 / 60.0, &mut rng);
+        }
+        assert!(crow.pos.x > start.x, "it flies away from the player, east, since west is shut: {:?}", crow.pos);
+    }
+
+    #[test]
+    fn following_one_crow_west_for_two_chunks_brings_it_down_on_a_new_ancient_altar_with_a_loadstone() {
+        let mut g = game();
+        for cx in -4..=4 {
+            for cz in -3..=3 {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        clear_sky(&mut g);
+        // Where the crow starts, and a clear flat patch of ground for the altar.
+        let start = vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5);
+        let mut crow = Animal::new(AnimalKind::Crow, start, &mut Rng::new(3));
+        g.animals.push(crow);
+        let mut perched = None;
+        'chase: for _ in 0..40 {
+            // The player walks up to within the startle distance of the crow and the crow takes off.
+            let c = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap().pos;
+            g.player.pos = vec3(c.x + 6.0, c.y, c.z);
+            for _ in 0..600 {
+                let c = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap().pos;
+                // Keep up with the crow, a few blocks behind it.
+                g.player.pos.x = g.player.pos.x.min(c.x + 12.0);
+                g.world.stream_chunks(g.player.pos);
+                clear_sky(&mut g);
+                g.update_animals(1.0 / 60.0);
+                let altar = (-120..60).flat_map(|x| (-60..60).map(move |z| (x, z))).find(|&(x, z)| g.world.block_at(x, GROUND_TOP + 1, z) == Block::AltarLoadstone);
+                if let Some(at) = altar {
+                    perched = Some(at);
+                    break 'chase;
+                }
+            }
+        }
+        let (ax, _az) = perched.expect("the crow came down on an altar");
+        assert!(ax <= 30 - CROW_ALTAR_WEST_BLOCKS as i32 + 8, "it was followed two chunks west: altar at x={ax}");
+        // The loadstone is taken by hand, the altar stays and is saved.
+        let (ax, az) = perched.unwrap();
+        hold(&mut g, ItemKind::Stick);
+        assert_eq!(g.mine(ax, GROUND_TOP + 1, az), vec![ItemKind::Loadstone]);
+        assert_eq!(g.world.block_at(ax, GROUND_TOP + 1, az), Block::AncientAltar);
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        again.world.stream_chunks(vec3(ax as f32, 6.0, az as f32));
+        assert_eq!(again.world.block_at(ax, GROUND_TOP + 1, az), Block::AncientAltar, "the altar is kept");
+    }
+
+    #[test]
+    fn a_crow_that_the_player_leaves_behind_forgets_how_far_it_was_followed() {
+        let mut g = game();
+        clear_sky(&mut g);
+        let mut crow = Animal::new(AnimalKind::Crow, vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5), &mut Rng::new(3));
+        crow.west_followed = 30.0;
+        g.animals.push(crow);
+        g.player.pos = vec3(30.5 + CROW_LOSE_DISTANCE + 5.0, GROUND_TOP as f32 + 1.0, 10.5);
+        g.update_animals(1.0 / 60.0);
+        let crow = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap();
+        assert_eq!(crow.west_followed, 0.0);
+    }
+
+    // --- The Mother of Quail ---
+
+    fn kill_quail(g: &mut Game, n: usize) {
+        for _ in 0..n {
+            let p = g.player.pos + vec3(3.0, 0.0, 0.0);
+            g.animals.push(Animal::new(AnimalKind::Quail, p, &mut Rng::new(1)));
+            let i = g.animals.len() - 1;
+            g.hurt_animals(&[(i, 999)]);
+        }
+    }
+
+    fn mothers(g: &Game) -> usize {
+        g.animals.iter().filter(|a| a.kind == AnimalKind::MotherOfQuail).count()
+    }
+
+    #[test]
+    fn every_ten_quail_killed_bring_a_mother_of_quail_that_drops_a_silver_key() {
+        let mut g = game();
+        clear_sky(&mut g);
+        kill_quail(&mut g, 9);
+        assert_eq!(mothers(&g), 0, "nine are not enough");
+        kill_quail(&mut g, 1);
+        assert_eq!(mothers(&g), 1, "the tenth calls her");
+        let mother = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        let gap = (g.animals[mother].pos - g.player.pos).length();
+        assert!(gap > 8.0 && gap < 20.0, "she appears near: {gap}");
+        // She hunts the player and never gives up, however far they run.
+        g.player.pos += vec3(300.0, 0.0, 0.0);
+        g.world.stream_chunks(g.player.pos);
+        clear_sky(&mut g);
+        g.update_animals(0.1);
+        assert_eq!(mothers(&g), 1, "she does not despawn");
+        assert!(g.boss_bar().is_some() || (g.animals[mother].pos - g.player.pos).length() > BOSS_BAR_DISTANCE);
+        kill_quail(&mut g, 10);
+        assert_eq!(mothers(&g), 2, "ten more, another mother");
+        assert_eq!(g.quail_kills, 20);
+        // Killing her drops the silver key.
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        let before = count(&g, ItemKind::SilverKey);
+        g.hurt_animals(&[(i, MOTHER_OF_QUAIL_HEALTH)]);
+        assert_eq!(count(&g, ItemKind::SilverKey), before + 1);
+        assert_eq!(mothers(&g), 1);
+    }
+
+    #[test]
+    fn the_mother_of_quail_hurts_the_player_and_the_fight_ends_when_the_player_dies() {
+        let mut g = game();
+        clear_sky(&mut g);
+        kill_quail(&mut g, 10);
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        g.animals[i].pos = g.player.pos + vec3(1.0, 0.0, 0.0);
+        let start = g.health;
+        for _ in 0..120 {
+            g.update_animals(1.0 / 60.0);
+            if g.health < start {
+                break;
+            }
+        }
+        assert!(g.health < start, "she strikes for {MOTHER_OF_QUAIL_DAMAGE}");
+        assert!(g.hurt_player(99, "test"), "the player dies");
+        assert_eq!(mothers(&g), 0, "the fight is over");
+    }
+
+    #[test]
+    fn a_mother_left_behind_in_another_dimension_comes_again_and_the_count_is_saved() {
+        let mut g = game();
+        clear_sky(&mut g);
+        kill_quail(&mut g, 12);
+        assert_eq!(mothers(&g), 1);
+        g.travel_to(Dimension::Skylands);
+        assert_eq!(mothers(&g), 0);
+        assert_eq!(g.mothers_owed, 1);
+        g.travel_to(Dimension::Overworld);
+        g.world.stream_chunks(g.player.pos);
+        g.summon_mothers();
+        assert_eq!(mothers(&g), 1);
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        assert_eq!(again.quail_kills, 12);
+    }
+
+    // --- The crown, the ruined castle and Excalibur ---
+
+    #[test]
+    fn the_crown_is_worn_and_brings_a_ruined_castle_out_ahead_of_the_player_once() {
+        let mut g = game();
+        assert!(!g.try_show_ruined_castle(), "not without the crown");
+        hold(&mut g, ItemKind::AncientCrown);
+        assert!(g.wear_held());
+        assert_eq!(g.worn, Some(ItemKind::AncientCrown));
+        g.player.yaw = 0.0;
+        assert!(g.try_show_ruined_castle());
+        let castle = g.world.landmarks.ruined_castle.expect("the ruin is out");
+        assert!(castle.x as f32 > g.player.pos.x + GRAND_REACH as f32, "ahead, to the east, beyond the generated land");
+        assert!(!g.try_show_ruined_castle(), "only one");
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        assert_eq!(again.world.landmarks.ruined_castle, Some(castle));
+        assert_eq!(again.worn, Some(ItemKind::AncientCrown));
+    }
+
+    #[test]
+    fn the_ruin_is_large_and_broken_with_the_sword_in_the_stone_at_its_centre_and_a_way_in_from_the_south() {
+        let salt = 12345;
+        let cell = |dx, dz, dy| crate::landmarks::ruins_cell(salt, dx, dz, dy);
+        assert_eq!(cell(0, 0, 0), Block::SwordInStone);
+        assert_eq!(cell(0, 0, 1), Block::SwordHilt);
+        assert!(RUINS_WALL_HALF >= 20, "a large castle");
+        // The way in: nothing blocks the column from outside the gap to the dais.
+        for dz in 3..=RUINS_WALL_HALF + 6 {
+            for dy in 0..4 {
+                assert_eq!(cell(0, dz, dy), Block::Air, "blocked at dz {dz} dy {dy}");
+            }
+        }
+        // The walls are there, but broken (not one even height), and the north side is closed.
+        let heights: std::collections::HashSet<i32> = (-RUINS_WALL_HALF + 4..=RUINS_WALL_HALF - 4).map(|dx| (0..GRAND_HEIGHT).take_while(|&dy| cell(dx, -RUINS_WALL_HALF, dy) == Block::CastleStone).count() as i32).collect();
+        assert!(heights.len() > 3 && heights.iter().all(|&h| h >= 1), "a broken wall: {heights:?}");
+        let tall = (0..GRAND_HEIGHT).filter(|&dy| cell(RUINS_WALL_HALF + 1, RUINS_WALL_HALF + 1, dy) == Block::CastleStone).count();
+        assert!(tall > 3, "a tumbled tower at the corner");
+        for dy in 0..GRAND_HEIGHT {
+            assert_eq!(crate::landmarks::GrandCastle { x: 0, z: 0 }.ruin_block(GRAND_REACH + 1, 0, dy), None, "outside the square");
+        }
+    }
+
+    #[test]
+    fn only_a_crowned_player_draws_excalibur_from_the_stone() {
+        let mut g = game();
+        let (x, y, z) = (12, 6, 12);
+        put(&mut g, (x, y, z), Block::SwordInStone);
+        put(&mut g, (x, y + 1, z), Block::SwordHilt);
+        let hit = Hit { x, y, z, block: Block::SwordInStone, prev: (x, y + 1, z) };
+        assert!(!g.can_interact(Block::SwordInStone));
+        assert!(!g.use_held(&hit), "bare-headed the sword will not move");
+        assert_eq!(g.world.block_at(x, y, z), Block::SwordInStone);
+        hold(&mut g, ItemKind::AncientCrown);
+        g.wear_held();
+        assert!(g.can_interact(Block::SwordHilt));
+        let hilt = Hit { x, y: y + 1, z, block: Block::SwordHilt, prev: (x, y + 2, z) };
+        assert!(g.use_held(&hilt), "the hilt works as well as the blade");
+        assert_eq!(count(&g, ItemKind::Excalibur), 1);
+        assert_eq!(g.world.block_at(x, y, z), Block::PulledStone);
+        assert_eq!(g.world.block_at(x, y + 1, z), Block::Air);
+        // It is gone for good, also after a save.
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        again.world.ensure_chunk(0, 0);
+        assert_eq!(again.world.block_at(x, y, z), Block::PulledStone);
+        assert_eq!(again.world.block_at(x, y + 1, z), Block::Air);
+    }
+
+    #[test]
+    fn excalibur_is_the_best_weapon_in_the_game() {
+        let best = ItemKind::ALL.into_iter().filter(|&k| k != ItemKind::Excalibur).filter_map(ItemKind::melee_damage).max().unwrap();
+        assert!(ItemKind::Excalibur.melee_damage().unwrap() > best);
+        assert!(EXCALIBUR_DAMAGE > ARROW_DAMAGE && EXCALIBUR_DAMAGE > SLING_DAMAGE);
+        assert!(ItemKind::Excalibur.melee_reach() >= AXE_REACH);
+        assert!(ItemKind::Excalibur.melee_cooldown() <= AXE_COOLDOWN);
+        let mut g = game();
+        clear_sky(&mut g);
+        hold(&mut g, ItemKind::Excalibur);
+        g.animals.push(Animal::new(AnimalKind::Bear, g.player.pos + vec3(3.0, 0.0, 0.0), &mut Rng::new(2)));
+        let eye = g.player.pos + vec3(0.0, 0.7, 0.0);
+        let before = g.animals[0].health;
+        assert!(g.swing_melee(eye, vec3(1.0, 0.0, 0.0)), "the swing reaches the bear");
+        assert_eq!(g.animals[0].health, before - EXCALIBUR_DAMAGE);
+    }
+
+    #[test]
+    fn crows_join_the_wildlife_within_their_limit() {
+        let mut g = game();
+        clear_sky(&mut g);
+        for _ in 0..400 {
+            g.spawn_wildlife();
+        }
+        let crows = g.animals.iter().filter(|a| a.kind == AnimalKind::Crow).count();
+        assert!(crows > 0 && crows <= MAX_CROW, "{crows} crows");
+    }
+
+    // --- The cave dimension: day on entry, night blackouts, camps ---
+
+    #[test]
+    fn coming_into_the_horizen_is_always_day_and_night_there_wakes_the_player_at_stonehenge() {
+        let mut g = game();
+        let well = Well { x: 60, z: 60 };
+        g.world.add_well(well);
+        g.world.night = true;
+        g.enter_horizen();
+        assert!(!g.world.night, "day, whatever the overworld was");
+        // A purple stew in the cave brings night: the player blacks out and wakes next to the well, out of the cave.
+        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::PurpleBerryStew, count: 1 });
+        g.select_slot(0);
+        g.eat_held();
+        for _ in 0..90 {
+            g.update_blackout(1.0 / 60.0);
+        }
+        assert!(g.in_overworld() && g.blackout.is_none());
+        let p = g.player.pos;
+        let (ax, az) = stonehenge::arrival(g.info.seed);
+        assert!((p.x - ax).abs() < 0.01 && (p.z - az).abs() < 0.01, "in the ring of Stonehenge, not by the well: {p:?}");
+        let (sx, sz) = stonehenge::centre(g.info.seed);
+        assert!(vec2(sx as f32 - 10.0, sz as f32 - 10.0).length() > 4.0 * CHUNK_SIZE as f32, "about five chunks from where the world began");
+        assert!(g.toasts.contains("Stonehenge"));
+        // The cave is day again on the next visit.
+        g.enter_horizen();
+        assert!(!g.world.night);
+    }
+
+    #[test]
+    fn every_fourth_cave_entered_has_a_camp_with_a_burning_log_and_a_pot_of_ready_stew() {
+        let mut g = game();
+        g.enter_horizen();
+        let seed = g.info.seed;
+        let mut camps = Vec::new();
+        // Walk into the caves one by one (the arrival chamber counts as the first).
+        let cells = [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)];
+        for (n, cell) in cells.into_iter().enumerate() {
+            let cave = horizen::cave_in_cell(seed, cell.0, cell.1);
+            if cave.great {
+                continue;
+            }
+            g.player.pos = vec3(cave.x, GROUND_TOP as f32 + 1.0, cave.z);
+            g.world.stream_chunks(g.player.pos);
+            let made = g.update_cave_visits();
+            assert_eq!(made, g.world.landmarks.caves_visited.len() % HORIZEN_CAMP_EVERY == 0, "cave {n}");
+            assert!(!g.update_cave_visits(), "a cave already entered is not entered again");
+            if made {
+                camps.push(cave);
+            }
+        }
+        assert!(!camps.is_empty());
+        for cave in camps {
+            let camp = g.world.pots.iter().find(|(&(x, _, z), _)| horizen::cave_at(seed, x, z).map(|c| c.cell) == Some(cave.cell) || ((x as f32 - cave.x).abs() < 8.0 && (z as f32 - cave.z).abs() < 8.0));
+            let (&pos, pot) = camp.expect("a pot in the cave");
+            assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Fire, "on a burning log");
+            assert!(g.world.fires.contains_key(&pos));
+            assert!(pot.water && matches!(pot.stew(), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)), "stew, ready");
+            // Right click with an empty hand ladles it out.
+            g.inventory.slots[0] = None;
+            g.select_slot(0);
+            let hit = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Fire, prev: (pos.0, pos.1 + 1, pos.2) };
+            assert!(g.use_held(&hit));
+            assert!(matches!(g.inventory.slots.iter().flatten().next().map(|s| s.kind), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)));
+        }
+    }
+
+    #[test]
+    fn the_caves_entered_are_saved_so_a_camp_is_not_made_twice() {
+        let mut g = game();
+        g.enter_horizen();
+        for cell in [(0, 0), (1, 0)] {
+            let cave = horizen::cave_in_cell(g.info.seed, cell.0, cell.1);
+            g.player.pos = vec3(cave.x, GROUND_TOP as f32 + 1.0, cave.z);
+            g.world.stream_chunks(g.player.pos);
+            g.update_cave_visits();
+        }
+        let again = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, parse_save(&g.save_text()), 3);
+        assert_eq!(again.world.landmarks.caves_visited, vec![(0, 0), (1, 0)]);
+    }
+
+    // --- The jungle temple ---
+
+    #[test]
+    fn a_big_stepped_temple_stands_in_the_middle_of_the_jungle_and_a_fall_from_the_sky_lands_beside_it() {
+        let mut g = game();
+        let (jx, jz) = crate::terrain::jungle_centre(g.info.seed);
+        for cz in (jz - 30).div_euclid(CHUNK_SIZE)..=(jz + 30).div_euclid(CHUNK_SIZE) {
+            for cx in (jx - 30).div_euclid(CHUNK_SIZE)..=(jx + 30).div_euclid(CHUNK_SIZE) {
+                g.world.ensure_chunk(cx, cz);
+            }
+        }
+        let base = g.world.ground_top(jx, jz);
+        assert_eq!(g.world.block_at(jx, base + TEMPLE_TOP_FOR_TEST, jz), Block::GoldPile, "gold on the shrine floor at the top");
+        assert_eq!(g.world.block_at(jx + 5, base + 1, jz + 5), Block::MayaStone, "solid pyramid");
+        assert_eq!(g.world.block_at(jx, base + 1, jz + TEMPLE_BASE_HALF + 3), Block::Air, "open ground beyond the foot");
+        let (lx, lz) = g.jungle_landing();
+        assert!((lx - jx).abs().max((lz - jz).abs()) > TEMPLE_BASE_HALF + 1, "the landing is not on the temple");
+        assert!(crate::terrain::in_jungle_clearing(g.info.seed, lx, lz), "but still in the bare middle of the jungle");
+    }
+
+    const TEMPLE_TOP_FOR_TEST: i32 = TEMPLE_TIERS * TEMPLE_TIER_HEIGHT + 1;
+
+    // --- Backpack, pipes, ghosts, Stonehenge, the Mother in the air ---
+
+    #[test]
+    fn a_leather_backpack_is_made_of_leather_and_cord_and_gives_two_rows_only_while_worn() {
+        let r = crate::recipe::recipe_for(ItemKind::LeatherBackpack);
+        assert_eq!(r.inputs, &[(ItemKind::Leather, 4), (ItemKind::LeatherCord, 2)]);
+        let mut g = game();
+        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS);
+        hold(&mut g, ItemKind::LeatherBackpack);
+        assert!(g.wear_held());
+        assert_eq!(g.worn_back, Some(ItemKind::LeatherBackpack));
+        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS + 2 * HOTBAR_SLOTS, "two more rows");
+        // The extra slots hold things; they survive a save only together with the pack.
+        g.inventory.slots[INVENTORY_SLOTS + 4] = Some(ItemStack { kind: ItemKind::Gold, count: 5 });
+        let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info.clone(), parse_save(&g.save_text()), 3);
+        assert_eq!(again.worn_back, Some(ItemKind::LeatherBackpack));
+        assert_eq!(again.inventory.slots.len(), INVENTORY_SLOTS + BACKPACK_SLOTS);
+        assert_eq!(again.inventory.slots[INVENTORY_SLOTS + 4].map(|s| (s.kind, s.count)), Some((ItemKind::Gold, 5)));
+        // A second pack is not worn, and a pack does not take the place of a cloak: they are worn at once.
+        hold(&mut g, ItemKind::LeatherBackpack);
+        assert!(!g.wear_held());
+        hold(&mut g, ItemKind::PeltCloak);
+        assert!(g.wear_held());
+        assert_eq!((g.worn, g.worn_back), (Some(ItemKind::PeltCloak), Some(ItemKind::LeatherBackpack)));
+        // Without the pack worn the extra rows are not there.
+        let mut bare = SaveData::new();
+        bare.inventory.slots[3] = Some(ItemStack { kind: ItemKind::Stick, count: 2 });
+        let plain = Game::from_save(info, bare, 3);
+        assert_eq!(plain.inventory.slots.len(), INVENTORY_SLOTS);
+    }
+
+    #[test]
+    fn a_pack_that_is_not_worn_gives_no_rows_even_if_an_old_save_has_items_in_them() {
+        let mut data = SaveData::new();
+        data.inventory.add_pack_rows();
+        data.inventory.slots[INVENTORY_SLOTS + 1] = Some(ItemStack { kind: ItemKind::Gold, count: 3 });
+        let g = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, data, 3);
+        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS);
+        assert_eq!(g.inventory.count(ItemKind::Gold), 3, "the gold moved into the ordinary slots");
+    }
+
+    #[test]
+    fn the_silver_key_opens_the_lock_and_is_kept() {
+        let mut g = game();
+        let lake = Lake { x: 0, z: 0, radius: 130, phase: 3, from: (0, 0) };
+        g.world.landmarks.lakes.push(lake);
+        let door = (0, GROUND_TOP + 1, TOWER_HALF);
+        g.world.ensure_chunk(0, 0);
+        put(&mut g, door, Block::TowerDoor);
+        hold(&mut g, ItemKind::SilverKey);
+        assert!(g.try_unlock(door));
+        assert_eq!(g.inventory.count(ItemKind::SilverKey), 1, "kept");
+        assert!(g.world.landmarks.is_unlocked(lake.x, lake.z));
+    }
+
+    // --- The Mother of Quail flies ---
+
+    #[test]
+    fn the_mother_of_quail_flies_up_to_a_player_high_above_the_ground_and_strikes_them() {
+        let mut g = game();
+        clear_sky(&mut g);
+        kill_quail(&mut g, 10);
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        let high = GROUND_TOP as f32 + 1.0 + 14.0;
+        g.player.pos.y = high;
+        g.animals[i].pos = g.player.pos + vec3(8.0, -13.0, 0.0);
+        let start = g.health;
+        let mut peak = 0.0_f32;
+        for _ in 0..600 {
+            g.player.pos.y = high;
+            g.update_animals(1.0 / 60.0);
+            if let Some(m) = g.animals.iter().find(|a| a.kind == AnimalKind::MotherOfQuail) {
+                peak = peak.max(m.pos.y);
+            }
+            if g.health < start {
+                break;
+            }
+        }
+        assert!(peak > GROUND_TOP as f32 + 8.0, "she left the ground and flew up: {peak}");
+        assert!(g.health < start, "and she reached the player in the air");
+        assert!(g.animals.iter().find(|a| a.kind == AnimalKind::MotherOfQuail).map_or(false, |m| m.is_airborne()));
+    }
+
+    // --- The pipes ---
+
+    fn quail_at(g: &mut Game, kind: AnimalKind, dx: f32, dz: f32) -> usize {
+        let p = g.player.pos + vec3(dx, 0.0, dz);
+        g.animals.push(Animal::new(kind, vec3(p.x, GROUND_TOP as f32 + 1.0, p.z), &mut Rng::new(4)));
+        g.animals.len() - 1
+    }
+
+    #[test]
+    fn pipes_played_by_day_bring_quail_and_crows_flying_to_the_player_to_stand_still_for_three_seconds() {
+        let mut g = game();
+        g.world.night = false;
+        clear_sky(&mut g);
+        let far = quail_at(&mut g, AnimalKind::Quail, 40.0, 0.0);
+        let crow = quail_at(&mut g, AnimalKind::Crow, 0.0, -35.0);
+        let deer = quail_at(&mut g, AnimalKind::Deer, 30.0, 10.0);
+        let beyond = quail_at(&mut g, AnimalKind::Quail, 85.0, 0.0);
+        let beyond_start = g.animals[beyond].pos;
+        hold(&mut g, ItemKind::MusicalPipes);
+        assert!(g.play_pipes());
+        let p = g.player.pos;
+        let mut flew = false;
+        let mut frames = 0;
+        // Run until both have come down (a landed bird stands calm, and its call is spent).
+        while !(g.animals[far].calm > 0.0 && g.animals[crow].calm > 0.0) {
+            g.update_animals(1.0 / 60.0);
+            flew |= g.animals[far].is_airborne();
+            frames += 1;
+            assert!(frames < 25 * 60, "they did not come");
+        }
+        assert!(flew, "the quail took off");
+        let gap = |a: &Animal| vec2(a.pos.x - p.x, a.pos.z - p.z).length();
+        for &i in &[far, crow] {
+            let a = &g.animals[i];
+            assert!(gap(a) < PIPES_LAND_MAX + 1.0, "{:?} came to the player: {}", a.kind, gap(a));
+            assert!(!a.is_airborne(), "and landed");
+            assert!(a.lure_target.is_none());
+        }
+        assert!(gap(&g.animals[deer]) > 15.0, "a deer takes no notice");
+        assert!((g.animals[beyond].pos - beyond_start).length() < 8.0, "a quail out of range stays put");
+        // They stand still for three seconds after landing, and do not take off however close the player is.
+        let landed = g.animals[far].pos;
+        let mut still = 0.0;
+        let mut g2 = game();
+        g2.world.night = false;
+        clear_sky(&mut g2);
+        let q = quail_at(&mut g2, AnimalKind::Quail, 12.0, 0.0);
+        hold(&mut g2, ItemKind::MusicalPipes);
+        g2.play_pipes();
+        loop {
+            g2.update_animals(1.0 / 60.0);
+            if g2.animals[q].calm > 0.0 && g2.animals[q].lure_target.is_none() {
+                break;
+            }
+            still += 1.0;
+            assert!(still < 20.0 * 60.0, "it never landed");
+        }
+        let at = g2.animals[q].pos;
+        for _ in 0..(2.5 * 60.0) as i32 {
+            g2.update_animals(1.0 / 60.0);
+        }
+        assert!((g2.animals[q].pos - at).length() < 0.05, "still for the three seconds, with the player right there");
+        for _ in 0..(1.5 * 60.0) as i32 {
+            g2.update_animals(1.0 / 60.0);
+        }
+        assert!(g2.animals[q].calm == 0.0);
+        let _ = landed;
+    }
+
+    #[test]
+    fn pipes_at_night_do_not_call_the_birds() {
+        let mut g = game();
+        g.world.night = true;
+        clear_sky(&mut g);
+        let q = quail_at(&mut g, AnimalKind::Quail, 30.0, 0.0);
+        hold(&mut g, ItemKind::MusicalPipes);
+        assert!(g.play_pipes());
+        assert!(g.animals[q].lure_target.is_none());
+        assert!(!{ hold(&mut g, ItemKind::Stick); g.play_pipes() }, "only pipes play");
+    }
+
+    // --- The ghosts ---
+
+    fn in_the_graveyard(g: &mut Game) -> Graveyard {
+        let yard = Graveyard { x: 60, z: 60 };
+        g.world.add_graveyard(yard);
+        g.player.pos = vec3(yard.x as f32 + 0.5, GROUND_TOP as f32 + 1.0, yard.z as f32 + 0.5);
+        yard
+    }
+
+    #[test]
+    fn the_graveyard_ghost_asks_for_a_song_gives_a_silver_key_for_one_thanks_and_never_speaks_again() {
+        let mut g = game();
+        g.player.pos = vec3(10.5, GROUND_TOP as f32 + 1.0, 10.5);
+        g.update_graveyard_ghost();
+        assert!(g.ghost_text.is_none(), "nothing to say away from the graveyard");
+        let yard = in_the_graveyard(&mut g);
+        g.update_graveyard_ghost();
+        assert_eq!(g.ghost_text.as_ref().map(|t| t.0.as_str()), Some(crate::ghosts::GRAVEYARD_ASKS), "it asks for a song as you walk in");
+        g.update_items(GHOST_TEXT_SECONDS + 1.0);
+        assert!(g.ghost_text.is_none(), "the words fade");
+        g.update_graveyard_ghost();
+        assert!(g.ghost_text.is_none(), "it asks once as you walk in, not every frame");
+        // Without pipes nothing happens; with them the ghost is thanked.
+        hold(&mut g, ItemKind::Stick);
+        assert!(!g.play_pipes());
+        assert_eq!(count(&g, ItemKind::SilverKey), 0);
+        hold(&mut g, ItemKind::MusicalPipes);
+        assert!(g.play_pipes());
+        assert_eq!(g.ghost_text.as_ref().map(|t| t.0.as_str()), Some(crate::ghosts::GRAVEYARD_THANKS));
+        assert_eq!(count(&g, ItemKind::SilverKey), 1, "it gives a silver key");
+        assert!(g.world.landmarks.graveyard_rested);
+        // From then on it says nothing, and gives nothing more.
+        g.update_items(GHOST_TEXT_SECONDS + 1.0);
+        g.player.pos = vec3(yard.x as f32 + 40.0, GROUND_TOP as f32 + 1.0, yard.z as f32);
+        g.update_graveyard_ghost();
+        g.player.pos = vec3(yard.x as f32 + 0.5, GROUND_TOP as f32 + 1.0, yard.z as f32 + 0.5);
+        g.update_graveyard_ghost();
+        assert!(g.ghost_text.is_none(), "it has stopped talking");
+        g.play_pipes();
+        assert!(g.ghost_text.is_none());
+        assert_eq!(count(&g, ItemKind::SilverKey), 1);
+        let again = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, parse_save(&g.save_text()), 3);
+        assert!(again.world.landmarks.graveyard_rested, "and it stays at rest after a reload");
+    }
+
+    #[test]
+    fn a_ghostly_voice_answers_a_song_played_in_each_of_the_three_towers() {
+        // The cave tower.
+        let mut g = game();
+        g.enter_horizen();
+        let (tx, tz) = horizen::cavern_centre(g.info.seed);
+        g.world.add_horizen_tower(crate::tower::Tower { x: tx, z: tz });
+        g.player.pos = vec3(tx as f32 + 0.5, GROUND_TOP as f32 + 2.0, tz as f32 + 0.5);
+        hold(&mut g, ItemKind::MusicalPipes);
+        assert!(g.play_pipes());
+        assert_eq!(g.ghost_text.as_ref().map(|t| t.0.as_str()), Some(crate::ghosts::CAVE_TOWER_GHOST));
+        g.player.pos.x += TOWER_HALF as f32 + 4.0;
+        g.ghost_text = None;
+        g.play_pipes();
+        assert!(g.ghost_text.is_none(), "outside the tower it is silent");
+        // The sky tower.
+        let mut s = game();
+        s.travel_to(Dimension::Skylands);
+        s.world.landmarks.sky_tower = Some((1, 1));
+        let island = skylands::island_in_cell(s.info.seed, 1, 1);
+        s.player.pos = vec3(island.x as f32 + 0.5, island.top as f32 + 3.0, island.z as f32 + 0.5);
+        hold(&mut s, ItemKind::MusicalPipes);
+        s.play_pipes();
+        assert_eq!(s.ghost_text.as_ref().map(|t| t.0.as_str()), Some(crate::ghosts::SKY_TOWER_GHOST));
+        // The lake tower (Nessie's).
+        let mut l = game();
+        let lake = Lake { x: 0, z: 0, radius: 130, phase: 3, from: (0, 0) };
+        l.world.landmarks.lakes.push(lake);
+        l.world.stream_chunks(vec3(0.0, 6.0, 0.0));
+        let base = l.world.ground_top(lake.x, lake.z) + 1;
+        l.player.pos = vec3(0.5, base as f32 + 1.0, 0.5);
+        hold(&mut l, ItemKind::MusicalPipes);
+        l.play_pipes();
+        assert_eq!(l.ghost_text.as_ref().map(|t| t.0.as_str()), Some(crate::ghosts::LAKE_TOWER_GHOST));
+        assert!(l.ghost_text.as_ref().unwrap().0.contains("stonehenge"));
+    }
+
+    // --- Stonehenge in the world ---
+
+    #[test]
+    fn stonehenge_is_built_five_chunks_from_the_spawn_point_with_its_altar_and_standing_stones() {
+        let mut g = game();
+        let (cx, cz) = stonehenge::centre(g.info.seed);
+        for z in (cz - 16).div_euclid(CHUNK_SIZE)..=(cz + 16).div_euclid(CHUNK_SIZE) {
+            for x in (cx - 16).div_euclid(CHUNK_SIZE)..=(cx + 16).div_euclid(CHUNK_SIZE) {
+                g.world.ensure_chunk(x, z);
+            }
+        }
+        let base = g.world.ground_top(cx, cz);
+        assert_eq!(g.world.block_at(cx, base + 2, cz), Block::CastleStone, "the altar stone");
+        let ring: Vec<Block> = (0..STONEHENGE_STONES).map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / STONEHENGE_STONES as f32;
+            g.world.block_at(cx + (a.cos() * STONEHENGE_RADIUS).round() as i32, base + 3, cz + (a.sin() * STONEHENGE_RADIUS).round() as i32)
+        }).collect();
+        assert!(ring.iter().filter(|&&b| b == Block::CastleStone).count() >= STONEHENGE_STONES as usize - 2, "the standing stones: {ring:?}");
+        let (ax, az) = stonehenge::arrival(g.info.seed);
+        assert_eq!(g.world.block_at(ax.floor() as i32, base + 1, az.floor() as i32), Block::Air, "room to stand where a player wakes");
     }
 }

@@ -82,6 +82,20 @@ pub enum Block {
     StonePlinth,
     HornPlinth,
     CrownPlinth,
+    /// A boulder the Philosopher's Stone has turned to gold. Breaks by hand into gold.
+    GoldBoulder,
+    /// A small altar of old stone (the loadstone has been taken from it), and the same with a loadstone on it. Taking the
+    /// loadstone by hand gives it and leaves the altar.
+    AncientAltar,
+    AltarLoadstone,
+    /// The stone of the ruined castle with a sword in it (the blade), and the hilt standing in the cell above. Right click
+    /// either, wearing the king's crown, to pull the sword out (`Game::try_pull_sword`).
+    SwordInStone,
+    SwordHilt,
+    /// The stone once the sword has been pulled from it.
+    PulledStone,
+    /// The weathered, pale stone of the jungle temple: a solid cube that cannot be broken or made.
+    MayaStone,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -163,18 +177,79 @@ const BOULDER_PARTS: &[Part] = &[
     part([0.88, 0.0, 0.58], [1.12, 0.26, 0.92], (0.36, 0.36, 0.39)),
     part([-0.10, 0.0, 0.08], [0.14, 0.22, 0.36], (0.37, 0.37, 0.40)),
 ];
-/// A forge of clay: a squat block with a dark opening on top. The coal in it is a third part, black when
-/// filled and red-hot when lit (`effects.rs` draws the flames and the glow on top).
-macro_rules! forge_parts {
-    ($($coal:expr)?) => {
+const GOLD_BOULDER_PARTS: &[Part] = &[
+    // Lowest layer: widest.
+    part([-0.15, 0.0, 0.12], [1.15, 0.34, 0.88], (0.95, 0.76, 0.18)),
+    part([0.12, 0.0, -0.15], [0.88, 0.35, 1.15], (0.96, 0.77, 0.18)),
+    part([0.0, 0.0, 0.0], [1.0, 0.33, 1.0], (0.94, 0.75, 0.18)),
+    // Middle layer: narrower, cut at the corners.
+    part([-0.03, 0.34, 0.16], [1.03, 0.68, 0.84], (1.00, 0.81, 0.19)),
+    part([0.16, 0.35, -0.03], [0.84, 0.69, 1.03], (1.00, 0.81, 0.20)),
+    part([0.08, 0.33, 0.08], [0.92, 0.67, 0.92], (0.99, 0.80, 0.19)),
+    // Crown, a little off centre.
+    part([0.16, 0.68, 0.22], [0.82, 0.92, 0.84], (1.00, 0.86, 0.21)),
+    part([0.28, 0.92, 0.30], [0.66, 1.0, 0.70], (1.00, 0.90, 0.22)),
+    // Lumps on the flanks, so the outline is not symmetrical.
+    part([0.88, 0.0, 0.58], [1.12, 0.26, 0.92], (0.92, 0.73, 0.17)),
+    part([-0.10, 0.0, 0.08], [0.14, 0.22, 0.36], (0.93, 0.74, 0.18)),
+];
+/// An altar: a low base, a pillar and a slab, with moss on one side. The loadstone, when there, is a dark stone on the slab.
+macro_rules! altar_parts {
+    ($($stone:expr),* $(,)?) => {
         &[
-            part([0.08, 0.0, 0.08], [0.92, 0.50, 0.92], (0.68, 0.54, 0.45)),
-            part([0.20, 0.50, 0.20], [0.80, 0.56, 0.80], (0.40, 0.31, 0.26)),
-            $(part([0.28, 0.56, 0.28], [0.72, 0.64, 0.72], $coal),)?
+            part([0.10, 0.0, 0.10], [0.90, 0.16, 0.90], (0.40, 0.40, 0.43)),
+            part([0.22, 0.16, 0.22], [0.78, 0.52, 0.78], (0.50, 0.50, 0.54)),
+            part([0.12, 0.52, 0.12], [0.88, 0.62, 0.88], (0.58, 0.58, 0.62)),
+            part([0.10, 0.10, 0.55], [0.22, 0.40, 0.70], (0.30, 0.46, 0.25)),
+            $($stone,)*
         ]
     };
 }
-const FORGE_PARTS: &[Part] = forge_parts!();
+const ALTAR_PARTS: &[Part] = altar_parts!();
+const ALTAR_LOADSTONE_PARTS: &[Part] = altar_parts!(
+    part([0.34, 0.62, 0.34], [0.66, 0.80, 0.66], (0.20, 0.21, 0.26)),
+    part([0.42, 0.80, 0.42], [0.58, 0.86, 0.58], (0.34, 0.35, 0.42)),
+);
+/// The stone with the sword in it: a rough rock and the blade standing up out of it (the hilt is the cell above).
+const SWORD_IN_STONE_PARTS: &[Part] = &[
+    part([0.06, 0.0, 0.06], [0.94, 0.45, 0.94], (0.44, 0.44, 0.48)),
+    part([0.16, 0.45, 0.16], [0.84, 0.62, 0.84], (0.52, 0.52, 0.56)),
+    part([0.44, 0.62, 0.46], [0.56, 1.0, 0.54], (0.86, 0.89, 0.96)),
+];
+/// The hilt: the blade's last stretch, a golden crosspiece, a grip and a pommel.
+const SWORD_HILT_PARTS: &[Part] = &[
+    part([0.44, 0.0, 0.46], [0.56, 0.22, 0.54], (0.86, 0.89, 0.96)),
+    part([0.22, 0.22, 0.43], [0.78, 0.32, 0.57], (0.90, 0.68, 0.18)),
+    part([0.46, 0.32, 0.46], [0.54, 0.66, 0.54], (0.30, 0.18, 0.10)),
+    part([0.40, 0.66, 0.40], [0.60, 0.78, 0.60], (0.90, 0.68, 0.18)),
+];
+/// The stone with the sword gone.
+const PULLED_STONE_PARTS: &[Part] = &[
+    part([0.06, 0.0, 0.06], [0.94, 0.45, 0.94], (0.44, 0.44, 0.48)),
+    part([0.16, 0.45, 0.16], [0.84, 0.62, 0.84], (0.52, 0.52, 0.56)),
+];
+/// A forge of clay: a broad footing, a rounded body with a stoking mouth in the south side (a dark opening under an arch,
+/// with the clay nozzle of the bellows pipe below it), a shoulder and a chimney with a rim. The coal sits in the mouth of
+/// the chimney at the top: dark when the forge is empty, black when filled and red-hot when lit (`effects.rs` draws the
+/// flames and the glow on top).
+macro_rules! forge_parts {
+    ($top:expr) => {
+        &[
+            part([0.10, 0.14, 0.10], [0.90, 0.56, 0.90], (0.68, 0.54, 0.45)),
+            part([0.04, 0.0, 0.04], [0.96, 0.14, 0.96], (0.56, 0.43, 0.36)),
+            part([0.18, 0.56, 0.18], [0.82, 0.70, 0.82], (0.64, 0.50, 0.42)),
+            part([0.34, 0.70, 0.34], [0.66, 0.96, 0.66], (0.71, 0.57, 0.48)),
+            part([0.30, 0.94, 0.30], [0.70, 1.00, 0.70], (0.50, 0.38, 0.32)),
+            part([0.40, 0.96, 0.40], [0.60, 1.00, 0.60], $top),
+            part([0.30, 0.18, 0.88], [0.70, 0.42, 0.98], (0.12, 0.09, 0.08)),
+            part([0.26, 0.42, 0.86], [0.74, 0.50, 0.98], (0.52, 0.40, 0.33)),
+            part([0.44, 0.22, 0.98], [0.56, 0.32, 1.00], (0.40, 0.31, 0.26)),
+            part([0.12, 0.30, 0.12], [0.22, 0.52, 0.22], (0.60, 0.47, 0.38)),
+            part([0.78, 0.30, 0.78], [0.88, 0.52, 0.88], (0.60, 0.47, 0.38)),
+        ]
+    };
+}
+const FORGE_PARTS: &[Part] = forge_parts!((0.10, 0.08, 0.07));
 const FORGE_CHARGED_PARTS: &[Part] = forge_parts!((0.12, 0.12, 0.13));
 const FORGE_LIT_PARTS: &[Part] = forge_parts!((0.62, 0.24, 0.07));
 /// Three stacked heaps of gold, narrowing to a peak.
@@ -270,7 +345,7 @@ const CHARCOAL_PARTS: &[Part] = &[
 
 impl Block {
     /// Blocks that are saved in `World::placed`: the ones a player can create, and the rainbow's pile of gold.
-    pub const PLAYER_MADE: [Block; 12] = [
+    pub const PLAYER_MADE: [Block; 16] = [
         Block::PlacedLog,
         Block::PlacedPebble,
         Block::PlacedStone,
@@ -283,6 +358,10 @@ impl Block {
         Block::ForgeCharged,
         Block::ForgeLit,
         Block::GoldPile,
+        Block::GoldBoulder,
+        Block::AncientAltar,
+        Block::AltarLoadstone,
+        Block::PulledStone,
     ];
 
     /// Whether a player can break this block with their bare hands. Dirt and snow are not among them.
@@ -312,6 +391,8 @@ impl Block {
                 | Block::StonePlinth
                 | Block::HornPlinth
                 | Block::CrownPlinth
+                | Block::GoldBoulder
+                | Block::AltarLoadstone
         )
     }
 
@@ -359,7 +440,10 @@ impl Block {
             Block::ArmorStand => BREAK_SECONDS_ARMOR,
             Block::PinkSalt => BREAK_SECONDS_SALT,
             Block::KeyStand => BREAK_SECONDS_KEY,
-            Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth => BREAK_SECONDS_RELIC,
+            Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth | Block::AltarLoadstone => BREAK_SECONDS_RELIC,
+            Block::GoldBoulder => BREAK_SECONDS_GOLD_BOULDER,
+            // Never broken (only pulled), but the world's replay of removals needs them to count as breakable.
+            Block::SwordInStone | Block::SwordHilt => BREAK_SECONDS_RELIC,
             Block::Air
             | Block::Dirt
             | Block::Stone
@@ -372,6 +456,9 @@ impl Block {
             | Block::SilverStone
             | Block::TowerDoor
             | Block::TowerDoorTop
+            | Block::AncientAltar
+            | Block::PulledStone
+            | Block::MayaStone
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -382,7 +469,7 @@ impl Block {
     /// Whether this block can ever be broken (by hand or with the right tool).
     /// Dirt, snow, bedrock stone, water, air and burning fire (or a lit forge) never can.
     pub fn breakable(self) -> bool {
-        self.hand_breakable() || matches!(self, Block::Wood | Block::Boulder)
+        self.hand_breakable() || matches!(self, Block::Wood | Block::Boulder | Block::SwordInStone | Block::SwordHilt)
     }
 
     /// Whether a player holding `held` (or nothing) can break this block.
@@ -404,7 +491,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::PinkSalt)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::PinkSalt | Block::MayaStone)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -428,6 +515,13 @@ impl Block {
                 | Block::StonePlinth
                 | Block::HornPlinth
                 | Block::CrownPlinth
+                | Block::GoldBoulder
+                | Block::AncientAltar
+                | Block::AltarLoadstone
+                | Block::SwordInStone
+                | Block::SwordHilt
+                | Block::PulledStone
+                | Block::MayaStone
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -483,6 +577,12 @@ impl Block {
             Block::StonePlinth => STONE_PLINTH_PARTS,
             Block::HornPlinth => HORN_PLINTH_PARTS,
             Block::CrownPlinth => CROWN_PLINTH_PARTS,
+            Block::GoldBoulder => GOLD_BOULDER_PARTS,
+            Block::AncientAltar => ALTAR_PARTS,
+            Block::AltarLoadstone => ALTAR_LOADSTONE_PARTS,
+            Block::SwordInStone => SWORD_IN_STONE_PARTS,
+            Block::SwordHilt => SWORD_HILT_PARTS,
+            Block::PulledStone => PULLED_STONE_PARTS,
             _ => &[],
         }
     }
@@ -530,6 +630,10 @@ impl Block {
             Block::ForgeCharged => Some("forge_charged"),
             Block::ForgeLit => Some("forge_lit"),
             Block::GoldPile => Some("gold_pile"),
+            Block::GoldBoulder => Some("gold_boulder"),
+            Block::AncientAltar => Some("ancient_altar"),
+            Block::AltarLoadstone => Some("altar_loadstone"),
+            Block::PulledStone => Some("pulled_stone"),
             _ => None,
         }
     }
@@ -553,6 +657,7 @@ impl Block {
             Block::BridgePlank => (0.50, 0.36, 0.20),
             Block::SilverStone => (0.78, 0.80, 0.86),
             Block::PinkSalt => (0.95, 0.64, 0.70),
+            Block::MayaStone => (0.66, 0.62, 0.48),
             _ => self.parts().first().map_or((0.0, 0.0, 0.0), |p| p.color),
         }
     }
@@ -562,7 +667,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 41] = [
+    const ALL: [Block; 48] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -604,6 +709,13 @@ mod tests {
         Block::StonePlinth,
         Block::HornPlinth,
         Block::CrownPlinth,
+        Block::GoldBoulder,
+        Block::AncientAltar,
+        Block::AltarLoadstone,
+        Block::SwordInStone,
+        Block::SwordHilt,
+        Block::PulledStone,
+        Block::MayaStone,
     ];
 
     #[test]
@@ -742,10 +854,18 @@ mod tests {
         assert!(Block::ClayForge.can_break_with(Some(ItemKind::BowDrill)), "an empty forge cannot be lit");
         assert!(!Block::ForgeCharged.can_break_with(Some(ItemKind::BowDrill)), "lit, not broken");
         assert!(Block::ForgeCharged.can_break_with(None));
-        assert_eq!(Block::ClayForge.parts().len(), 2);
-        assert_eq!(Block::ForgeCharged.parts().len(), 3);
-        assert_eq!(Block::ForgeLit.parts().len(), 3);
-        assert!(Block::ForgeLit.parts()[2].color.0 > Block::ForgeCharged.parts()[2].color.0, "lit coal is red-hot");
+        // A forge has a body, a chimney and a stoking mouth, and the coal in the chimney's mouth is the only part that changes.
+        let coal = |b: Block| b.parts()[5].color;
+        assert!(Block::ClayForge.parts().len() >= 10, "a detailed model");
+        assert_eq!(Block::ClayForge.parts().len(), Block::ForgeLit.parts().len());
+        assert!(Block::ClayForge.parts().iter().any(|p| p.max[1] >= 0.99 && p.min[1] >= 0.7), "a chimney rising to the top of the cell");
+        assert!(Block::ClayForge.parts().iter().any(|p| p.max[2] >= 0.97 && p.color.0 < 0.2), "a dark stoking mouth in the south side");
+        assert!(coal(Block::ForgeLit).0 > coal(Block::ForgeCharged).0, "lit coal is red-hot");
+        for (a, b) in [(Block::ClayForge, Block::ForgeCharged), (Block::ForgeCharged, Block::ForgeLit)] {
+            for i in (0..a.parts().len()).filter(|&i| i != 5) {
+                assert_eq!(a.parts()[i].color, b.parts()[i].color, "only the coal differs");
+            }
+        }
         assert_eq!(Block::ForgeCharged.bounds(), Block::ForgeLit.bounds(), "lighting does not change the shape");
     }
 
@@ -784,7 +904,7 @@ mod tests {
     fn every_shape_fits_in_its_cell() {
         for b in ALL {
             // Only a boulder bulges past its cell, and only sideways.
-            let slack = |a: usize| if b == Block::Boulder && a != 1 { BOULDER_OVERHANG } else { 0.0 };
+            let slack = |a: usize| if matches!(b, Block::Boulder | Block::GoldBoulder) && a != 1 { BOULDER_OVERHANG } else { 0.0 };
             match b.bounds() {
                 None => assert_eq!(b, Block::Air),
                 Some((lo, hi)) => {

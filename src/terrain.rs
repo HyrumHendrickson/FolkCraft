@@ -432,7 +432,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
             continue;
         }
         // The castles, the well and the graveyard stand in clearings.
-        if landmarks.keeps_trees_out(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz) {
+        if landmarks.keeps_trees_out(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz) || crate::stonehenge::near(seed, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz, STONEHENGE_TREE_MARGIN) {
             continue;
         }
         if placed
@@ -550,14 +550,82 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
             }
         }
     }
+    // The ruined castle, on level ground like the grand castle.
+    if let Some(ruin) = landmarks.ruined_castle {
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                if !ruin.near(wx, wz, 0) {
+                    continue;
+                }
+                for dy in 0..GRAND_HEIGHT {
+                    if let Some(block) = ruin.ruin_block(wx, wz, dy) {
+                        blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
+                    }
+                }
+            }
+        }
+    }
+    // Stonehenge, on the ground at the middle of its ring, with stone under each standing stone down to the ground.
+    let (hx, hz) = crate::stonehenge::centre(seed);
+    let hreach = STONEHENGE_REACH;
+    let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+    if hx - hreach < x0 + CHUNK_SIZE && hx + hreach >= x0 && hz - hreach < z0 + CHUNK_SIZE && hz + hreach >= z0 {
+        let base = ground_top_with(seed, landmarks, hx, hz);
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (dx, dz) = (x0 + lx - hx, z0 + lz - hz);
+                if dx.abs() > hreach || dz.abs() > hreach {
+                    continue;
+                }
+                if crate::stonehenge::stone_cell(dx, dz, 0) != Block::Air {
+                    for y in top_at(lx, lz) + 1..=base {
+                        blocks[idx(lx, y, lz)] = Block::CastleStone;
+                    }
+                }
+                for dy in 0..=STONEHENGE_STONE_HEIGHT {
+                    blocks[idx(lx, base + 1 + dy, lz)] = crate::stonehenge::stone_cell(dx, dz, dy);
+                }
+            }
+        }
+    }
+    // The jungle temple, on the ground at the middle of the jungle, with stone under it down to the ground wherever that is lower.
+    let (jx, jz) = jungle_centre(seed);
+    let reach = crate::temple::TEMPLE_REACH;
+    let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+    if jx - reach < x0 + CHUNK_SIZE && jx + reach >= x0 && jz - reach < z0 + CHUNK_SIZE && jz + reach >= z0 {
+        let base = ground_top_with(seed, landmarks, jx, jz);
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (dx, dz) = (x0 + lx - jx, z0 + lz - jz);
+                if dx.abs() > reach || dz.abs() > reach {
+                    continue;
+                }
+                for y in top_at(lx, lz) + 1..=base {
+                    blocks[idx(lx, y, lz)] = Block::MayaStone;
+                }
+                for dy in 0..TEMPLE_HEIGHT {
+                    if base + 1 + dy < WORLD_HEIGHT {
+                        blocks[idx(lx, base + 1 + dy, lz)] = crate::temple::temple_cell(dx, dz, dy);
+                    }
+                }
+            }
+        }
+    }
     // The rim of the well, and the graveyard's wall, paths and gravestones, on the level ground round them.
     if let Some(well) = landmarks.well {
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
-                if let Some(block) = well.block(wx, wz, 0) {
-                    if block != Block::Air {
-                        blocks[idx(lx, top_at(lx, lz) + 1, lz)] = block;
+                // The rim stands on the ground round the well; the frame and the rope are measured from there too (the
+                // columns over the water are sunk to the floor of the world).
+                let ground = ground_top_with(seed, landmarks, well.x - 1, well.z - 1);
+                for dy in 0..WELL_HEIGHT {
+                    if let Some(block) = well.block(wx, wz, dy) {
+                        if block != Block::Air {
+                            let y = if dy == 0 { top_at(lx, lz) + 1 } else { ground + 1 + dy };
+                            blocks[idx(lx, y, lz)] = block;
+                        }
                     }
                 }
             }
@@ -1173,7 +1241,8 @@ mod tests {
                 for lz in 0..CHUNK_SIZE {
                     for lx in 0..CHUNK_SIZE {
                         let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
-                        if is_river(3, wx, wz) || ground_top(3, wx, wz) != GROUND_TOP {
+                        // (Stonehenge, which stands five chunks out, clears the ground it is built on.)
+                        if is_river(3, wx, wz) || ground_top(3, wx, wz) != GROUND_TOP || crate::stonehenge::near(3, wx, wz, 0) {
                             continue;
                         }
                         let roll = hash3(3, wx, wz, 0x50C4) % 1000;

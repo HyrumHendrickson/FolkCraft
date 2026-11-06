@@ -187,6 +187,10 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     if game.fill_jar(eye, dir) {
         return;
     }
+    // Pipes in hand: right click plays a tune.
+    if game.play_pipes() {
+        return;
+    }
     // A bush is an explicit harvest target, even when the player happens to be holding food.
     // This keeps right-clicking a bush from eating the held berries instead.
     if let Some(hit) = target {
@@ -323,7 +327,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
     set_default_camera();
     let (w, h) = (screen_width(), screen_height());
     if game.inventory_open {
-        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.worn, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
+        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.worn, &mut game.worn_back, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
             game.drop_inventory_stack(slot);
         }
     } else {
@@ -359,6 +363,9 @@ fn render_hud(game: &mut Game, drawn: usize) {
     if let Some((name, share)) = game.boss_bar() {
         draw_boss_bar(name, share);
     }
+    if let Some((text, left)) = game.ghost_text.as_ref() {
+        draw_ghost_text(text, *left);
+    }
     // Between day and night, or while passing through the well, the whole screen goes black for a moment.
     let darkness = game.blackout.map_or(0.0, |b| b.darkness()).max(game.horizen_transition_darkness());
     if darkness > 0.0 {
@@ -372,6 +379,21 @@ fn render_hud(game: &mut Game, drawn: usize) {
 }
 
 /// A boss's name and health bar across the top of the screen.
+/// A ghost's words, as pale text in the upper part of the screen (ghosts are not seen): they fade in, and out over the last second.
+fn draw_ghost_text(text: &str, left: f32) {
+    let (w, h) = (screen_width(), screen_height());
+    let alpha = ((GHOST_TEXT_SECONDS - left) * 2.0).min(left).clamp(0.0, 1.0);
+    let lines = crate::ghosts::wrap(text, 52);
+    let size = 30.0;
+    let top = h * 0.24;
+    for (i, line) in lines.iter().enumerate() {
+        let width = measure_text(line, None, size as u16, 1.0).width;
+        let (x, y) = ((w - width) / 2.0, top + i as f32 * (size + 6.0));
+        draw_rectangle(x - 10.0, y - size + 4.0, width + 20.0, size + 6.0, Color::new(0.02, 0.04, 0.10, 0.45 * alpha));
+        draw_text(line, x, y, size, Color::new(0.80, 0.90, 1.0, alpha));
+    }
+}
+
 fn draw_boss_bar(name: &str, share: f32) {
     let w = screen_width();
     let (bar_w, bar_h) = ((w * 0.5).min(640.0), 18.0);

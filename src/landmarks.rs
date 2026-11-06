@@ -311,6 +311,14 @@ impl GrandCastle {
         Some(grand_castle_cell(self.salt(), wx - self.x, wz - self.z, dy, night))
     }
 
+    /// What the ruined castle is made of in the cell `dy` blocks above the ground at the column (wx, wz) (see `ruins_cell`).
+    pub fn ruin_block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+        if !(0..GRAND_HEIGHT).contains(&dy) || !self.near(wx, wz, 0) {
+            return None;
+        }
+        Some(ruins_cell(self.salt(), wx - self.x, wz - self.z, dy))
+    }
+
     /// A number that is the same for every cell of this castle and differs from castle to castle, so that the ruins
     /// of one world crumble differently from another's.
     fn salt(&self) -> i64 {
@@ -334,6 +342,51 @@ impl GrandCastle {
         let gap = (grand_distance() + GRAND_REACH) as f32 / c.abs().max(s.abs());
         GrandCastle { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
     }
+}
+
+/// What the ruined castle has in the cell (`dx`, `dz`, `dy`) from its centre and above the ground: a broken outer wall with a
+/// gap in the south side and a tumbled tower at each corner, the stumps of a keep, some rubble, and in the middle of the
+/// courtyard, on a low dais, the stone with the sword in it (the blade at `dy` 0, the hilt at `dy` 1).
+pub fn ruins_cell(salt: i64, dx: i32, dz: i32, dy: i32) -> Block {
+    let (ax, az) = (dx.abs(), dz.abs());
+    let w = RUINS_WALL_HALF;
+    let h = (hash3(salt, dx, dz, 0x5255) % 1000) as i32;
+    // The stone and its dais.
+    if (dx, dz) == (0, 0) {
+        return match dy {
+            0 => Block::SwordInStone,
+            1 => Block::SwordHilt,
+            _ => Block::Air,
+        };
+    }
+    if ax <= 2 && az <= 2 && dy == 0 && !(ax <= 0 && dz > 0) {
+        return Block::CastleStone;
+    }
+    let edge = ax.max(az);
+    // Corner towers: a hollow square, tumbled to different heights.
+    let in_tower = ax >= w - RUINS_TOWER_HALF + 1 && az >= w - RUINS_TOWER_HALF + 1 && ax <= w + 1 && az <= w + 1;
+    if in_tower {
+        let rim = ax == w + 1 || az == w + 1 || ax == w - RUINS_TOWER_HALF + 1 || az == w - RUINS_TOWER_HALF + 1;
+        let top = 5 + h % (RUINS_WALL_HEIGHT + 4);
+        return if rim && dy < top { Block::CastleStone } else { Block::Air };
+    }
+    // The outer wall, two thick, broken down to a stump here and there; the gap in the south side is open.
+    if edge == w || edge == w - 1 {
+        if dz > 0 && az >= w - 1 && ax <= RUINS_GAP_HALF {
+            return Block::Air;
+        }
+        let top = 1 + h % RUINS_WALL_HEIGHT;
+        return if dy < top { Block::CastleStone } else { Block::Air };
+    }
+    // The keep: broken walls round the dais, with a gap on the south side to walk in by.
+    if edge == 9 && !(dz > 0 && ax <= 2) && h % 100 < 55 {
+        return if dy < 1 + (h / 100) % 6 { Block::CastleStone } else { Block::Air };
+    }
+    // Rubble in the courtyard, never on the way in from the gap.
+    if dy == 0 && edge > 2 && edge < w - 1 && !(dz > 0 && ax <= 2) && h % 100 < 3 {
+        return Block::CastleStone;
+    }
+    Block::Air
 }
 
 /// The cell of step `i` (1 to 5) of the stair that climbs from floor `storey` to the next one inside the keep. The
@@ -577,13 +630,27 @@ impl Well {
         self.distance(wx, wz) <= WELL_RIM_WIDTH + margin
     }
 
-    /// What stands in the cell `dy` blocks above the ground at the column (wx, wz): the rim, one block high. `None`
-    /// away from the well.
+    /// What stands in the cell `dy` blocks above the ground at the column (wx, wz): the stone rim, one block high (so a
+    /// player can climb on and jump in); a post at each corner of the rim carrying a roof of planks with a ridge; and a rope
+    /// hanging from the roof over the water. `None` away from the well or above it.
     pub fn block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
-        if !self.near(wx, wz, 0) || dy != 0 {
+        if !self.near(wx, wz, 0) || !(0..WELL_HEIGHT).contains(&dy) {
             return None;
         }
-        Some(if self.contains(wx, wz) { Block::Air } else { Block::CastleStone })
+        // Position in the square of the rim, 0 to WELL_SIZE + 1 on each side.
+        let (rx, rz) = (wx - (self.x - 1), wz - (self.z - 1));
+        let last = WELL_SIZE + 1;
+        let corner = (rx == 0 || rx == last) && (rz == 0 || rz == last);
+        let rope = (wx, wz) == (self.x + 1, self.z + 1);
+        Some(match dy {
+            0 if self.contains(wx, wz) => Block::Air,
+            0 => Block::CastleStone,
+            1..=4 if corner => Block::BridgePost,
+            3..=4 if rope => Block::BridgePost,
+            5 => Block::BridgePlank,
+            6 if (1..=WELL_SIZE).contains(&rx) && (2..=3).contains(&rz) => Block::BridgePlank,
+            _ => Block::Air,
+        })
     }
 
     /// The columns the well can touch, widened by `margin`: (min x, min z, max x, max z).
@@ -693,6 +760,9 @@ pub struct Landmarks {
     pub spent_gold: Option<Pos>,
     /// The world's one grand castle, once a peep stone has been held at night.
     pub grand_castle: Option<GrandCastle>,
+    /// The world's one ruined castle (same footprint as the grand castle), with the sword in the stone at its centre, once the
+    /// king's crown has been worn in the overworld.
+    pub ruined_castle: Option<GrandCastle>,
     /// The world's one well, once a bone totem has been held by day.
     pub well: Option<Well>,
     /// The world's one graveyard, once a bone totem has been held at night.
@@ -711,6 +781,10 @@ pub struct Landmarks {
     pub sky_tower: Option<(i32, i32)>,
     /// The grid cells of the Skylands' islands the player has walked on.
     pub sky_visited: Vec<(i32, i32)>,
+    /// Whether the graveyard's ghost has been played its song and has rested (it says nothing more).
+    pub graveyard_rested: bool,
+    /// The squares of the Horizen's caves the player has entered, in the order they entered them.
+    pub caves_visited: Vec<(i32, i32)>,
 }
 
 impl Landmarks {
@@ -738,6 +812,7 @@ impl Landmarks {
         !self.lakes.iter().any(|l| overlaps(l.bounds(margin)))
             && !self.mountains.iter().any(|m| overlaps(m.bounds(margin)))
             && (ignoring_castle || !self.grand_castle.map_or(false, |c| overlaps(c.bounds(margin))))
+            && !self.ruined_castle.map_or(false, |c| overlaps(c.bounds(margin)))
             && !self.well.map_or(false, |w| overlaps(w.bounds(margin)))
             && !self.graveyard.map_or(false, |g| overlaps(g.bounds(margin)))
     }
@@ -746,6 +821,11 @@ impl Landmarks {
     /// blend into), and of the well and the graveyard.
     pub fn has_room_for(&self, castle: &GrandCastle) -> bool {
         self.has_room(castle.bounds(LANDMARK_BLEND + 4), true)
+    }
+
+    /// The same for the ruined castle: clear of the grand castle too.
+    pub fn has_room_for_ruins(&self, castle: &GrandCastle) -> bool {
+        self.has_room(castle.bounds(LANDMARK_BLEND + 4), false)
     }
 
     /// The same for a well.
@@ -826,7 +906,13 @@ impl Landmarks {
 
     /// Whether the column (wx, wz) is within `margin` blocks of the grand castle's square.
     pub fn near_grand_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
-        self.grand_castle.map_or(false, |c| c.near(wx, wz, margin))
+        self.castles().any(|c| c.near(wx, wz, margin))
+    }
+
+    /// The grand castle and the ruined castle, whichever of them are out there (they share one footprint and one set of rules
+    /// for the ground round them).
+    pub fn castles(&self) -> impl Iterator<Item = GrandCastle> {
+        [self.grand_castle, self.ruined_castle].into_iter().flatten()
     }
 
     /// The end of the rainbow: the pile of gold, or the place where it lay once it has been taken.
@@ -846,7 +932,7 @@ impl Landmarks {
         let lakes = self.lakes.iter().map(|l| l.outer_distance(wx, wz));
         let mountains = self.mountains.iter().map(|m| m.edge_distance(wx, wz));
         // The grand castle stands on level ground: the hills die away round it.
-        let castle = self.grand_castle.map(|c| (wx - c.x).abs().max((wz - c.z).abs()) as f32 - (GRAND_REACH + 2) as f32);
+        let castle = self.castles().map(|c| (wx - c.x).abs().max((wz - c.z).abs()) as f32 - (GRAND_REACH + 2) as f32).reduce(f32::min);
         // The well and the graveyard stand on level ground too.
         let well = self.well.map(|w| w.distance(wx, wz) as f32 - (WELL_RIM_WIDTH + 2) as f32);
         let graveyard = self.graveyard.map(|g| (wx - g.x).abs().max((wz - g.z).abs()) as f32 - (GRAVEYARD_REACH + 2) as f32);
@@ -865,7 +951,7 @@ impl Landmarks {
         let overlaps = |(bx0, bz0, bx1, bz1): (i32, i32, i32, i32)| bx0 <= x1 && bx1 >= x0 && bz0 <= z1 && bz1 >= z0;
         self.lakes.iter().any(|l| overlaps(l.bounds(LANDMARK_BLEND)))
             || self.mountains.iter().any(|m| overlaps(m.bounds(LANDMARK_BLEND)))
-            || self.grand_castle.map_or(false, |c| overlaps(c.bounds(LANDMARK_BLEND)))
+            || self.castles().any(|c| overlaps(c.bounds(LANDMARK_BLEND)))
             || self.well.map_or(false, |w| overlaps(w.bounds(LANDMARK_BLEND)))
             || self.graveyard.map_or(false, |g| overlaps(g.bounds(LANDMARK_BLEND)))
     }
@@ -1392,7 +1478,15 @@ mod tests {
         assert_eq!(w.block(9, -21, 0), Some(Block::CastleStone), "the rim, a corner");
         assert_eq!(w.block(10, -20, 0), Some(Block::Air), "no rim over the water");
         assert_eq!(w.block(8, -20, 0), None, "nothing beyond the rim");
-        assert_eq!(w.block(9, -20, 1), None, "the rim is one block high");
+        assert_eq!(w.block(9, -20, 1), Some(Block::Air), "the rim is one block high, so a player can climb on it");
+        assert_eq!(w.block(9, -21, 2), Some(Block::BridgePost), "a post at each corner");
+        assert_eq!(w.block(14, -16, 4), Some(Block::BridgePost));
+        assert_eq!(w.block(11, -19, 4), Some(Block::BridgePost), "the rope hangs over the water");
+        assert_eq!(w.block(11, -19, 1), Some(Block::Air), "but not down into it");
+        assert_eq!(w.block(11, -18, 5), Some(Block::BridgePlank), "a roof over the whole well");
+        assert_eq!(w.block(9, -21, 5), Some(Block::BridgePlank));
+        assert_eq!(w.block(11, -18, 6), Some(Block::BridgePlank), "with a ridge");
+        assert_eq!(w.block(9, -20, WELL_HEIGHT), None, "nothing above it");
         let (cx, cz) = w.centre();
         assert!(w.contains(cx as i32, cz as i32));
     }

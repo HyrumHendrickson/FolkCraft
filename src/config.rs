@@ -73,6 +73,9 @@ pub const AUTOSAVE_INTERVAL: f32 = 20.0;
 /// The first `HOTBAR_SLOTS` inventory slots form the hotbar.
 pub const INVENTORY_SLOTS: usize = 36;
 pub const HOTBAR_SLOTS: usize = 9;
+/// A leather backpack, worn, adds this many rows of inventory slots (and takes them away again when it is taken off).
+pub const BACKPACK_EXTRA_ROWS: usize = 2;
+pub const BACKPACK_SLOTS: usize = BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS;
 pub const MAX_STACK: u32 = 100;
 /// Chance (percent) that leaves or pine needles drop a stick.
 pub const LEAF_STICK_CHANCE: u64 = 70;
@@ -196,7 +199,7 @@ pub const TOWER_STOREYS: i32 = 5;
 pub const TOWER_HEIGHT: i32 = TOWER_STOREY * TOWER_STOREYS + 1;
 /// No tree grows within this many blocks of a tower's outer edge.
 pub const TOWER_TREE_MARGIN: i32 = 6;
-/// A tower in the Horizen stands on flat dry land: no pond comes within this many blocks of it.
+/// A tower in the Horizen stands on dry cave floor: no pond comes within this many blocks of it.
 pub const TOWER_POND_MARGIN: i32 = 4;
 /// The player must have walked on this many different Skylands islands before the next island to appear carries a tower.
 pub const SKY_TOWER_VISITS: usize = 10;
@@ -225,6 +228,9 @@ pub fn grand_distance() -> i32 {
 pub const WELL_SIZE: i32 = 4;
 /// The rim round the well: one block high and this many blocks wide.
 pub const WELL_RIM_WIDTH: i32 = 1;
+/// The well is a stone ring, a wooden frame of four corner posts under a roof, and a rope hanging over the water: this many
+/// blocks high.
+pub const WELL_HEIGHT: i32 = 7;
 pub fn well_distance() -> i32 {
     structure_distance() + 20
 }
@@ -297,14 +303,16 @@ pub const MINE_SLOPE: f32 = 0.5;
 pub const MINE_ROOM_HALF: i32 = 4;
 pub const MINE_ROOM_HEIGHT: i32 = 5;
 
-// --- The Horizen ------------------------------------------------------------------------
+// --- The Horizen: a cave dimension ------------------------------------------------------
 
-/// The Horizen is empty flat land at the level of the overworld's plain, broken by many small ponds. A pond lies in
-/// each square of `HORIZEN_POND_CELL` blocks with `HORIZEN_POND_CHANCE` percent chance; it is round-ish, between the two
-/// radii, and one block deep like a river. No pond comes within `HORIZEN_SPAWN_CLEARANCE` blocks of where the player
-/// arrives.
+/// The Horizen is a solid mass of stone, hollowed by the player's way in: a round arrival chamber, a winding tunnel
+/// and, at the far end, one very large cavern with the silver tower in it (`horizen.rs`). The floor is flat, at the
+/// level of the overworld's plain; the roof is stone up to `HORIZEN_ROOF_Y`. Small ponds lie on the cave floor: a
+/// pond lies in each square of `HORIZEN_POND_CELL` blocks with `HORIZEN_POND_CHANCE` percent chance (where there is
+/// floor), is round-ish, between the two radii, and one block deep like a river. No pond comes within
+/// `HORIZEN_SPAWN_CLEARANCE` blocks of where the player arrives.
 pub const HORIZEN_POND_CELL: i32 = 22;
-pub const HORIZEN_POND_CHANCE: u64 = 85;
+pub const HORIZEN_POND_CHANCE: u64 = 55;
 pub const HORIZEN_POND_MIN_RADIUS: f32 = 2.5;
 pub const HORIZEN_POND_MAX_RADIUS: f32 = 7.5;
 pub const HORIZEN_SPAWN_CLEARANCE: f32 = 12.0;
@@ -316,6 +324,46 @@ pub const WELL_FLOOR_Y: f32 = STONE_LAYERS as f32;
 pub const HORIZEN_ARRIVAL_POOL_RADIUS: f32 = 3.5;
 /// How long the black screen lasts while the player passes through the well.
 pub const HORIZEN_TRANSITION_SECONDS: f32 = 1.2;
+/// The stone roof of the cave ends at this height (the top of the dimension).
+pub const HORIZEN_ROOF_Y: i32 = GROUND_TOP + 72;
+/// The least free height (blocks of air above the floor) any part of the cave has: a player is under two.
+pub const HORIZEN_MIN_AIR: i32 = 3;
+/// The ceiling of the cave is rough: it hangs down by up to this many blocks (never below `HORIZEN_MIN_AIR`).
+pub const HORIZEN_CEILING_JAG: i32 = 2;
+/// The arrival chamber: a dome of this radius and this much air at its middle.
+pub const HORIZEN_CHAMBER_RADIUS: f32 = 14.0;
+pub const HORIZEN_CHAMBER_HEIGHT: i32 = 12;
+/// The tunnel from the arrival chamber to the great cavern: half its width, the air above its middle, how far it winds
+/// to either side of a straight line and the length of one wave of that winding.
+pub const HORIZEN_TUNNEL_RADIUS: f32 = 5.5;
+pub const HORIZEN_TUNNEL_HEIGHT: i32 = 8;
+pub const HORIZEN_TUNNEL_WIGGLE: f32 = 9.0;
+pub const HORIZEN_TUNNEL_WAVELENGTH: f32 = 110.0;
+/// The great cavern holding the silver tower: its centre is this far from the arrival point, it is about this wide (a
+/// radius, which its outline varies by `HORIZEN_CAVERN_RAGGEDNESS` of) and it has this much air at its middle (the tower
+/// is `TOWER_HEIGHT` tall).
+pub const HORIZEN_CAVERN_DISTANCE: f32 = 190.0;
+pub const HORIZEN_CAVERN_RADIUS: f32 = 64.0;
+pub const HORIZEN_CAVERN_RAGGEDNESS: f32 = 0.14;
+pub const HORIZEN_CAVERN_HEIGHT: i32 = 56;
+/// Beside the long way to the great cavern, the Horizen is full of caves: one in each square of `HORIZEN_CAVE_CELL`
+/// blocks (its middle somewhere in the square, a dome of radius `HORIZEN_CAVE_MIN_RADIUS` to `MAX_RADIUS` and middle height
+/// `HORIZEN_CAVE_MIN_HEIGHT` to `MAX_HEIGHT`), each joined to the caves east and south of it by a tunnel of half-width
+/// `HORIZEN_LINK_RADIUS` and middle height `HORIZEN_LINK_HEIGHT`. So every cave can be reached on foot from the arrival chamber,
+/// which is the cave of the square it stands in.
+pub const HORIZEN_CAVE_CELL: i32 = 80;
+pub const HORIZEN_CAVE_MIN_RADIUS: f32 = 9.0;
+pub const HORIZEN_CAVE_MAX_RADIUS: f32 = 17.0;
+pub const HORIZEN_CAVE_MIN_HEIGHT: i32 = 8;
+pub const HORIZEN_CAVE_MAX_HEIGHT: i32 = 14;
+pub const HORIZEN_LINK_RADIUS: f32 = 4.0;
+pub const HORIZEN_LINK_HEIGHT: i32 = 6;
+/// A cave counts as entered when the player comes within this share of its radius of its middle.
+pub const HORIZEN_CAVE_ENTER_SHARE: f32 = 0.6;
+/// Every this many caves entered (the arrival chamber is the first), the one just entered has a camp: a burning log with a tin
+/// pot of berry stew, red or purple, ready to eat. The fire burns this many seconds.
+pub const HORIZEN_CAMP_EVERY: usize = 4;
+pub const HORIZEN_CAMP_FIRE_SECONDS: f32 = 600.0;
 
 // --- Plants, drops and fire -------------------------------------------------------------
 
@@ -325,23 +373,23 @@ pub const BUSH_BERRY_CHANCE: u64 = 50;
 pub const PURPLE_BUSH_ONE_IN: u64 = 10;
 pub const FIRE_SECONDS: f32 = 60.0;
 
-// --- Horizen fire tornadoes -------------------------------------------------------------
+// --- Skylands fire tornadoes -------------------------------------------------------------
 
-/// A new fire tornado appears in the Horizen this often during the day.
-pub const HORIZEN_TORNADO_INTERVAL: f32 = 30.0;
+/// A new fire tornado appears in the Skylands this often during the day.
+pub const SKY_TORNADO_INTERVAL: f32 = 30.0;
 /// The tornado begins this far from the player and travels toward the position it recorded at spawn.
-pub const HORIZEN_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
-pub const HORIZEN_TORNADO_SPEED: f32 = 7.0;
+pub const SKY_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
+pub const SKY_TORNADO_SPEED: f32 = 7.0;
 /// Angular speed of the tornado's visible fire layers. The tornado was originally drawn at 4 radians per second,
 /// then at 8; the current value is half as fast again (12). The smoke cap turns 50% faster too.
-pub const HORIZEN_TORNADO_SPIN_SPEED: f32 = 12.0;
-pub const HORIZEN_TORNADO_CAP_SPIN_SPEED: f32 = 2.1;
+pub const SKY_TORNADO_SPIN_SPEED: f32 = 12.0;
+pub const SKY_TORNADO_CAP_SPIN_SPEED: f32 = 2.1;
 /// The tornado is a funnel: this share of the full radius at its foot, widening to the full radius at its top.
-pub const HORIZEN_TORNADO_FOOT_SHARE: f32 = 0.28;
-pub const HORIZEN_TORNADO_RADIUS: f32 = 1.8;
-pub const HORIZEN_TORNADO_HEIGHT: f32 = 6.0;
-pub const HORIZEN_TORNADO_DAMAGE: u32 = 2;
-pub const HORIZEN_TORNADO_DAMAGE_INTERVAL: f32 = 1.0;
+pub const SKY_TORNADO_FOOT_SHARE: f32 = 0.28;
+pub const SKY_TORNADO_RADIUS: f32 = 1.8;
+pub const SKY_TORNADO_HEIGHT: f32 = 6.0;
+pub const SKY_TORNADO_DAMAGE: u32 = 2;
+pub const SKY_TORNADO_DAMAGE_INTERVAL: f32 = 1.0;
 
 // --- Block breaking ---------------------------------------------------------------------
 
@@ -707,14 +755,98 @@ pub const MINE_KEY_SHAFTS: [usize; 3] = [0, 2, 4];
 /// `JUNGLE_CLEARING_RADIUS` blocks round, is bare so that whoever falls out of the Skylands lands on the ground.
 pub const JUNGLE_DISTANCE_CHUNKS: i32 = 10;
 pub const JUNGLE_RADIUS: i32 = 90;
-pub const JUNGLE_CLEARING_RADIUS: i32 = 9;
+pub const JUNGLE_CLEARING_RADIUS: i32 = 34;
 /// A jungle tree's trunk is this many blocks tall (inclusive range), and a chunk of jungle tries to grow this many trees.
+/// The jungle temple in the middle of the clearing (`temple.rs`): a stepped pyramid `2 * TEMPLE_BASE_HALF + 1` blocks across at
+/// the foot, of `TEMPLE_TIERS` tiers each `TEMPLE_TIER_HEIGHT` high, a stair `2 * TEMPLE_STAIR_HALF + 1` wide up its south
+/// face and a shrine on top; `TEMPLE_HEIGHT` is as high as anything of it can reach.
+pub const TEMPLE_BASE_HALF: i32 = 20;
+pub const TEMPLE_TIERS: i32 = 9;
+pub const TEMPLE_TIER_HEIGHT: i32 = 2;
+pub const TEMPLE_STAIR_HALF: i32 = 2;
+pub const TEMPLE_HEIGHT: i32 = 30;
 pub const JUNGLE_TRUNK_MIN: i32 = 22;
 pub const JUNGLE_TRUNK_MAX: i32 = 32;
 pub const JUNGLE_TREES_MIN: i32 = 12;
 pub const JUNGLE_TREES_MAX: i32 = 18;
 
-/// Killing a deer leaves `DEER_BONE_DROP` bones one time in five (`DEER_BONE_CHANCE` percent). Three bones and a twine
+/// Killing a deer leaves `DEER_BONE_DROP` bones one time in five (`DEER_BONE_CHANCE` percent). Three bones
 /// make a set of musical pipes.
 pub const DEER_BONE_CHANCE: u64 = 20;
 pub const DEER_BONE_DROP: u32 = 2;
+
+// --- Tin pan, gold boulders, the altar, Excalibur ------------------------------------------
+
+/// Breaking river clay with a tin pan in hand also gives a gold with this chance (percent): one time in twenty, and one
+/// time in five with a rabbit's foot in the hotbar.
+pub const TIN_PAN_GOLD_CHANCE: u64 = 5;
+pub const TIN_PAN_RABBIT_FOOT_GOLD_CHANCE: u64 = 20;
+/// A boulder turned to gold by the Philosopher's Stone breaks by hand and drops this much gold.
+pub const GOLD_BOULDER_GOLD_DROP: u32 = 6;
+pub const BREAK_SECONDS_GOLD_BOULDER: f32 = 2.0;
+/// Excalibur: the best weapon in the game.
+pub const EXCALIBUR_DAMAGE: i32 = 24;
+pub const EXCALIBUR_COOLDOWN: f32 = 0.35;
+pub const EXCALIBUR_REACH: f32 = 4.5;
+
+// --- Crows and the ancient altar ----------------------------------------------------------
+
+pub const CROW_HEALTH: i32 = 4;
+pub const CROW_WALK_SPEED: f32 = 1.1;
+pub const CROW_FEATHER_DROP: u32 = 3;
+pub const MAX_CROW: usize = 4;
+pub const SPAWN_WEIGHT_CROW: u64 = 30;
+/// A crow's take-off checks that the way west is clear for this many blocks at flying height.
+pub const CROW_WEST_LOOKAHEAD: i32 = 24;
+/// Westward blocks a crow must fly with the player following (within `CROW_FOLLOW_DISTANCE`) to land at an altar:
+/// two chunks. A crow the player lets get more than `CROW_LOSE_DISTANCE` away forgets it.
+pub const CROW_ALTAR_WEST_BLOCKS: f32 = 2.0 * CHUNK_SIZE as f32;
+pub const CROW_FOLLOW_DISTANCE: f32 = 30.0;
+pub const CROW_LOSE_DISTANCE: f32 = 45.0;
+/// How far from where the crow comes down the game looks for a spot for the altar.
+pub const ALTAR_SEARCH_RADIUS: i32 = 6;
+
+// --- The Mother of Quail -------------------------------------------------------------------
+
+/// Every this many quail the player kills, a Mother of Quail comes for them.
+pub const QUAIL_KILLS_PER_MOTHER: u32 = 10;
+pub const MOTHER_OF_QUAIL_HEALTH: i32 = 120;
+pub const MOTHER_OF_QUAIL_RUN_SPEED: f32 = 6.8;
+pub const MOTHER_OF_QUAIL_DAMAGE: u32 = 2;
+pub const MOTHER_OF_QUAIL_ATTACK_COOLDOWN: f32 = 1.1;
+pub const MOTHER_OF_QUAIL_REACH: f32 = 0.9;
+/// She appears this far from the player.
+pub const MOTHER_OF_QUAIL_SPAWN_DISTANCE: f32 = 14.0;
+
+// --- The ruined castle (found by wearing the crown) -----------------------------------------
+
+/// The ruin fills the same square as the grand castle (`GRAND_REACH`). Its outer wall is `RUINS_WALL_HALF` from the
+/// centre, with a gap in the south side; the sword stands in the courtyard at the centre.
+pub const RUINS_WALL_HALF: i32 = 24;
+pub const RUINS_WALL_HEIGHT: i32 = 9;
+pub const RUINS_TOWER_HALF: i32 = 3;
+pub const RUINS_GAP_HALF: i32 = 3;
+
+// --- Pipes, birds and ghosts -----------------------------------------------------------------
+
+/// Playing the pipes by day calls every quail and crow within this many blocks: they fly to the player, land within a few
+/// blocks of them and stand still for `PIPES_CALM_SECONDS`.
+pub const PIPES_CALL_RANGE: f32 = 70.0;
+pub const PIPES_CALM_SECONDS: f32 = 3.0;
+pub const PIPES_LAND_MIN: f32 = 2.0;
+pub const PIPES_LAND_MAX: f32 = 4.5;
+/// How long a ghost's words stay on the screen.
+pub const GHOST_TEXT_SECONDS: f32 = 8.0;
+
+// --- Stonehenge ------------------------------------------------------------------------------
+
+/// Stonehenge (`stonehenge.rs`): a ring of `STONEHENGE_STONES` standing stones of radius `STONEHENGE_RADIUS`, `STONEHENGE_STONE_HEIGHT`
+/// high, joined in pairs by lintels, round an altar stone, `STONEHENGE_DISTANCE_CHUNKS` chunks from the spawn point in a
+/// direction the seed decides. A player who blacks out in the cave wakes in its ring.
+pub const STONEHENGE_DISTANCE_CHUNKS: i32 = 5;
+pub const STONEHENGE_RADIUS: f32 = 11.0;
+pub const STONEHENGE_STONES: i32 = 10;
+pub const STONEHENGE_STONE_HEIGHT: i32 = 5;
+pub const STONEHENGE_REACH: i32 = 14;
+/// No tree grows within this many blocks of the ring.
+pub const STONEHENGE_TREE_MARGIN: i32 = 4;

@@ -75,6 +75,9 @@ impl ItemKind {
             ItemKind::HornOfTheHunt => 0.07,
             ItemKind::DeerBone => 0.04,
             ItemKind::MusicalPipes => 0.05,
+            ItemKind::TinPan => 0.03,
+            ItemKind::Excalibur => 0.04,
+            ItemKind::LeatherBackpack => 0.11,
         }
     }
 
@@ -130,6 +133,9 @@ impl ItemKind {
             ItemKind::HornOfTheHunt => vec3(0.20, 0.07, 0.10),
             ItemKind::DeerBone => vec3(0.20, 0.04, 0.05),
             ItemKind::MusicalPipes => vec3(0.15, 0.05, 0.09),
+            ItemKind::TinPan => vec3(0.17, 0.03, 0.17),
+            ItemKind::Excalibur => vec3(0.30, 0.04, 0.07),
+            ItemKind::LeatherBackpack => vec3(0.15, 0.11, 0.10),
         }
     }
 }

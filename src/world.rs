@@ -274,6 +274,14 @@ impl World {
         self.regenerate_landmark_chunks();
     }
 
+    /// Bring the ruined castle into the world (see `add_lake`). A world has only one.
+    pub fn add_ruined_castle(&mut self, castle: GrandCastle) {
+        if self.landmarks.ruined_castle.is_none() {
+            self.landmarks.ruined_castle = Some(castle);
+            self.regenerate_landmark_chunks();
+        }
+    }
+
     /// Note that the monster of `lake` has been killed.
     pub fn record_monster_slain(&mut self, lake: &Lake) {
         if !self.landmarks.monsters_slain.contains(&(lake.x, lake.z)) {
@@ -824,15 +832,16 @@ impl World {
             for dz in -1..=1 {
                 for dx in -1..=1 {
                     let (nx, nz) = (cell.0 + dx, cell.2 + dz);
-                    if (dx, dz) == (0, 0) || self.block_at(nx, cell.1, nz) != Block::Boulder {
+                    if (dx, dz) == (0, 0) || !matches!(self.block_at(nx, cell.1, nz), Block::Boulder | Block::GoldBoulder) {
                         continue;
                     }
-                    if let Some((lo, hi)) = Block::Boulder.bounds() {
+                    let bulging = self.block_at(nx, cell.1, nz);
+                    if let Some((lo, hi)) = bulging.bounds() {
                         let base = [nx as f32, cell.1 as f32, nz as f32];
                         let wlo = [base[0] + lo[0], base[1] + lo[1], base[2] + lo[2]];
                         let whi = [base[0] + hi[0], base[1] + hi[1], base[2] + hi[2]];
                         if ray_box(origin, dir, wlo, whi).map_or(false, |d| d <= max_dist && d <= t_exit) {
-                            return Some(Hit { x: nx, y: cell.1, z: nz, block: Block::Boulder, prev });
+                            return Some(Hit { x: nx, y: cell.1, z: nz, block: bulging, prev });
                         }
                     }
                 }

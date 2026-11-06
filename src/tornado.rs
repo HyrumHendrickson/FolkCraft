@@ -27,13 +27,13 @@ impl FireTornado {
         }
         let gap = vec2(self.target.x - self.pos.x, self.target.z - self.pos.z);
         let distance = gap.length();
-        if distance <= HORIZEN_TORNADO_SPEED * dt || distance <= f32::EPSILON {
+        if distance <= SKY_TORNADO_SPEED * dt || distance <= f32::EPSILON {
             self.pos.x = self.target.x;
             self.pos.z = self.target.z;
             self.arrived = true;
             return;
         }
-        let step = gap / distance * HORIZEN_TORNADO_SPEED * dt;
+        let step = gap / distance * SKY_TORNADO_SPEED * dt;
         self.pos.x += step.x;
         self.pos.z += step.y;
     }
@@ -41,8 +41,8 @@ impl FireTornado {
     pub fn hits(&self, player: Vec3) -> bool {
         let dx = player.x - self.pos.x;
         let dz = player.z - self.pos.z;
-        dx * dx + dz * dz <= (HORIZEN_TORNADO_RADIUS + PLAYER_HALF_WIDTH).powi(2)
-            && player.y < self.pos.y + HORIZEN_TORNADO_HEIGHT
+        dx * dx + dz * dz <= (SKY_TORNADO_RADIUS + PLAYER_HALF_WIDTH).powi(2)
+            && player.y < self.pos.y + SKY_TORNADO_HEIGHT
             && player.y + PLAYER_HEIGHT > self.pos.y
     }
 }
@@ -93,6 +93,6 @@ mod tests {
     fn tornado_hits_only_inside_its_fire_column() {
         let tornado = FireTornado::new(Vec3::ZERO, Vec3::ZERO);
         assert!(tornado.hits(vec3(0.0, 0.0, 0.0)));
-        assert!(!tornado.hits(vec3(HORIZEN_TORNADO_RADIUS + PLAYER_HALF_WIDTH + 0.1, 0.0, 0.0)));
+        assert!(!tornado.hits(vec3(SKY_TORNADO_RADIUS + PLAYER_HALF_WIDTH + 0.1, 0.0, 0.0)));
     }
 }

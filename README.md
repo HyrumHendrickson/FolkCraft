@@ -232,8 +232,8 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `dropped.rs` | Items on the ground: spawn, physics, pickup, drawing (`draw_box` is shared with `effects.rs`). |
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
 | `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
-| `horizen.rs` | `Dimension` and the Horizen's land: empty flat ground with ponds and the arrival pool. |
-| `tornado.rs` | The Horizen's one daytime fire tornado (movement, target capture, collision and damage timing) and the `Cyclone` that carries the player between dimensions. |
+| `horizen.rs` | `Dimension` and the Horizen, a cave: arrival chamber and pool, a winding tunnel (`tunnel_point`, `route`), one very large cavern (`cavern_centre`) and ponds on the floor. `air_height` is the cave's shape. |
+| `tornado.rs` | The Skylands' one daytime fire tornado (movement, target capture, collision and damage timing) and the `Cyclone` that carries the player between dimensions. |
 | `skylands.rs` | The third dimension: floating islands on a grid, wooden bridges between them, a few oaks (`generate_chunk`, `surface_top`, `spawn_point`, `home_cyclone`). Pure functions of the seed. |
 | `tower.rs` | The silver tower: `tower_cell` (shape, locked door, spiral stair, relic plinth), `Relic`, and `Tower` (the Horizen's, with its trail approach). Pure functions. |
 | `landmarks.rs` | `Lake`, `Mountain`, `GrandCastle`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
@@ -456,7 +456,7 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Horizen** (`horizen.rs`): a second `World` (`World::dimension`), kept in `Game::away` while the player is elsewhere, with its own
   edits, items and day/night state. It has no wildlife or landmarks. The well only transports the player after their feet hit the
   stone floor; the screen blacks out and the player appears on the dedicated arrival pool. At night the stars rotate quickly.
-  By day, `Game::tornado` holds one fire tornado: it spawns every `HORIZEN_TORNADO_INTERVAL` seconds 40 blocks away, travels to
+  By day, `Game::tornado` holds one fire tornado: it spawns every `SKY_TORNADO_INTERVAL` seconds 40 blocks away, travels to
   the player's captured spawn position, stays there, deals periodic damage on contact, and is cleared by nightfall. Saves: `dimension
   horizen` plus `h <record>` lines, including the Horizen's own `time` record.
 - **Wearing:** `Game::worn` holds one `PeltCloak` or `RoyalArmor` (right click, or the Worn slot in the inventory; saved as `worn`).
@@ -469,7 +469,7 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Settings** (`settings.rs`): a button on the world list, and F2 in a game. A slider sets the render distance, 3 to 10 chunks (default 3), kept in `saves/settings.cfg`. `config::render_radius()` / `gen_radius()` replace the old `RENDER_RADIUS` / `GEN_RADIUS` constants. Creature spawn, update and despawn distances are plain constants and do not follow it. New structures (lake, mountain, grand castle, well, graveyard) are placed `config::structure_distance()` away (`lake_distance()`, `mountain_distance()`, ...), beyond the generated ring, and the rainbow and its gold at `rainbow_distance()`, so none appears inside the render distance. `World::is_bare_dry_ground` checks a column even if its chunk is not loaded.
 - **Mineshafts** (`mines.rs`): `MINE_ENTRANCES` (5) timber-framed stairs at the foot of the mountain lead into shafts that climb one block per two towards the core; three rings (`MINE_RING_SHARES`) join them, with a chamber at each crossing. The network is a pure function of the `Mountain` (cached per thread), carved per chunk by `terrain::generate_chunk_for` before trees, plants and rocks, and those skip open columns. Tunnels keep `MINE_COVER` blocks of ground over their roof.
 - **Lightning**: `Game::trigger_storm_lightning` hurts creatures within `LIGHTNING_RADIUS` (`LIGHTNING_DAMAGE` at the centre, half at the edge) and never the player. A held Holly Rod strikes the creature or block it points at within `HOLLY_ROD_REACH` (`Game::holly_rod_strike_point`). The bolt is drawn as thick beams (`effects::draw_storm_lightning`, `bolt_points`) with a screen flash (`lightning_flash_alpha`). Storm clouds use `STORM_CLOUD_THRESHOLD` / `STORM_CLOUD_RADIUS_CELLS` and cover nearly the whole sky.
-- **Fire tornado** is a funnel (`effects::tornado_radius_share`), spinning at `HORIZEN_TORNADO_SPIN_SPEED` 12 rad/s.
+- **Fire tornado** is a funnel (`effects::tornado_radius_share`), spinning at `SKY_TORNADO_SPIN_SPEED` 12 rad/s.
 - **Rainbow**: `rainbow_blocks_on` drops cells buried in the ground and carries each band's ends down to it, so all seven colours reach the ground; the blocks are cached (`RAINBOW_CACHE`).
 - **Animals** (`animal_draw.rs`): the five animals are posed from two-jointed legs (`leg`), tilted boxes (`dropped::draw_box_tilted`), breathing, head bobs, grazing, pecking, hopping and ear/tail motion. Their eyes (`eyes`) stick out of the head and glow red at night with a halo.
 - Six tests (bear health, mallet damage, stick rate, well pool) already failed before these changes; they assert old balance numbers.
@@ -512,7 +512,7 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Silver towers** (`tower.rs`): one design (9x9, 26 high, five floors of `TOWER_STOREY` blocks, a spiral stair that turns a quarter each floor, slit windows,
   battlements) built three times: on every lake island in place of the old castle (`Lake::tower_cell`, relic Philosopher's Stone), on one Skylands island
   (`Landmarks::sky_tower`, relic Horn of the Hunt) and on the Horizen's plain (`Landmarks::horizen_tower`, relic Ancient Crown). The door is `Block::TowerDoor` +
-  `TowerDoorTop` until a `SilverKey` is used on it (`Game::try_unlock`, right click; the key is used up); `World::unlock_tower` records it in `Landmarks::towers_unlocked`
+  `TowerDoorTop` until a `SilverKey` is used on it (`Game::try_unlock`, right click; the key is kept: it only turns the lock); `World::unlock_tower` records it in `Landmarks::towers_unlocked`
   and remakes the chunks. Killing the Loch Ness Monster no longer opens anything (`record_monster_slain`). The relic is on a plinth block (`StonePlinth`, `HornPlinth`,
   `CrownPlinth`) taken by hand.
 - **Horizen tower:** hold a peep stone by day in the Horizen (`Game::try_show_horizen_tower`): the tower appears beyond the generated land on dry ground
@@ -524,4 +524,77 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
   shafts `MINE_KEY_SHAFTS` (three keys).
 - **Jungle** (`terrain::jungle_centre`, `in_jungle`, `place_jungle_tree`): a pure function of the seed, `JUNGLE_DISTANCE_CHUNKS` from spawn, trunks 22 to 32 tall, a bare
   middle. A fall out of the Skylands lands there (`Game::jungle_landing`), `SKY_FALL_DROP` above the ground.
-- **Deer** leave `DEER_BONE_DROP` Deer Bones `DEER_BONE_CHANCE` percent of the time; 3 bones + a twine craft Musical Pipes. Pipes, pink salt and the three relics do nothing yet.
+- **Deer** leave `DEER_BONE_DROP` Deer Bones `DEER_BONE_CHANCE` percent of the time; 3 bones craft Musical Pipes. Pipes, pink salt and the three relics do nothing yet.
+
+## Update: the cave Horizen, crows, the Mother of Quail, the tin pan and the king's relics
+
+- **The Horizen is a cave** (`horizen.rs`). Solid stone to `HORIZEN_ROOF_Y` with a flat dirt floor at `GROUND_TOP`; `air_height(seed, x, z)` is the
+  free height above the floor (0 = rock, otherwise at least `HORIZEN_MIN_AIR`, with a rough ceiling). Three parts, one connected way (tests walk it for 12
+  seeds): the arrival chamber (dome, `HORIZEN_CHAMBER_*`, with the arrival pool), a winding tunnel (`HORIZEN_TUNNEL_*`, direction from the seed) and the one
+  great cavern at `HORIZEN_CAVERN_DISTANCE` (`HORIZEN_CAVERN_*`, ragged outline, tall enough for the tower). Ponds lie only on open floor and not near the tower.
+  The silver tower is placed at `cavern_centre` by a peep stone (`Game::try_show_horizen_tower`); with no sky to read, the peep stone works at any hour and its
+  trail follows the tunnel (`horizen::route`). A Horizen saved as flat land that leaves the player in rock puts them back on the arrival pool (`Game::travel_to`).
+- **Fire tornadoes belong to the Skylands** (`SKY_TORNADO_*`, `Game::update_sky_tornado`): by day every `SKY_TORNADO_INTERVAL` seconds, `SKY_TORNADO_SPAWN_DISTANCE`
+  blocks from the player at the player's height. None in the Horizen or the overworld.
+- **Crow** (`AnimalKind::Crow`): quail behaviour (same flight constants, feather on take-off), but a take-off heads due west when `Animal::can_fly_west`
+  (nothing solid for `CROW_WEST_LOOKAHEAD` blocks at flying height). Drops `CROW_FEATHER_DROP` feathers, no poultry. `Animal::west_followed` counts blocks flown west
+  while the player is within `CROW_FOLLOW_DISTANCE`; beyond `CROW_LOSE_DISTANCE` it resets. At `CROW_ALTAR_WEST_BLOCKS` (two chunks) the crow, as it comes down,
+  lands on a new **ancient altar** (`Game::land_crows_at_altars`): `Block::AltarLoadstone` placed on bare ground near it (saved as a placed block). Taking the loadstone by hand
+  (`Game::mine`) leaves `Block::AncientAltar`.
+- **Mother of Quail** (`AnimalKind::MotherOfQuail`, a boss with a health bar, `is_leashed` false): every `QUAIL_KILLS_PER_MOTHER` quail killed (`Game::quail_kills`, saved as
+  `quailkills`) one comes (`Game::summon_mothers`, `mothers_owed`). She charges at all times, never despawns and is removed when the player dies; one left behind in
+  another dimension returns on re-entering the overworld. Drops a Silver Key.
+- **Tin Pan** (2 Tin): breaking `WetClay` with it held adds a Gold with `TIN_PAN_GOLD_CHANCE` percent, `TIN_PAN_RABBIT_FOOT_GOLD_CHANCE` with a rabbit foot in the hotbar.
+- **Philosopher's Stone**: right click a `Boulder` (`Game::turn_boulder_to_gold`) to make a `GoldBoulder` (saved as a placed block; the boulder's removal is recorded so
+  it never returns). It breaks by hand into `GOLD_BOULDER_GOLD_DROP` gold. The stone is kept.
+- **King's Crown** (the Ancient Crown, shown by that name; save id still `ancient_crown`) is wearable. Worn in the overworld it brings out the one **ruined castle**
+  (`Landmarks::ruined_castle`, saved as `ruinedcastle`, `Game::try_show_ruined_castle`) straight ahead of the way the player faces. It reuses the grand castle's
+  footprint and ground rules (`Landmarks::castles`); its shape is `landmarks::ruins_cell`: broken wall with a gap in the south, tumbled corner towers, keep stumps, rubble,
+  and the `SwordInStone` / `SwordHilt` pair on a dais at the centre. Right click either while wearing the crown (`Game::try_pull_sword`): the stone becomes `PulledStone`
+  (placed, saved), the hilt is removed, and the player gets **Excalibur** (`EXCALIBUR_DAMAGE`, the highest of any weapon; `ItemKind::melee_reach`).
+- Save format additions: `quailkills <n>`, `ruinedcastle <x> <z>`; items `tin_pan`, `excalibur`; placed blocks `gold_boulder`, `ancient_altar`, `altar_loadstone`, `pulled_stone`.
+
+## Update: lots of caves, camps, day in the cave, the well, the Yeti, the recipe book and the jungle temple
+
+- **Cave network** (`horizen.rs`): besides the long tunnel to the great cavern, every square of `HORIZEN_CAVE_CELL` blocks has a cave (`cave_in_cell`: a dome of
+  `HORIZEN_CAVE_*` size, in the square of the arrival point the arrival chamber, in the square of the great cavern that cavern), each joined to its east and south
+  neighbours by a tunnel (`HORIZEN_LINK_*`, `network_air`). Tests check that every cave within reach is open and connected to the arrival chamber for several seeds. A
+  peep stone still brings out the tower in the great cavern and the trail along the long tunnel (`route`).
+- **Camps**: `Game::update_cave_visits` notes each cave the player comes within `HORIZEN_CAVE_ENTER_SHARE` of its middle (`Landmarks::caves_visited`, saved as
+  `cavevisit`, in the Horizen's records). Every `HORIZEN_CAMP_EVERY`th cave (the arrival chamber is the first; the great cavern counts but gets no camp) gets a camp
+  (`Game::build_camp`): a placed log lit for `HORIZEN_CAMP_FIRE_SECONDS` with a tin pot of water holding berries, already stewed (`Pot { left: 0 }`), red or purple.
+- **Day in the cave**: `Game::enter_horizen` always sets day. Night in the Horizen (`Game::apply_night`, only the Purple Berry Stew brings it) makes the player black out:
+  `Game::faint_in_cave` takes them to Stonehenge in the overworld (the cave itself stays day).
+- **The well** (`Well::block`, `WELL_HEIGHT`): stone rim one block high (still enterable), a post at each corner of the rim, a plank roof with a ridge and a rope over the water.
+  The frame is measured from the ground round the well, not from the sunk water columns.
+- **Yeti**: leaving the Skylands (`travel_to` from Skylands to the overworld: the cyclone, a fall or death) clears `Landmarks::yeti_slain`, so it spawns again and the summit
+  cyclone is gone until it is killed again. Each lake with a castle already has its own Loch Ness Monster (`monsters_slain` is per lake and saved); a dead one never returns.
+  The monsters are coloured by lake (`animal_draw::loch_ness_parts`).
+- **Recipe Book**: a button on the inventory screen (`InventoryUi::guide`) switches the list to every recipe in `RECIPES` with the ingredients and what is still missing
+  (`Recipe::missing`, `describe_missing`); craftable ones are marked and can be clicked.
+- **Jungle temple** (`temple.rs`, `temple_cell`): a stepped pyramid of `Block::MayaStone` (`TEMPLE_*`), a stair up the south face, a shrine with a roof comb and a
+  `GoldPile` on top, at `terrain::jungle_centre`, built by `terrain::generate_chunk_for` with stone under it down to the ground. The jungle's bare middle was widened
+  to `JUNGLE_CLEARING_RADIUS` 34 to hold it, and a fall from the Skylands lands beside it (`Game::jungle_landing`).
+- **Musical Pipes** are now 3 Deer Bones and nothing else.
+
+## Update: reusable key, a flying Mother, the forge, the backpack, ghosts, Stonehenge and the pipes
+
+- **Silver key** is kept: `Game::try_unlock` opens the door for good and does not take the key.
+- **Mother of Quail flies** (`Animal::update`): while charging she holds a height just above the player's head (`threat.y + 2`; level with them once within three
+  blocks, higher while `stuck` against something), with no gravity, and is drawn with wings beating whenever she is off the ground (`Animal::is_airborne`).
+- **Clay forge model** (`block.rs`, `forge_parts!`): footing, rounded body, shoulder, chimney with a rim, a stoking mouth under an arch with a bellows nozzle, and buttresses. The coal
+  is `parts()[5]` at the chimney's mouth, and `effects::draw_flames` puts the glow and flames there.
+- **Leather Backpack** (4 Leather + 2 Leather Cord; `ItemKind::is_backpack`): worn in its own place, `Game::worn_back` (saved as `back`), alongside a cloak, armour or crown.
+  While worn the inventory has `BACKPACK_EXTRA_ROWS` more rows: `Inventory::slots` grows to `INVENTORY_SLOTS + BACKPACK_SLOTS` (`add_pack_rows`) and shrinks again
+  (`remove_pack_rows`, which moves what is in the rows into free room in the other slots, or refuses). The inventory screen lays out for however many slots there are
+  (`hud::layout(slots)`), and has a Pack slot beside the Worn slot. Saves: `inv` slots 36 to 53 belong to the pack; without a `back` line they are moved to ordinary slots on load.
+- **Pipes** (`Game::play_pipes`, right click with Musical Pipes held; `play::handle_placing`): by day (overworld) every quail and crow within `PIPES_CALL_RANGE` is called
+  (`Animal::call_to`): it flies to a spot `PIPES_LAND_MIN`..`PIPES_LAND_MAX` from the player, lands there and stands still for `PIPES_CALM_SECONDS` (`Animal::calm`). A called or calm bird is
+  not scared by the player, only by a blow.
+- **Ghosts** (`ghosts.rs`; they are only words on the screen, `Game::ghost_text`, drawn by `play::draw_ghost_text`). The graveyard's ghost (`Game::update_graveyard_ghost`) asks for a song when
+  the player walks in; playing the pipes inside the graveyard gives a silver key, a thanks, and sets `Landmarks::graveyard_rested` (saved as `ghostrest`): it never speaks again. In each of the three
+  silver towers (`Game::tower_ghost_here`: the Skylands', the Horizen's and a lake island's) playing the pipes brings a hint: the Skylands tower tells the player to wade through the river to the island and
+  not leave the water, the cave tower that things work differently at night, the lake tower to blow the horn in the stonehenge.
+- **Stonehenge** (`stonehenge.rs`): `STONEHENGE_STONES` stones in a ring of radius `STONEHENGE_RADIUS`, lintels over pairs, and an altar stone, `STONEHENGE_DISTANCE_CHUNKS` (5) chunks from spawn
+  in a direction the seed decides; built by `terrain::generate_chunk_for` (no trees within `STONEHENGE_TREE_MARGIN`). A player who blacks out in the cave wakes in its ring
+  (`stonehenge::arrival`), instead of by the well. There is, as yet, no way to blow the horn there.

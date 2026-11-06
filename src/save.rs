@@ -53,6 +53,8 @@ pub struct SaveData {
     pub dev_mode: bool,
     /// The one thing the player wears (a pelt cloak or the royal armour).
     pub worn: Option<ItemKind>,
+    /// The backpack on the player's back.
+    pub back: Option<ItemKind>,
     /// Whether the player is in the Horizen. The fields above then describe the overworld, where they fell in.
     pub in_horizen: bool,
     /// The Horizen's own edits, items on the ground and the player's place in it, once the player has been there.
@@ -61,6 +63,8 @@ pub struct SaveData {
     pub in_skylands: bool,
     /// The Skylands' own edits, items on the ground and the player's place in it, once the player has been there.
     pub skylands: Option<Box<SaveData>>,
+    /// How many quail the player has killed (a Mother of Quail comes for every `QUAIL_KILLS_PER_MOTHER`).
+    pub quail_kills: u32,
 }
 
 impl SaveData {
@@ -81,7 +85,9 @@ impl SaveData {
             items: Vec::new(),
             health: MAX_HEALTH,
             dev_mode: false,
+            quail_kills: 0,
             worn: None,
+            back: None,
             in_horizen: false,
             horizen: None,
             in_skylands: false,
@@ -115,7 +121,11 @@ impl SaveData {
 ///     "grandcastle <x> <z>"      the grand castle, centred on that column
 ///     "well <x> <z>"            the well (its water's corner with the smallest coordinates)
 ///     "graveyard <x> <z>"       the graveyard, centred on that column
+///     "ghostrest"               the graveyard's ghost has heard its song and rests
 ///     "worn <item>"             what the player wears
+///     "back <item>"             the backpack on the player's back (slots 36 to 53 of "inv" then belong to the pack)
+///     "quailkills <n>"          how many quail the player has killed
+///     "ruinedcastle <x> <z>"    the ruined castle with the sword in the stone, centred on that column
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
 ///     "dimension skylands"     the player is in the Skylands (everything above is then the overworld)
 ///     "yetislain"              the Yeti has been killed (a cyclone stands on the summit)
@@ -146,10 +156,12 @@ pub fn serialize_save(
 #[derive(Default)]
 pub struct SaveExtras<'a> {
     pub worn: Option<ItemKind>,
+    pub back: Option<ItemKind>,
     pub in_horizen: bool,
     pub horizen: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
     pub in_skylands: bool,
     pub skylands: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
+    pub quail_kills: u32,
 }
 
 /// The records of a world's silver tower state, each starting with `prefix`.
@@ -165,6 +177,12 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
     }
     for (x, z) in &landmarks.sky_visited {
         out.push_str(&format!("{prefix}skyvisit {x} {z}\n"));
+    }
+    if landmarks.graveyard_rested {
+        out.push_str(&format!("{prefix}ghostrest\n"));
+    }
+    for (x, z) in &landmarks.caves_visited {
+        out.push_str(&format!("{prefix}cavevisit {x} {z}\n"));
     }
 }
 
@@ -223,8 +241,14 @@ pub fn serialize_save_full(
     if dev_mode {
         out.push_str("mode dev\n");
     }
+    if let Some(back) = extras.back {
+        out.push_str(&format!("back {}\n", back.id()));
+    }
     if let Some(worn) = extras.worn {
         out.push_str(&format!("worn {}\n", worn.id()));
+    }
+    if extras.quail_kills > 0 {
+        out.push_str(&format!("quailkills {}\n", extras.quail_kills));
     }
     if extras.in_horizen {
         out.push_str("dimension horizen\n");
@@ -257,6 +281,9 @@ pub fn serialize_save_full(
     }
     if let Some(c) = world.landmarks.grand_castle {
         out.push_str(&format!("grandcastle {} {}\n", c.x, c.z));
+    }
+    if let Some(c) = world.landmarks.ruined_castle {
+        out.push_str(&format!("ruinedcastle {} {}\n", c.x, c.z));
     }
     if let Some(w) = world.landmarks.well {
         out.push_str(&format!("well {} {}\n", w.x, w.z));
@@ -373,6 +400,15 @@ fn apply_line(data: &mut SaveData, line: &str) {
                     data.landmarks.note_sky_visit((x, z));
                 }
             }
+            Some("ghostrest") => data.landmarks.graveyard_rested = true,
+            Some("cavevisit") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    if !data.landmarks.caves_visited.contains(&(x, z)) {
+                        data.landmarks.caves_visited.push((x, z));
+                    }
+                }
+            }
             Some("pos") => {
                 let v: Vec<f32> = t.filter_map(|s| s.parse().ok()).collect();
                 if v.len() == 5 {
@@ -381,6 +417,8 @@ fn apply_line(data: &mut SaveData, line: &str) {
                     data.player.pitch = v[4];
                 }
             }
+            Some("quailkills") => data.quail_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("back") => data.back = t.next().and_then(ItemKind::from_id).filter(|k| k.is_backpack()),
             Some("worn") => data.worn = t.next().and_then(ItemKind::from_id).filter(|k| k.is_wearable()),
             Some("dimension") => {
                 let which = t.next();
@@ -447,6 +485,12 @@ fn apply_line(data: &mut SaveData, line: &str) {
                     data.landmarks.grand_castle = Some(GrandCastle { x, z });
                 }
             }
+            Some("ruinedcastle") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.ruined_castle = Some(GrandCastle { x, z });
+                }
+            }
             Some("berry") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if v.len() == 3 {
@@ -465,7 +509,10 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 let kind = t.next().and_then(ItemKind::from_id);
                 let count = t.next().and_then(|s| s.parse::<u32>().ok());
                 if let (Some(slot), Some(kind), Some(count)) = (slot, kind, count) {
-                    if slot < INVENTORY_SLOTS && count > 0 {
+                    if slot < INVENTORY_SLOTS + BACKPACK_SLOTS && count > 0 {
+                        if data.inventory.slots.len() <= slot {
+                            data.inventory.add_pack_rows();
+                        }
                         data.inventory.slots[slot] = Some(ItemStack { kind, count: count.min(MAX_STACK) });
                     }
                 }

@@ -25,7 +25,7 @@ pub fn draw_flames(world: &World, time: f32, player_chunk: (i32, i32)) {
         let block = world.block_at(x, y, z);
         let embers = matches!(block, Block::Embers | Block::ForgeLit);
         // Height of the coals in the cell: in the open they lie low, in a forge they sit in its opening.
-        let coal_y = if block == Block::ForgeLit { 0.58 } else { 0.30 };
+        let coal_y = if block == Block::ForgeLit { 0.97 } else { 0.30 };
         let glowing = world.is_glowing((x, y, z));
         let fade = (remaining / FLAME_FADE_SECONDS).clamp(0.2, 1.0);
         let size = if embers { fade * if glowing { 0.8 } else { 0.5 } } else { fade };
@@ -42,7 +42,7 @@ pub fn draw_flames(world: &World, time: f32, player_chunk: (i32, i32)) {
             } else {
                 Color::new(0.78 * pulse, 0.22, 0.06, 1.0)
             };
-            let half = if block == Block::ForgeLit { vec3(0.20, 0.05, 0.20) } else { vec3(0.37, 0.07, 0.31) };
+            let half = if block == Block::ForgeLit { vec3(0.10, 0.04, 0.10) } else { vec3(0.37, 0.07, 0.31) };
             draw_box(vec3(base.x, y as f32 + coal_y, base.z), half, 0.0, color);
         }
         let flames = [
@@ -103,10 +103,10 @@ pub fn draw_pots(world: &World, player_chunk: (i32, i32)) {
     }
 }
 
-/// How wide a layer of the fire tornado is, as a share of `HORIZEN_TORNADO_RADIUS`, at height share `t` (0 at the
+/// How wide a layer of the fire tornado is, as a share of `SKY_TORNADO_RADIUS`, at height share `t` (0 at the
 /// ground, 1 at the top): a funnel that is narrowest at its foot and widest at its top.
 pub fn tornado_radius_share(t: f32) -> f32 {
-    HORIZEN_TORNADO_FOOT_SHARE + (1.0 - HORIZEN_TORNADO_FOOT_SHARE) * t.clamp(0.0, 1.0)
+    SKY_TORNADO_FOOT_SHARE + (1.0 - SKY_TORNADO_FOOT_SHARE) * t.clamp(0.0, 1.0)
 }
 
 /// Draw the active Horizen hazard as a tall, layered spiral of fire. The simulation keeps only one tornado alive;
@@ -118,20 +118,20 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     for layer in 0..9 {
         let t = layer as f32 / 8.0;
         // A funnel: narrow at the foot, wide at the top.
-        let radius = HORIZEN_TORNADO_RADIUS * tornado_radius_share(t);
-        let angle = time * HORIZEN_TORNADO_SPIN_SPEED + layer as f32 * 1.35;
+        let radius = SKY_TORNADO_RADIUS * tornado_radius_share(t);
+        let angle = time * SKY_TORNADO_SPIN_SPEED + layer as f32 * 1.35;
         let centre = tornado.pos
-            + vec3(angle.cos() * radius * 0.48, t * HORIZEN_TORNADO_HEIGHT + 0.35, angle.sin() * radius * 0.48);
+            + vec3(angle.cos() * radius * 0.48, t * SKY_TORNADO_HEIGHT + 0.35, angle.sin() * radius * 0.48);
         let fire = if layer % 2 == 0 {
             Color::new(1.0, 0.18 + 0.12 * (1.0 - t), 0.015, 0.88)
         } else {
             Color::new(1.0, 0.62, 0.04, 0.82)
         };
-        draw_box(centre, vec3(radius, HORIZEN_TORNADO_HEIGHT / 18.0, radius), angle, fire);
+        draw_box(centre, vec3(radius, SKY_TORNADO_HEIGHT / 18.0, radius), angle, fire);
         if layer % 2 == 0 {
             draw_box(
                 centre + vec3(0.0, 0.18, 0.0),
-                vec3(radius * 0.55, HORIZEN_TORNADO_HEIGHT / 24.0, radius * 0.55),
+                vec3(radius * 0.55, SKY_TORNADO_HEIGHT / 24.0, radius * 0.55),
                 -angle * 1.4,
                 Color::new(1.0, 0.90, 0.18, 0.70),
             );
@@ -139,9 +139,9 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     }
     // A dark, translucent cap makes the top read as smoke rather than a stack of unrelated boxes.
     draw_box(
-        tornado.pos + vec3(0.0, HORIZEN_TORNADO_HEIGHT + 0.35, 0.0),
-        vec3(HORIZEN_TORNADO_RADIUS * 0.8, 0.32, HORIZEN_TORNADO_RADIUS * 0.8),
-        time * HORIZEN_TORNADO_CAP_SPIN_SPEED,
+        tornado.pos + vec3(0.0, SKY_TORNADO_HEIGHT + 0.35, 0.0),
+        vec3(SKY_TORNADO_RADIUS * 0.8, 0.32, SKY_TORNADO_RADIUS * 0.8),
+        time * SKY_TORNADO_CAP_SPIN_SPEED,
         Color::new(0.16, 0.10, 0.07, 0.42),
     );
 }
@@ -532,10 +532,10 @@ mod tests {
     #[test]
     fn the_fire_tornado_is_a_funnel_wide_at_the_top_and_spins_half_again_as_fast() {
         assert!(tornado_radius_share(0.0) < tornado_radius_share(0.5) && tornado_radius_share(0.5) < tornado_radius_share(1.0));
-        assert!((tornado_radius_share(0.0) - HORIZEN_TORNADO_FOOT_SHARE).abs() < 1e-6, "narrow at the foot");
+        assert!((tornado_radius_share(0.0) - SKY_TORNADO_FOOT_SHARE).abs() < 1e-6, "narrow at the foot");
         assert!((tornado_radius_share(1.0) - 1.0).abs() < 1e-6, "full width at the top");
-        assert!((HORIZEN_TORNADO_SPIN_SPEED - 8.0 * 1.5).abs() < 1e-6, "50% faster than the 8 radians per second it had");
-        assert!((HORIZEN_TORNADO_CAP_SPIN_SPEED - 1.4 * 1.5).abs() < 1e-6);
+        assert!((SKY_TORNADO_SPIN_SPEED - 8.0 * 1.5).abs() < 1e-6, "50% faster than the 8 radians per second it had");
+        assert!((SKY_TORNADO_CAP_SPIN_SPEED - 1.4 * 1.5).abs() < 1e-6);
     }
 
     #[test]

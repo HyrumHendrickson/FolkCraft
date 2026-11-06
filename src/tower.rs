@@ -135,6 +135,7 @@ impl Tower {
 
     /// A tower whose nearest edge is `tower_distance()` blocks from `at` (counting along either axis, as the chunks do),
     /// in the direction `angle`, pushed `extra` blocks further out.
+    #[cfg(test)]
     pub fn ahead(at: (f32, f32), angle: f32, extra: f32) -> Tower {
         let (c, s) = (angle.cos(), angle.sin());
         let gap = (tower_distance() as f32 + extra + TOWER_REACH as f32) / c.abs().max(s.abs());
@@ -146,6 +147,7 @@ impl Tower {
 pub const TOWER_FOOT_MARGIN: i32 = 2;
 
 /// How far (blocks) from the player a new tower's nearest edge lies: past the generated land, as for every structure.
+#[cfg(test)]
 pub fn tower_distance() -> i32 {
     structure_distance()
 }

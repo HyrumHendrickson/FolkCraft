@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
 use crate::landmarks::compass_needle;
-use crate::recipe::{craft, craftable, Recipe};
+use crate::recipe::{craft, craftable, Recipe, RECIPES};
 use crate::ui::ACCENT;
 
 const SLOT_SIZE: f32 = 48.0;
@@ -20,6 +20,8 @@ const CRAFT_W: f32 = 310.0;
 const CRAFT_GAP: f32 = 22.0;
 const CRAFT_ROW_H: f32 = 56.0;
 const CRAFT_ROW_GAP: f32 = 6.0;
+/// Rows of the recipe book are taller: a name, the ingredients and what is still missing.
+const GUIDE_ROW_H: f32 = 66.0;
 
 fn lighten(c: Color, amount: f32) -> Color {
     Color::new((c.r + amount).min(1.0), (c.g + amount).min(1.0), (c.b + amount).min(1.0), c.a)
@@ -676,6 +678,37 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_line(p(0.40, 0.60).x, p(0.40, 0.60).y, p(0.58, 0.42).x, p(0.58, 0.42).y, 1.2, lighten(color, 0.28));
             draw_line(p(0.44, 0.64).x, p(0.44, 0.64).y, p(0.62, 0.46).x, p(0.62, 0.46).y, 1.0, darken(color, 0.70));
         }
+        ItemKind::LeatherBackpack => {
+            // A pack seen from the front: a rounded body, a flap with a buckle, a front pocket and two straps.
+            let (tl, br) = (p(0.24, 0.20), p(0.76, 0.84));
+            slab(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            draw_rectangle(tl.x, tl.y, br.x - tl.x, 12.0 * u, darken(color, 0.78));
+            draw_rectangle(tl.x + 6.0 * u, br.y - 18.0 * u, br.x - tl.x - 12.0 * u, 12.0 * u, lighten(color, 0.12));
+            draw_rectangle(cx - 3.0 * u, tl.y + 8.0 * u, 6.0 * u, 7.0 * u, Color::new(0.85, 0.75, 0.40, 1.0));
+            for sx in [tl.x + 7.0 * u, br.x - 7.0 * u] {
+                draw_line(sx, tl.y + 12.0 * u, sx, br.y - 2.0 * u, 2.4 * u, ItemKind::LeatherCord.color());
+            }
+            draw_rectangle_lines(tl.x, tl.y, br.x - tl.x, br.y - tl.y, 1.4, OUTLINE);
+        }
+        ItemKind::TinPan => {
+            // A wide shallow dish seen from the side-on, with a short handle and a dark inner rim.
+            let (a, b) = (p(0.14, 0.52), p(0.86, 0.52));
+            quad([a, b, p(0.76, 0.72), p(0.24, 0.72)], color);
+            draw_line(a.x, a.y, b.x, b.y, 3.0 * u, lighten(color, 0.25));
+            draw_rectangle(a.x + 4.0 * u, a.y + 1.5 * u, b.x - a.x - 8.0 * u, 3.0 * u, darken(color, 0.45));
+            rod(p(0.80, 0.56), p(0.94, 0.40), 3.4 * u, darken(color, 0.8));
+            draw_line(p(0.30, 0.64).x, p(0.30, 0.64).y, p(0.62, 0.64).x, p(0.62, 0.64).y, 1.2, lighten(color, 0.3));
+        }
+        ItemKind::Excalibur => {
+            // A long silver blade with a fuller, a golden crosspiece, a grip and a pommel.
+            let (tip, base) = (p(0.84, 0.10), p(0.34, 0.60));
+            rod(base, tip, 6.0 * u, color);
+            rod(base, tip, 1.6 * u, darken(color, 0.62));
+            let (g0, g1) = (p(0.20, 0.58), p(0.40, 0.78));
+            rod(g0, g1, 4.0 * u, Color::new(0.90, 0.68, 0.18, 1.0));
+            rod(p(0.30, 0.68), p(0.14, 0.86), 4.6 * u, Color::new(0.30, 0.18, 0.10, 1.0));
+            draw_circle(p(0.12, 0.88).x, p(0.12, 0.88).y, 3.4 * u, Color::new(0.90, 0.68, 0.18, 1.0));
+        }
         ItemKind::MusicalPipes => {
             // Five pipes of rising length bound side by side.
             for (i, top) in [0.62, 0.50, 0.38, 0.26, 0.16].into_iter().enumerate() {
@@ -784,11 +817,13 @@ pub struct InventoryUi {
     drag_from: Option<usize>,
     /// How many recipes the crafting list is scrolled down by.
     craft_scroll: usize,
+    /// Whether the right-hand list is the recipe book: every recipe, with what is still needed for it.
+    pub guide: bool,
 }
 
 impl InventoryUi {
     pub fn new() -> Self {
-        InventoryUi { drag_from: None, craft_scroll: 0 }
+        InventoryUi { drag_from: None, craft_scroll: 0, guide: false }
     }
 
     /// Abandon any drag in progress (the stack simply stays where it was).
@@ -806,19 +841,20 @@ struct Layout {
     craft: Vec2,
 }
 
-fn main_rows() -> usize {
-    (INVENTORY_SLOTS - HOTBAR_SLOTS) / COLUMNS
+/// Rows of the main grid for an inventory of `slots` slots (the hotbar is the row below it).
+fn main_rows(slots: usize) -> usize {
+    (slots - HOTBAR_SLOTS) / COLUMNS
 }
 
-fn grid_size() -> Vec2 {
+fn grid_size(slots: usize) -> Vec2 {
     let w = COLUMNS as f32 * (SLOT_SIZE + SLOT_GAP) - SLOT_GAP;
-    let h = (main_rows() + 1) as f32 * (SLOT_SIZE + SLOT_GAP) - SLOT_GAP + HOTBAR_SEPARATION;
+    let h = (main_rows(slots) + 1) as f32 * (SLOT_SIZE + SLOT_GAP) - SLOT_GAP + HOTBAR_SEPARATION;
     vec2(w, h)
 }
 
-fn layout() -> Layout {
+fn layout(slots: usize) -> Layout {
     let (w, h) = (screen_width(), screen_height());
-    let grid = grid_size();
+    let grid = grid_size(slots);
     let (pad, title_h, footer_h) = (24.0, 46.0, 96.0);
     let size = vec2(grid.x + CRAFT_GAP + CRAFT_W + 2.0 * pad, grid.y + 2.0 * pad + title_h + footer_h);
     let panel = Rect::new((w - size.x) / 2.0, (h - size.y) / 2.0, size.x, size.y);
@@ -827,11 +863,11 @@ fn layout() -> Layout {
 }
 
 /// Screen rectangle of inventory slot `slot`: the main grid on top, the hotbar row below.
-fn slot_rect(grid: Vec2, slot: usize) -> Rect {
+fn slot_rect(grid: Vec2, slots: usize, slot: usize) -> Rect {
     let (col, row, extra) = if slot >= HOTBAR_SLOTS {
         ((slot - HOTBAR_SLOTS) % COLUMNS, (slot - HOTBAR_SLOTS) / COLUMNS, 0.0)
     } else {
-        (slot, main_rows(), HOTBAR_SEPARATION)
+        (slot, main_rows(slots), HOTBAR_SEPARATION)
     };
     Rect::new(
         grid.x + col as f32 * (SLOT_SIZE + SLOT_GAP),
@@ -841,11 +877,23 @@ fn slot_rect(grid: Vec2, slot: usize) -> Rect {
     )
 }
 
-fn slot_at(grid: Vec2, mouse: Vec2) -> Option<usize> {
-    (0..INVENTORY_SLOTS).find(|&slot| slot_rect(grid, slot).contains(mouse))
+fn slot_at(grid: Vec2, slots: usize, mouse: Vec2) -> Option<usize> {
+    (0..slots).find(|&slot| slot_rect(grid, slots, slot).contains(mouse))
 }
 
 /// Join `parts` with spacing, starting a new line whenever one would exceed `max_width`.
+/// `text` cut short with dots so that it is no wider than `max` pixels at `size`.
+fn fit_text(text: &str, max: f32, size: u16) -> String {
+    if measure_text(text, None, size, 1.0).width <= max {
+        return text.to_string();
+    }
+    let mut cut: String = text.to_string();
+    while !cut.is_empty() && measure_text(&format!("{cut}..."), None, size, 1.0).width > max {
+        cut.pop();
+    }
+    format!("{cut}...")
+}
+
 fn wrap_totals(parts: &[String], max_width: f32) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for part in parts {
@@ -864,12 +912,13 @@ fn wrap_totals(parts: &[String], max_width: f32) -> Vec<String> {
 /// - press on a stack and release over another slot to move, merge or swap stacks;
 /// - click an entry in the crafting list to craft it once.
 /// Also shows a tooltip on hover.
-pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
+pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, back: &mut Option<ItemKind>, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
     let (w, h) = (screen_width(), screen_height());
-    let lay = layout();
+    let slots = inventory.slots.len();
+    let lay = layout(slots);
     let (mx, my) = mouse_position();
     let mouse = vec2(mx, my);
-    let hovered_slot = slot_at(lay.grid, mouse);
+    let hovered_slot = slot_at(lay.grid, slots, mouse);
     // The worn slot, beside the title: click it to take the garment off; drop a cloak or armour on it to put it on.
     let worn_rect = Rect::new(lay.grid.x + 190.0, lay.panel.y + 24.0 + 4.0, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0);
     if is_mouse_button_pressed(MouseButton::Left) && worn_rect.contains(mouse) {
@@ -878,6 +927,23 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
                 *worn = None;
                 toasts.push(format!("You take off the {}", kind.name()));
             } else {
+                toasts.push("Inventory full".to_string());
+            }
+        }
+    }
+
+    // The pack slot, beside the worn slot: click it to take the backpack off (its rows must be emptied into the other slots
+    // first, or have room there); drop a backpack on it to put it on.
+    let pack_rect = Rect::new(worn_rect.x + 120.0, worn_rect.y, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0);
+    if is_mouse_button_pressed(MouseButton::Left) && pack_rect.contains(mouse) {
+        if let Some(kind) = *back {
+            if !inventory.remove_pack_rows() {
+                toasts.push("Empty the backpack first: its things do not fit in the other slots".to_string());
+            } else if inventory.add(kind, 1) == 0 {
+                *back = None;
+                toasts.push(format!("You take off the {}", kind.name()));
+            } else {
+                inventory.add_pack_rows();
                 toasts.push("Inventory full".to_string());
             }
         }
@@ -894,7 +960,13 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     let mut dropped_outside = None;
     if is_mouse_button_released(MouseButton::Left) {
         if let Some(from) = ui.drag_from.take() {
-            if worn_rect.contains(mouse) {
+            if pack_rect.contains(mouse) {
+                if back.is_none() && inventory.slots[from].map_or(false, |s| s.kind.is_backpack()) {
+                    let kind = inventory.take_from_slot(from).unwrap();
+                    inventory.add_pack_rows();
+                    *back = Some(kind);
+                }
+            } else if worn_rect.contains(mouse) {
                 if let Some(kind) = inventory.slots[from].map(|s| s.kind).filter(|k| k.is_wearable()) {
                     inventory.take_from_slot(from);
                     if let Some(old) = worn.replace(kind) {
@@ -919,14 +991,28 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     draw_rectangle(panel.x, panel.y, panel.w, panel.h, Color::new(0.14, 0.17, 0.14, 0.97));
     draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, 3.0, ACCENT);
     draw_text("Inventory", lay.grid.x, panel.y + pad + 22.0, 34.0, WHITE);
-    draw_text("Crafting", lay.craft.x, panel.y + pad + 22.0, 34.0, WHITE);
+    draw_text(if ui.guide { "All Recipes" } else { "Crafting" }, lay.craft.x, panel.y + pad + 22.0, 34.0, WHITE);
+    // The button that switches the list between what can be crafted now and the whole recipe book.
+    let book_rect = Rect::new(panel.x + panel.w - pad - 150.0, panel.y + pad - 2.0, 150.0, 30.0);
+    let book_hover = book_rect.contains(mouse);
+    draw_rectangle(book_rect.x, book_rect.y, book_rect.w, book_rect.h, if book_hover { Color::new(0.30, 0.36, 0.30, 1.0) } else { Color::new(0.20, 0.25, 0.20, 1.0) });
+    draw_rectangle_lines(book_rect.x, book_rect.y, book_rect.w, book_rect.h, 2.0, ACCENT);
+    let book_label = if ui.guide { "Back to Crafting" } else { "Recipe Book" };
+    let book_size = measure_text(book_label, None, 20, 1.0);
+    draw_text(book_label, book_rect.x + (book_rect.w - book_size.width) / 2.0, book_rect.y + 21.0, 20.0, WHITE);
+    if book_hover && is_mouse_button_pressed(MouseButton::Left) {
+        ui.guide = !ui.guide;
+        ui.craft_scroll = 0;
+    }
     draw_text("Worn:", lay.grid.x + 130.0, panel.y + pad + 22.0, 22.0, LIGHTGRAY);
     draw_slot(worn_rect, worn.map(|k| ItemStack { kind: k, count: 1 }).as_ref(), worn_rect.contains(mouse));
+    draw_text("Pack:", pack_rect.x - 60.0, panel.y + pad + 22.0, 22.0, LIGHTGRAY);
+    draw_slot(pack_rect, back.map(|k| ItemStack { kind: k, count: 1 }).as_ref(), pack_rect.contains(mouse));
 
     // --- Slots ---
     let mut hovered_stack: Option<ItemStack> = None;
-    for slot in 0..INVENTORY_SLOTS {
-        let r = slot_rect(lay.grid, slot);
+    for slot in 0..slots {
+        let r = slot_rect(lay.grid, slots, slot);
         let is_hovered = r.contains(mouse);
         // The stack being dragged is drawn under the cursor instead of in its slot.
         let shown = if dragged.map(|(s, _)| s) == Some(slot) { None } else { inventory.slots[slot] };
@@ -940,8 +1026,9 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     }
 
     // --- Right-hand list: every recipe the current items can pay for and, in dev mode, then every item ---
-    let entries = craft_entries(craftable(inventory), dev_mode);
-    let max_rows = ((grid_size().y + CRAFT_ROW_GAP) / (CRAFT_ROW_H + CRAFT_ROW_GAP)) as usize;
+    let entries: Vec<CraftEntry> = if ui.guide { RECIPES.iter().map(CraftEntry::Recipe).collect() } else { craft_entries(craftable(inventory), dev_mode) };
+    let row_h = if ui.guide { GUIDE_ROW_H } else { CRAFT_ROW_H };
+    let max_rows = ((grid_size(slots).y + CRAFT_ROW_GAP) / (row_h + CRAFT_ROW_GAP)) as usize;
     let wheel = crate::ui::wheel_notches();
     if wheel != 0.0 {
         // The item list is long, so dev mode scrolls a few rows to the notch.
@@ -950,19 +1037,34 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     }
     ui.craft_scroll = ui.craft_scroll.min(entries.len().saturating_sub(max_rows));
     if entries.len() > max_rows {
-        draw_text(if dev_mode { "Mouse wheel: recipes, then every item" } else { "Mouse wheel: more recipes" }, lay.craft.x + 130.0, panel.y + pad + 20.0, 18.0, LIGHTGRAY);
+        draw_text(if dev_mode && !ui.guide { "Mouse wheel: recipes, then every item" } else { "Mouse wheel: more recipes" }, lay.craft.x, panel.y + pad + 42.0, 18.0, LIGHTGRAY);
     }
-    if entries.is_empty() {
+    if entries.is_empty() && !ui.guide {
         draw_text("Nothing to craft yet.", lay.craft.x, lay.craft.y + 24.0, 22.0, LIGHTGRAY);
     }
     let mut message: Option<String> = None;
     for (i, entry) in entries.iter().skip(ui.craft_scroll).take(max_rows).enumerate() {
-        let r = Rect::new(lay.craft.x, lay.craft.y + i as f32 * (CRAFT_ROW_H + CRAFT_ROW_GAP), CRAFT_W, CRAFT_ROW_H);
+        let r = Rect::new(lay.craft.x, lay.craft.y + i as f32 * (row_h + CRAFT_ROW_GAP), CRAFT_W, row_h);
         let hover = r.contains(mouse);
         draw_rectangle(r.x, r.y, r.w, r.h, if hover { Color::new(0.26, 0.31, 0.26, 1.0) } else { Color::new(0.07, 0.08, 0.07, 0.85) });
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if hover { ACCENT } else { Color::new(0.35, 0.38, 0.35, 1.0) });
         let icon = Rect::new(r.x + 4.0, r.y + 4.0, r.h - 8.0, r.h - 8.0);
         match *entry {
+            CraftEntry::Recipe(recipe) if ui.guide => {
+                draw_item_icon(recipe.output, Rect::new(r.x + 4.0, r.y + 4.0, 48.0, 48.0));
+                let text_w = r.w - 60.0;
+                draw_text(&fit_text(recipe.output.name(), text_w, 22), r.x + 58.0, r.y + 20.0, 22.0, WHITE);
+                draw_text(&fit_text(&format!("Needs: {}", recipe.describe()), text_w, 16), r.x + 58.0, r.y + 38.0, 16.0, LIGHTGRAY);
+                let missing = recipe.describe_missing(inventory);
+                if missing.is_empty() {
+                    draw_text("You can craft this: click it", r.x + 58.0, r.y + 56.0, 16.0, Color::new(0.45, 0.90, 0.45, 1.0));
+                } else {
+                    draw_text(&fit_text(&format!("You still need: {missing}"), text_w, 16), r.x + 58.0, r.y + 56.0, 16.0, Color::new(1.0, 0.72, 0.35, 1.0));
+                }
+                if hover && is_mouse_button_pressed(MouseButton::Left) && craft(inventory, recipe) {
+                    message = Some(format!("Crafted {}", recipe.output.name()));
+                }
+            }
             CraftEntry::Recipe(recipe) => {
                 draw_item_icon(recipe.output, icon);
                 draw_text(recipe.output.name(), r.x + r.h, r.y + 25.0, 24.0, WHITE);
@@ -1099,24 +1201,29 @@ mod tests {
     #[test]
     fn every_slot_is_hit_at_its_own_centre_and_slots_do_not_overlap() {
         let grid = vec2(100.0, 80.0);
-        for slot in 0..INVENTORY_SLOTS {
-            let r = slot_rect(grid, slot);
-            assert_eq!(slot_at(grid, r.center()), Some(slot));
-            for other in 0..slot {
-                assert!(!r.overlaps(&slot_rect(grid, other)), "slots {slot} and {other} overlap");
+        for slots in [INVENTORY_SLOTS, INVENTORY_SLOTS + BACKPACK_SLOTS] {
+            for slot in 0..slots {
+                let r = slot_rect(grid, slots, slot);
+                assert_eq!(slot_at(grid, slots, r.center()), Some(slot));
+                for other in 0..slot {
+                    assert!(!r.overlaps(&slot_rect(grid, slots, other)), "slots {slot} and {other} overlap");
+                }
             }
+            assert_eq!(slot_at(grid, slots, vec2(0.0, 0.0)), None);
         }
-        assert_eq!(slot_at(grid, vec2(0.0, 0.0)), None);
+        // The backpack's rows are two more rows of the main grid, above the hotbar.
+        assert_eq!(main_rows(INVENTORY_SLOTS + BACKPACK_SLOTS), main_rows(INVENTORY_SLOTS) + BACKPACK_EXTRA_ROWS);
+        assert!(grid_size(INVENTORY_SLOTS + BACKPACK_SLOTS).y > grid_size(INVENTORY_SLOTS).y, "a taller panel for the pack");
     }
 
     #[test]
     fn hotbar_slots_are_the_bottom_row() {
         let grid = vec2(0.0, 0.0);
-        let hotbar_y = slot_rect(grid, 0).y;
+        let hotbar_y = slot_rect(grid, INVENTORY_SLOTS, 0).y;
         for slot in 0..HOTBAR_SLOTS {
-            assert_eq!(slot_rect(grid, slot).y, hotbar_y);
+            assert_eq!(slot_rect(grid, INVENTORY_SLOTS, slot).y, hotbar_y);
         }
-        assert!(slot_rect(grid, HOTBAR_SLOTS).y < hotbar_y);
+        assert!(slot_rect(grid, INVENTORY_SLOTS, HOTBAR_SLOTS).y < hotbar_y);
     }
 
     #[test]

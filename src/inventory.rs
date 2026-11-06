@@ -13,6 +13,33 @@ impl Inventory {
         Inventory { slots: vec![None; INVENTORY_SLOTS] }
     }
 
+    /// Whether the extra rows of a worn backpack are there.
+    pub fn has_pack_rows(&self) -> bool {
+        self.slots.len() > INVENTORY_SLOTS
+    }
+
+    /// Add the rows of a backpack (empty).
+    pub fn add_pack_rows(&mut self) {
+        self.slots.resize(INVENTORY_SLOTS + BACKPACK_SLOTS, None);
+    }
+
+    /// Take the rows of a backpack away: what lies in them moves into free room in the other slots. All-or-nothing: if it
+    /// would not all fit, nothing changes and this returns false.
+    pub fn remove_pack_rows(&mut self) -> bool {
+        if !self.has_pack_rows() {
+            return true;
+        }
+        let mut trial = self.clone();
+        let extra: Vec<ItemStack> = trial.slots.split_off(INVENTORY_SLOTS).into_iter().flatten().collect();
+        for stack in extra {
+            if trial.add(stack.kind, stack.count) != 0 {
+                return false;
+            }
+        }
+        *self = trial;
+        true
+    }
+
     /// Add `count` items, topping up existing stacks first, then using empty slots.
     /// Returns how many items did not fit.
     pub fn add(&mut self, kind: ItemKind, count: u32) -> u32 {
@@ -113,6 +140,31 @@ impl Inventory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_backpack_adds_two_rows_that_can_only_be_taken_away_when_what_is_in_them_fits_elsewhere() {
+        let mut inv = Inventory::new();
+        assert_eq!(inv.slots.len(), INVENTORY_SLOTS);
+        inv.add_pack_rows();
+        assert_eq!(inv.slots.len(), INVENTORY_SLOTS + 2 * HOTBAR_SLOTS);
+        assert!(inv.has_pack_rows());
+        // The new slots take items like any other.
+        assert_eq!(inv.add(ItemKind::Stone, MAX_STACK * (INVENTORY_SLOTS + BACKPACK_SLOTS) as u32), 0);
+        assert_eq!(inv.add(ItemKind::Stone, 1), 1, "and then it is full");
+        let mut full = Inventory::new();
+        full.add_pack_rows();
+        for slot in 0..full.slots.len() {
+            full.slots[slot] = Some(ItemStack { kind: ItemKind::Stone, count: MAX_STACK });
+        }
+        assert!(!full.remove_pack_rows(), "the rows are full of things that have nowhere to go");
+        assert_eq!(full.slots.len(), INVENTORY_SLOTS + BACKPACK_SLOTS, "nothing changed");
+        // Stones merge into the stacks that are there, so a light load comes off.
+        let mut light = Inventory::new();
+        light.add_pack_rows();
+        light.slots[INVENTORY_SLOTS + 3] = Some(ItemStack { kind: ItemKind::Gold, count: 7 });
+        assert!(light.remove_pack_rows());
+        assert_eq!((light.slots.len(), light.count(ItemKind::Gold)), (INVENTORY_SLOTS, 7));
+    }
 
     #[test]
     fn items_stack_into_one_slot() {

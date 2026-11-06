@@ -27,6 +27,8 @@ pub const RECIPES: &[Recipe] = &[
     },
     Recipe { output: ItemKind::ClayForge, output_count: 1, inputs: &[(ItemKind::Stone, 2), (ItemKind::Clay, 8)] },
     Recipe { output: ItemKind::TinPot, output_count: 1, inputs: &[(ItemKind::Tin, 3)] },
+    Recipe { output: ItemKind::LeatherBackpack, output_count: 1, inputs: &[(ItemKind::Leather, 4), (ItemKind::LeatherCord, 2)] },
+    Recipe { output: ItemKind::TinPan, output_count: 1, inputs: &[(ItemKind::Tin, 2)] },
     Recipe { output: ItemKind::ClayJar, output_count: 1, inputs: &[(ItemKind::Clay, 4)] },
     Recipe {
         output: ItemKind::CopperAxe,
@@ -52,7 +54,7 @@ pub const RECIPES: &[Recipe] = &[
     Recipe { output: ItemKind::Compass, output_count: 1, inputs: &[(ItemKind::Loadstone, 1), (ItemKind::IronOre, 1)] },
     Recipe { output: ItemKind::BoneTotem, output_count: 1, inputs: &[(ItemKind::Antlers, 1), (ItemKind::Gold, 2)] },
     Recipe { output: ItemKind::PeltCloak, output_count: 1, inputs: &[(ItemKind::BearPelt, 1)] },
-    Recipe { output: ItemKind::MusicalPipes, output_count: 1, inputs: &[(ItemKind::DeerBone, 3), (ItemKind::Twine, 1)] },
+    Recipe { output: ItemKind::MusicalPipes, output_count: 1, inputs: &[(ItemKind::DeerBone, 3)] },
     Recipe {
         output: ItemKind::Arrow,
         output_count: 1,
@@ -70,6 +72,17 @@ impl Recipe {
     /// Whether the inventory holds every ingredient.
     pub fn can_afford(&self, inventory: &Inventory) -> bool {
         self.inputs.iter().all(|&(kind, n)| inventory.count(kind) >= n)
+    }
+
+    /// What the inventory still lacks for this recipe: each ingredient it has too few of, and how many more it needs.
+    pub fn missing(&self, inventory: &Inventory) -> Vec<(ItemKind, u32)> {
+        self.inputs.iter().filter_map(|&(kind, n)| inventory.count(kind).checked_sub(n).map_or_else(|| Some((kind, n - inventory.count(kind))), |_| None)).collect()
+    }
+
+    /// The same as text, such as "2 more Tin, 1 more Stick" (empty when nothing is missing).
+    pub fn describe_missing(&self, inventory: &Inventory) -> String {
+        let parts: Vec<String> = self.missing(inventory).iter().map(|&(k, n)| format!("{} more {}", n, k.name())).collect();
+        parts.join(", ")
     }
 
     /// Ingredient summary such as "1 Stick + 1 Stone".
@@ -315,13 +328,24 @@ mod tests {
     }
 
     #[test]
-    fn musical_pipes_are_three_deer_bones_and_a_twine() {
-        assert_eq!(recipe_for(ItemKind::MusicalPipes).inputs, &[(ItemKind::DeerBone, 3), (ItemKind::Twine, 1)]);
+    fn what_is_missing_for_a_recipe_is_counted_ingredient_by_ingredient() {
+        let r = recipe_for(ItemKind::BronzeAxe);
+        let inv = inv_with(&[(ItemKind::Stick, 1), (ItemKind::Bronze, 1)]);
+        assert_eq!(r.missing(&inv), vec![(ItemKind::Bronze, 1), (ItemKind::LeatherCord, 1)]);
+        assert_eq!(r.describe_missing(&inv), "1 more Bronze, 1 more Leather Cord");
+        let full = inv_with(&[(ItemKind::Stick, 1), (ItemKind::Bronze, 2), (ItemKind::LeatherCord, 1)]);
+        assert!(r.missing(&full).is_empty() && r.describe_missing(&full).is_empty() && r.can_afford(&full));
+        assert_eq!(recipe_for(ItemKind::TinPan).describe_missing(&Inventory::new()), "2 more Tin");
+    }
+
+    #[test]
+    fn musical_pipes_are_three_deer_bones_and_nothing_else() {
+        assert_eq!(recipe_for(ItemKind::MusicalPipes).inputs, &[(ItemKind::DeerBone, 3)]);
         let mut inv = inv_with(&[(ItemKind::DeerBone, 2), (ItemKind::Twine, 1)]);
         assert!(!craft(&mut inv, recipe_for(ItemKind::MusicalPipes)), "one bone short");
         assert_eq!((inv.count(ItemKind::DeerBone), inv.count(ItemKind::Twine)), (2, 1));
-        let mut inv = inv_with(&[(ItemKind::DeerBone, 3), (ItemKind::Twine, 1)]);
-        assert!(craft(&mut inv, recipe_for(ItemKind::MusicalPipes)));
-        assert_eq!((inv.count(ItemKind::DeerBone), inv.count(ItemKind::Twine), inv.count(ItemKind::MusicalPipes)), (0, 0, 1));
+        let mut inv = inv_with(&[(ItemKind::DeerBone, 3)]);
+        assert!(craft(&mut inv, recipe_for(ItemKind::MusicalPipes)), "no twine needed");
+        assert_eq!((inv.count(ItemKind::DeerBone), inv.count(ItemKind::MusicalPipes)), (0, 1));
     }
 }

@@ -211,11 +211,59 @@ fn moose_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
 /// A quail: a plump round body with a curled topknot, that bobs its head as it walks on thin legs and pecks at the
 /// ground when it stands, flaps its wings in flight and tucks its legs up.
 fn quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
-    let feathers = col(0.56, 0.46, 0.34);
-    let speckle = col(0.38, 0.30, 0.22);
-    let belly = col(0.80, 0.70, 0.52);
-    let face = col(0.34, 0.26, 0.20);
-    let flying = a.mode == Mode::Fly;
+    bird_parts(a, time, night, Plumage {
+        feathers: col(0.56, 0.46, 0.34),
+        speckle: col(0.38, 0.30, 0.22),
+        belly: col(0.80, 0.70, 0.52),
+        face: col(0.34, 0.26, 0.20),
+        beak: col(0.85, 0.65, 0.20),
+        legs: col(0.85, 0.55, 0.20),
+    })
+}
+
+/// A crow: the quail's shape in glossy black, with a dark beak and legs.
+fn crow_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    bird_parts(a, time, night, Plumage {
+        feathers: col(0.10, 0.10, 0.13),
+        speckle: col(0.05, 0.05, 0.07),
+        belly: col(0.17, 0.17, 0.21),
+        face: col(0.07, 0.07, 0.09),
+        beak: col(0.22, 0.20, 0.20),
+        legs: col(0.14, 0.12, 0.12),
+    })
+}
+
+/// The Mother of Quail: a quail more than five times the size, rust-brown, with a crest of gold.
+fn mother_of_quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    const SCALE: f32 = 5.5;
+    let mut parts = bird_parts(a, time, night, Plumage {
+        feathers: col(0.50, 0.36, 0.24),
+        speckle: col(0.30, 0.20, 0.13),
+        belly: col(0.82, 0.68, 0.46),
+        face: col(0.26, 0.18, 0.13),
+        beak: col(0.90, 0.70, 0.18),
+        legs: col(0.80, 0.50, 0.16),
+    });
+    for ((off, half, _), _) in parts.iter_mut() {
+        *off = (off.0 * SCALE, off.1 * SCALE, off.2 * SCALE);
+        *half = (half.0 * SCALE, half.1 * SCALE, half.2 * SCALE);
+    }
+    parts
+}
+
+/// The colours of a quail-shaped bird.
+struct Plumage {
+    feathers: Color,
+    speckle: Color,
+    belly: Color,
+    face: Color,
+    beak: Color,
+    legs: Color,
+}
+
+fn bird_parts(a: &Animal, time: f32, night: bool, p: Plumage) -> Vec<Piece> {
+    let Plumage { feathers, speckle, belly, face, beak, legs } = p;
+    let flying = a.mode == Mode::Fly || (a.kind == AnimalKind::MotherOfQuail && a.is_airborne());
     let moving = is_moving(a);
     let breath = (time * 5.0 + a.phase).sin() * 0.006;
     let peck = if a.mode == Mode::Idle { (time * 1.3 + a.phase * 2.0).sin().powi(11).max(0.0) } else { 0.0 };
@@ -229,7 +277,7 @@ fn quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     ];
     let head = (0.17 + bob + peck * 0.07, 0.36 - peck * 0.20, 0.0);
     parts.push(tilted(head, (0.06, 0.06, 0.05), face, peck * -0.9));
-    parts.push(tilted((head.0 + 0.08, head.1 - 0.015, 0.0), (0.03, 0.015, 0.02), col(0.85, 0.65, 0.20), peck * -0.9));
+    parts.push(tilted((head.0 + 0.08, head.1 - 0.015, 0.0), (0.03, 0.015, 0.02), beak, peck * -0.9));
     parts.push(tilted((head.0 - 0.03, head.1 + 0.10, 0.0), (0.012, 0.05, 0.012), speckle, 0.6 + (time * 3.0 + a.phase).sin() * 0.15));
     parts.push(block((head.0 + 0.02, head.1 + 0.07, 0.0), (0.04, 0.012, 0.03), belly));
     eyes(&mut parts, (head.0 + 0.03, head.1 + 0.02, 0.0), 0.05, 0.016, night, col(0.06, 0.05, 0.04));
@@ -241,13 +289,13 @@ fn quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
             parts.push(tilted((-0.06, 0.28 + 0.16 * flap, 0.33 * side), (0.07, 0.01, 0.10), speckle, -flap * 0.3));
         }
         for side in [-1.0, 1.0] {
-            parts.push(tilted((-0.04, 0.09, 0.04 * side), (0.012, 0.045, 0.012), col(0.85, 0.55, 0.20), 0.9));
+            parts.push(tilted((-0.04, 0.09, 0.04 * side), (0.012, 0.045, 0.012), legs, 0.9));
         }
     } else {
         for side in [-1.0, 1.0] {
             parts.push(block((0.0, 0.20, 0.115 * side), (0.09, 0.05, 0.016), speckle));
             let stride = (a.phase * 6.0 + if side > 0.0 { 0.0 } else { std::f32::consts::PI }).sin() * 0.5 * moving;
-            leg(&mut parts, (0.0, 0.10, 0.045 * side), 0.05, 0.05, 0.011, stride, col(0.85, 0.55, 0.20), col(0.85, 0.55, 0.20));
+            leg(&mut parts, (0.0, 0.10, 0.045 * side), 0.05, 0.05, 0.011, stride, legs, legs);
         }
     }
     parts
@@ -346,9 +394,13 @@ fn yeti_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
 /// The Loch Ness Monster: three dark-green humps along the water, a tail, and a long neck that sways and rears up to strike,
 /// ending in a small head with a pale throat. Most of the body is meant to be half in the water.
 fn loch_ness_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
-    let skin = col(0.18, 0.36, 0.28);
-    let back = col(0.12, 0.27, 0.21);
-    let belly = col(0.62, 0.70, 0.52);
+    // Each lake has a monster of its own, and it looks it: the colouring is picked from where its lake is.
+    let (skin, back, belly) = match crate::rng::hash3(0, a.home.x.floor() as i32, a.home.z.floor() as i32, 0x4E53) % 4 {
+        0 => (col(0.18, 0.36, 0.28), col(0.12, 0.27, 0.21), col(0.62, 0.70, 0.52)),
+        1 => (col(0.22, 0.32, 0.46), col(0.14, 0.22, 0.34), col(0.66, 0.72, 0.80)),
+        2 => (col(0.40, 0.26, 0.40), col(0.28, 0.16, 0.30), col(0.78, 0.66, 0.74)),
+        _ => (col(0.46, 0.30, 0.18), col(0.32, 0.20, 0.12), col(0.82, 0.72, 0.52)),
+    };
     let dark = col(0.05, 0.08, 0.06);
     let charging = a.mode == Mode::Charge;
     let swim = (time * 1.4 + a.phase * 0.2).sin();
@@ -426,6 +478,8 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::WillOWhisp => continue, // drawn by `draw_ghosts`, over the water
             AnimalKind::Deer => deer_parts(a, time, night),
             AnimalKind::Quail => quail_parts(a, time, night),
+            AnimalKind::Crow => crow_parts(a, time, night),
+            AnimalKind::MotherOfQuail => mother_of_quail_parts(a, time, night),
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
@@ -497,6 +551,8 @@ mod tests {
         match a.kind {
             AnimalKind::Deer => deer_parts(a, time, night),
             AnimalKind::Quail => quail_parts(a, time, night),
+            AnimalKind::Crow => crow_parts(a, time, night),
+            AnimalKind::MotherOfQuail => mother_of_quail_parts(a, time, night),
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),

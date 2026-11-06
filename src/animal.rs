@@ -41,6 +41,10 @@ pub enum AnimalKind {
     Yeti,
     /// The boss of a lake with a castle.
     LochNessMonster,
+    /// Like a quail, but black, and it always flies west when it can.
+    Crow,
+    /// The boss that comes for a player who has killed ten quail. It never gives up.
+    MotherOfQuail,
 }
 
 impl AnimalKind {
@@ -54,13 +58,20 @@ impl AnimalKind {
             AnimalKind::WillOWhisp => WILL_O_WHISP_HEALTH,
             AnimalKind::Yeti => YETI_HEALTH,
             AnimalKind::LochNessMonster => LOCH_NESS_HEALTH,
+            AnimalKind::Crow => CROW_HEALTH,
+            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_HEALTH,
         }
     }
 
     /// Whether this is one of the two bosses (they show a health bar, are never spawned as wildlife and are kept
     /// within a leash of where they appeared).
     pub fn is_boss(self) -> bool {
-        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster)
+        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail)
+    }
+
+    /// Whether this boss stays near where it appeared and is given up on when far away (the others hunt for ever).
+    pub fn is_leashed(self) -> bool {
+        self.is_boss() && self != AnimalKind::MotherOfQuail
     }
 
     /// The name shown over a boss's health bar.
@@ -68,6 +79,7 @@ impl AnimalKind {
         match self {
             AnimalKind::Yeti => "The Yeti",
             AnimalKind::LochNessMonster => "The Loch Ness Monster",
+            AnimalKind::MotherOfQuail => "The Mother of Quail",
             _ => "",
         }
     }
@@ -77,6 +89,7 @@ impl AnimalKind {
         match self {
             AnimalKind::Yeti => YETI_REACH,
             AnimalKind::LochNessMonster => LOCH_NESS_REACH,
+            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_REACH,
             _ => BEAR_REACH,
         }
     }
@@ -92,6 +105,8 @@ impl AnimalKind {
             AnimalKind::WillOWhisp => WILL_O_WHISP_HALF_WIDTH,
             AnimalKind::Yeti => 0.9,
             AnimalKind::LochNessMonster => 1.1,
+            AnimalKind::Crow => 0.2,
+            AnimalKind::MotherOfQuail => 1.0,
         }
     }
 
@@ -106,6 +121,8 @@ impl AnimalKind {
             // The summit has four blocks of air above it, so the Yeti is just under three and a half.
             AnimalKind::Yeti => 3.2,
             AnimalKind::LochNessMonster => 3.4,
+            AnimalKind::Crow => 0.45,
+            AnimalKind::MotherOfQuail => 2.2,
         }
     }
 
@@ -119,6 +136,8 @@ impl AnimalKind {
             AnimalKind::WillOWhisp => 0.0,
             AnimalKind::Yeti => YETI_WALK_SPEED,
             AnimalKind::LochNessMonster => LOCH_NESS_WALK_SPEED,
+            AnimalKind::Crow => CROW_WALK_SPEED,
+            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_RUN_SPEED,
         }
     }
 
@@ -126,12 +145,12 @@ impl AnimalKind {
     fn idle_time(self) -> (f32, f32) {
         match self {
             AnimalKind::Deer => (2.0, 6.0),
-            AnimalKind::Quail => (1.0, 3.0),
+            AnimalKind::Quail | AnimalKind::Crow => (1.0, 3.0),
             AnimalKind::Bear => (1.5, 4.0),
             AnimalKind::Rabbit => (1.0, 3.5),
             AnimalKind::Moose => (3.0, 8.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
-            AnimalKind::Yeti | AnimalKind::LochNessMonster => (2.0, 5.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => (2.0, 5.0),
         }
     }
 
@@ -139,18 +158,18 @@ impl AnimalKind {
     fn walk_time(self) -> (f32, f32) {
         match self {
             AnimalKind::Deer => (1.5, 4.0),
-            AnimalKind::Quail => (0.8, 2.0),
+            AnimalKind::Quail | AnimalKind::Crow => (0.8, 2.0),
             AnimalKind::Bear => (2.0, 5.0),
             AnimalKind::Rabbit => (0.8, 2.0),
             AnimalKind::Moose => (2.0, 5.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
-            AnimalKind::Yeti | AnimalKind::LochNessMonster => (3.0, 6.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => (3.0, 6.0),
         }
     }
 
     /// Whether the animal runs or flies from bears (as it does from the player).
     pub fn fears_bears(self) -> bool {
-        matches!(self, AnimalKind::Deer | AnimalKind::Quail | AnimalKind::Rabbit)
+        matches!(self, AnimalKind::Deer | AnimalKind::Quail | AnimalKind::Crow | AnimalKind::Rabbit)
     }
 
     /// Speed (blocks per second) of an animal that is running away.
@@ -169,6 +188,7 @@ impl AnimalKind {
             AnimalKind::Bear => BEAR_DAMAGE,
             AnimalKind::Yeti => YETI_DAMAGE,
             AnimalKind::LochNessMonster => LOCH_NESS_DAMAGE,
+            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_DAMAGE,
             _ => 0,
         }
     }
@@ -180,6 +200,7 @@ impl AnimalKind {
             AnimalKind::Bear => "A bear killed you",
             AnimalKind::Yeti => "The Yeti killed you",
             AnimalKind::LochNessMonster => "The Loch Ness Monster killed you",
+            AnimalKind::MotherOfQuail => "The Mother of Quail killed you",
             _ => "An animal killed you",
         }
     }
@@ -229,6 +250,9 @@ impl AnimalKind {
                 add(ItemKind::Gold, LOCH_NESS_GOLD_DROP);
                 add(ItemKind::Iron, LOCH_NESS_IRON_DROP);
             }
+            // A crow leaves only feathers, no poultry.
+            AnimalKind::Crow => add(ItemKind::Feather, CROW_FEATHER_DROP),
+            AnimalKind::MotherOfQuail => add(ItemKind::SilverKey, 1),
         }
         out
     }
@@ -292,6 +316,12 @@ pub struct Animal {
     orbit: f32,
     /// Where a boss appeared: it never strays further than its leash from here.
     pub home: Vec3,
+    /// A crow: blocks flown west so far with the player following (see `Game::update_crows`).
+    pub west_followed: f32,
+    /// A quail or crow called by the pipes: where it is flying to, to land.
+    pub lure_target: Option<Vec3>,
+    /// Seconds a bird that has come to the pipes still stands quite still.
+    pub calm: f32,
 }
 
 /// What a body bumped into during one step.
@@ -373,6 +403,9 @@ impl Animal {
             bonded: false,
             orbit: 0.0,
             home: pos,
+            west_followed: 0.0,
+            lure_target: None,
+            calm: 0.0,
         };
         // Taken from the random heading, so that each whisp has its own place on the circle.
         a.orbit = a.heading * 1.7;
@@ -394,6 +427,9 @@ impl Animal {
         }
         self.health -= amount;
         self.alarm = ANIMAL_ALARM_SECONDS;
+        // A blow breaks the spell of the pipes.
+        self.lure_target = None;
+        self.calm = 0.0;
         if self.kind == AnimalKind::Moose {
             self.enraged = true;
         }
@@ -409,7 +445,7 @@ impl Animal {
         let flat = vec3(away.x, 0.0, away.z);
         let dir = if flat.length() > 1e-3 { flat.normalize() } else { vec3(self.heading.cos(), 0.0, self.heading.sin()) };
         self.knock = dir * ANIMAL_KNOCKBACK_SPEED;
-        if self.kind != AnimalKind::Quail || self.on_ground {
+        if !matches!(self.kind, AnimalKind::Quail | AnimalKind::Crow) || self.on_ground {
             self.vel.y = KNOCKBACK_HOP;
             self.on_ground = false;
         }
@@ -433,6 +469,46 @@ impl Animal {
     fn rest(&mut self, rng: &mut Rng) {
         self.mode = Mode::Idle;
         self.timer = Self::random_time(self.kind.idle_time(), rng);
+    }
+
+    /// Call a quail or a crow (the pipes): it flies to `target` and lands there, then stands still for `PIPES_CALM_SECONDS`.
+    /// Other animals take no notice.
+    pub fn call_to(&mut self, target: Vec3) {
+        if matches!(self.kind, AnimalKind::Quail | AnimalKind::Crow) {
+            self.lure_target = Some(target);
+            self.west_followed = 0.0;
+            self.calm = 0.0;
+            self.alarm = 0.0;
+        }
+    }
+
+    /// Whether a crow taking off here could fly west: nothing solid in the way for `CROW_WEST_LOOKAHEAD` blocks at flying height.
+    fn can_fly_west(&self, world: &World) -> bool {
+        let (half, h) = (self.kind.half_width(), self.kind.height());
+        let y = self.pos.y + QUAIL_FLY_HEIGHT;
+        (1..=CROW_WEST_LOOKAHEAD).all(|i| {
+            let x = self.pos.x - i as f32;
+            !world.box_blocked(vec3(x - half, y, self.pos.z - half), vec3(x + half, y + h, self.pos.z + half))
+        })
+    }
+
+    /// Whether the animal is off the ground (drawn with its wings beating, for the Mother of Quail).
+    pub fn is_airborne(&self) -> bool {
+        !self.on_ground
+    }
+
+    /// Whether a crow is coming down to land (the last part of a flight).
+    pub fn is_landing(&self) -> bool {
+        self.mode == Mode::Fly && self.timer <= QUAIL_DESCENT_TIME
+    }
+
+    /// Set the animal down at `pos` and let it rest there (a crow at an altar).
+    pub fn land_at(&mut self, pos: Vec3, rng: &mut Rng) {
+        self.pos = pos;
+        self.vel = Vec3::ZERO;
+        self.on_ground = true;
+        self.west_followed = 0.0;
+        self.rest(rng);
     }
 
     /// Whether a boss is below half health (the Yeti then runs and strikes faster).
@@ -464,6 +540,7 @@ impl Animal {
             AnimalKind::Yeti if self.boss_enraged() => YETI_ATTACK_COOLDOWN * YETI_ENRAGED_COOLDOWN_FACTOR,
             AnimalKind::Yeti => YETI_ATTACK_COOLDOWN,
             AnimalKind::LochNessMonster => LOCH_NESS_ATTACK_COOLDOWN,
+            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_ATTACK_COOLDOWN,
             _ => return false,
         };
         if self.attack_cooldown > 0.0 || !self.within_reach_of(player) {
@@ -523,7 +600,10 @@ impl Animal {
         self.detour_left = (self.detour_left - dt).max(0.0);
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
         self.timer -= dt;
-        let scared = dist < FLEE_DISTANCE || self.alarm > 0.0;
+        self.calm = (self.calm - dt).max(0.0);
+        // A bird that the pipes have called (or are calming) is not frightened by the player, only by a blow.
+        let charmed = self.lure_target.is_some() || self.calm > 0.0;
+        let scared = self.alarm > 0.0 || (dist < FLEE_DISTANCE && !charmed);
         let away = (self.pos.z - threat.z).atan2(self.pos.x - threat.x);
         let towards = away + std::f32::consts::PI;
         let detour = if self.detour_left > 0.0 { self.detour } else { 0.0 };
@@ -540,17 +620,39 @@ impl Animal {
                     self.heading = away + detour;
                 }
             }
-            AnimalKind::Quail => {
+            AnimalKind::Quail | AnimalKind::Crow => {
                 if scared && self.mode != Mode::Fly && self.on_ground {
                     self.mode = Mode::Fly;
                     self.timer = Self::random_time((QUAIL_FLIGHT_MIN, QUAIL_FLIGHT_MAX), rng);
                     self.launch_y = self.pos.y;
-                    self.heading = away;
+                    // A crow always flies west, if it can; otherwise it flies away like a quail.
+                    self.heading = if self.kind == AnimalKind::Crow && self.can_fly_west(world) { std::f32::consts::PI } else { away };
                     dropped = Some(ItemKind::Feather);
+                }
+                if let Some(t) = self.lure_target {
+                    let gap = vec2(t.x - self.pos.x, t.z - self.pos.z).length();
+                    if self.mode != Mode::Fly && self.on_ground {
+                        self.mode = Mode::Fly;
+                        self.timer = 60.0;
+                        self.launch_y = self.pos.y;
+                    }
+                    if self.mode == Mode::Fly {
+                        self.heading = (t.z - self.pos.z).atan2(t.x - self.pos.x);
+                        if gap < 0.6 && self.timer > QUAIL_DESCENT_TIME {
+                            self.timer = QUAIL_DESCENT_TIME;
+                        }
+                        if self.timer <= QUAIL_DESCENT_TIME && self.on_ground {
+                            self.lure_target = None;
+                            self.calm = PIPES_CALM_SECONDS;
+                        }
+                    }
                 }
                 let landing = self.timer <= QUAIL_DESCENT_TIME;
                 if self.mode == Mode::Fly && (self.timer <= 0.0 || (landing && self.on_ground)) {
                     self.rest(rng);
+                    if self.calm > 0.0 {
+                        self.timer = self.calm;
+                    }
                 }
             }
             AnimalKind::Bear => {
@@ -581,6 +683,13 @@ impl Animal {
                     self.rest(rng);
                 }
                 if self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    self.heading = towards + detour;
+                }
+            }
+            AnimalKind::MotherOfQuail => {
+                // She hunts the player wherever they are, for ever.
+                self.mode = Mode::Charge;
+                if flat_gap > 1e-3 {
                     self.heading = towards + detour;
                 }
             }
@@ -620,10 +729,10 @@ impl Animal {
             }
         }
 
-        if self.kind != AnimalKind::WillOWhisp && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
+        if self.kind != AnimalKind::WillOWhisp && self.calm <= 0.0 && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
             if self.mode == Mode::Idle {
                 self.mode = Mode::Wander;
-                let straying = self.kind.is_boss() && vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length() > 12.0;
+                let straying = self.kind.is_leashed() && vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length() > 12.0;
                 self.heading = if straying {
                     self.heading_home()
                 } else if self.kind == AnimalKind::Bear && !self.pacified && dist < BEAR_NOTICE_DISTANCE {
@@ -657,12 +766,18 @@ impl Animal {
             Mode::Idle => 0.0,
             Mode::Wander => self.kind.walk_speed(),
             Mode::Flee => self.kind.run_speed(),
+            // A bird flying to the pipes slows as it comes to the place it is to land at.
+            Mode::Fly if self.lure_target.is_some() => {
+                let t = self.lure_target.unwrap();
+                QUAIL_FLY_SPEED.min(vec2(t.x - self.pos.x, t.z - self.pos.z).length() * 4.0)
+            }
             Mode::Fly => QUAIL_FLY_SPEED,
             // A charging bear stops once it stands against the player, instead of running through them.
             Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH => 0.0,
             Mode::Charge if self.kind == AnimalKind::Moose => MOOSE_RUN_SPEED,
             Mode::Charge if self.kind == AnimalKind::Yeti => YETI_RUN_SPEED * if self.boss_enraged() { YETI_ENRAGED_SPEED_FACTOR } else { 1.0 },
             Mode::Charge if self.kind == AnimalKind::LochNessMonster => LOCH_NESS_RUN_SPEED,
+            Mode::Charge if self.kind == AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_RUN_SPEED,
             Mode::Charge => BEAR_RUN_SPEED,
         };
         if self.kind == AnimalKind::LochNessMonster {
@@ -685,7 +800,12 @@ impl Animal {
         self.vel.x += self.knock.x;
         self.vel.z += self.knock.z;
         self.knock *= (1.0 - KNOCKBACK_DECAY * dt).max(0.0);
-        if self.mode == Mode::Fly {
+        if self.kind == AnimalKind::MotherOfQuail && self.mode == Mode::Charge {
+            // She flies: up to just over the player's head while she is on her way (higher still if something is in the way),
+            // and down to their level once she is beside them.
+            let goal = threat.y + if flat_gap > 3.0 { 2.0 } else { 0.0 } + if self.stuck > 0.0 { 8.0 } else { 0.0 };
+            self.vel.y = ((goal - self.pos.y) * 3.0).clamp(-6.0, 6.0);
+        } else if self.mode == Mode::Fly {
             self.vel.y = if self.timer <= QUAIL_DESCENT_TIME {
                 -QUAIL_DESCENT_SPEED
             } else if self.pos.y < self.launch_y + QUAIL_FLY_HEIGHT {
