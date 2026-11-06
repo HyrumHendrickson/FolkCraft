@@ -21,7 +21,7 @@
 //!   help      - the how-to-play screen      horizen   - the second dimension, behind the well
 //!   game      - a running session (mining, placing, fire, held item, pickup)
 //!   save      - persistence                 tornado   - the Horizen's moving fire tornado
-//!   sky       - the sun and the clouds
+//!   sky       - the sun and the clouds        settings  - the Settings screen (render distance)
 //!   ui        - menu widgets                menu      - world list / create
 //!   play      - in-game loop and rendering
 
@@ -44,12 +44,14 @@ mod item;
 mod landmarks;
 mod menu;
 mod mesh;
+mod mines;
 mod play;
 mod player;
 mod recipe;
 mod river;
 mod rng;
 mod save;
+mod settings;
 mod sky;
 mod terrain;
 mod tornado;
@@ -77,6 +79,7 @@ async fn main() {
             Mode::Worlds => menu::worlds_screen(&mut app),
             Mode::Create => menu::create_screen(&mut app),
             Mode::Help => help::help_screen(&mut app),
+            Mode::Settings => settings::settings_screen(&mut app),
             Mode::Playing => play::play_screen(&mut app),
         }
         next_frame().await;

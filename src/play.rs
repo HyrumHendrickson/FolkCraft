@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail};
+use crate::effects::{draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
 use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
@@ -44,6 +44,15 @@ pub fn play_screen(app: &mut App) {
         return;
     }
 
+    // F2 opens the settings without leaving the game.
+    if is_key_pressed(KeyCode::F2) {
+        if game.inventory_open {
+            set_inventory_open(game, false);
+        }
+        app.open_settings_in_game();
+        return;
+    }
+
     if is_key_pressed(KeyCode::E) {
         let open = !game.inventory_open;
         set_inventory_open(game, open);
@@ -64,7 +73,8 @@ pub fn play_screen(app: &mut App) {
     // With a stone axe or bronze mallet in hand, an animal under the crosshair is attacked rather than whatever
     // stands behind it.
     let melee = if game.inventory_open { None } else { game.melee_target(eye, dir) };
-    handle_attacking(game, eye, dir, melee.is_some(), target.is_some());
+    let rod_strike = if game.inventory_open { None } else { game.holly_rod_strike_point(eye, dir) };
+    handle_attacking(game, eye, dir, melee.is_some(), rod_strike);
     handle_breaking(game, dt, if melee.is_some() { None } else { target });
     handle_placing(game, eye, dir, target);
     game.update_items(dt);
@@ -142,13 +152,13 @@ fn handle_hotbar_selection(game: &mut Game) {
 /// Left click with a bow shoots an arrow along the crosshair, and with a sling a pebble. With any axe or a bronze
 /// mallet, holding the button strikes the animal under the crosshair (`aimed`), once per swing cooldown
 /// (`ItemKind::melee_cooldown`). The rules live in `Game::attack`.
-fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool, hit_something: bool) {
+fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool, rod_strike: Option<Vec3>) {
     if game.inventory_open {
         return;
     }
     let (clicked, held_down) = (is_mouse_button_pressed(MouseButton::Left), is_mouse_button_down(MouseButton::Left));
     if !game.attack(eye, dir, clicked, held_down, aimed) && clicked {
-        game.use_holly_rod_on_target(hit_something);
+        game.use_holly_rod_on_target(rod_strike);
     }
 }
 
@@ -249,7 +259,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     if game.storm_active {
         draw_storm_rain(eye, get_time() as f32);
         if let Some((pos, flash)) = game.storm_lightning() {
-            draw_storm_lightning(pos, get_time() as f32, flash);
+            draw_storm_lightning(eye, pos, get_time() as f32, flash);
         }
     }
     // The rainbow shows only by day, to a peep stone in the hand, and over everything, water included.
@@ -282,6 +292,14 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
         set_default_camera();
         draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 1.0 - scene_brightness));
     }
+    // A strike lights up the whole sky for a moment, after the storm's darkening so that it is not dimmed by it.
+    if let Some((pos, flash)) = game.storm_lightning() {
+        let alpha = lightning_flash_alpha(flash, (pos - eye).length());
+        if alpha > 0.0 {
+            set_default_camera();
+            draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.92, 0.95, 1.0, alpha));
+        }
+    }
     drawn.len()
 }
 
@@ -312,7 +330,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
         10.0, 24.0, 22.0, WHITE,
     );
     draw_text(
-        "WASD move | Mouse look | Space jump | Shift sprint | Left break/attack/shoot | Right place/eat/cook | 1-9/wheel hotbar | E inventory | F1 help | Esc save & exit",
+        "WASD move | Mouse look | Space jump | Shift sprint | Left break/attack/shoot | Right place/eat/cook | 1-9/wheel hotbar | E inventory | F1 help | F2 settings | Esc save & exit",
         10.0, h - 12.0, 18.0, WHITE,
     );
     // Between day and night, or while passing through the well, the whole screen goes black for a moment.

@@ -8,6 +8,7 @@ use crate::arrow::{Arrow, Fate};
 use crate::block::Block;
 use crate::config::*;
 use crate::dropped::{collect_nearby, DroppedItem};
+use crate::effects::rainbow_clear_of_view;
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
@@ -869,6 +870,11 @@ impl Game {
     /// away from the player.
     fn hurt_animals(&mut self, hits: &[(usize, i32)]) {
         let from = self.player.pos;
+        self.hurt_animals_from(hits, from);
+    }
+
+    /// `hurt_animals`, with the survivors thrown back away from `from` (the player for a blow, the strike for lightning).
+    fn hurt_animals_from(&mut self, hits: &[(usize, i32)], from: Vec3) {
         let mut dead = Vec::new();
         for &(i, damage) in hits {
             let animal = &mut self.animals[i];
@@ -1028,13 +1034,10 @@ impl Game {
         }
     }
 
-    /// Whether the pile of gold can lie in the column (x, z): dry, loaded, bare ground with nothing standing on it.
+    /// Whether the pile of gold can lie in the column (x, z): dry, bare ground with nothing standing on it. The chunk
+    /// need not be loaded (the rainbow lies beyond the generated land).
     fn gold_fits_at(&self, x: i32, z: i32) -> bool {
-        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || self.world.is_wet_column(x, z) {
-            return false;
-        }
-        let ground = self.world.ground_top(x, z);
-        self.world.block_at(x, ground, z) == Block::Dirt && self.world.block_at(x, ground + 1, z) == Block::Air
+        self.world.is_bare_dry_ground(x, z)
     }
 
     /// With a peep stone in hand at night, and only if the world has no grand castle yet, bring one into the world:
@@ -1053,26 +1056,32 @@ impl Game {
         true
     }
 
-    /// With a peep stone in hand, and only if the world has never had a rainbow, bring it out: an arc that begins
-    /// beside the player and ends `RAINBOW_GOLD_MIN_DISTANCE` to `RAINBOW_GOLD_MAX_DISTANCE` blocks away on a pile of
-    /// gold. Returns whether the rainbow appeared. If no good spot is found this frame, the next frame tries again.
+    /// With a peep stone in hand, and only if the world has never had a rainbow, bring it out: an arc `RAINBOW_SPAN` blocks
+    /// long that stands wholly beyond the render distance (so nobody sees it appear) and ends on a pile of gold. Returns
+    /// whether the rainbow appeared. If no good spot is found this frame, the next frame tries again.
     pub fn try_show_rainbow(&mut self) -> bool {
         if self.world.landmarks.rainbow != RainbowState::Unseen || self.world.night || self.held_item() != Some(ItemKind::PeepStone) {
             return false;
         }
         let p = self.player.pos;
+        let beyond = rainbow_distance();
         for _ in 0..RAINBOW_SPOT_TRIES {
             let angle = self.rng.unit() * std::f32::consts::TAU;
-            let dist = RAINBOW_GOLD_MIN_DISTANCE + self.rng.unit() * (RAINBOW_GOLD_MAX_DISTANCE - RAINBOW_GOLD_MIN_DISTANCE);
-            let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
+            // Counted along either axis, like the chunks: the gold is `beyond` to `beyond + extra` blocks out that way.
+            let reach = (beyond + self.rng.unit() * RAINBOW_GOLD_EXTRA_DISTANCE) / angle.cos().abs().max(angle.sin().abs());
+            let (x, z) = ((p.x + angle.cos() * reach).floor() as i32, (p.z + angle.sin() * reach).floor() as i32);
             if !self.gold_fits_at(x, z) {
+                continue;
+            }
+            // The arc starts to one side or the other of the gold, and must stay beyond the render distance all along.
+            let sideways = if self.rng.chance(50) { 1.0 } else { -1.0 };
+            let side = (-angle.sin() * sideways, angle.cos() * sideways);
+            let from = ((x as f32 + 0.5 + side.0 * RAINBOW_SPAN).floor() as i32, (z as f32 + 0.5 + side.1 * RAINBOW_SPAN).floor() as i32);
+            if self.world.is_wet_column(from.0, from.1) || !rainbow_clear_of_view((p.x, p.z), from, (x, z)) {
                 continue;
             }
             let y = self.world.ground_top(x, z) + 1;
             self.world.set_block(x, y, z, Block::GoldPile);
-            // The arc starts a few blocks to one side of the player, so it rises beside them.
-            let side = (-angle.sin(), angle.cos());
-            let from = ((p.x + side.0 * RAINBOW_START_OFFSET).floor() as i32, (p.z + side.1 * RAINBOW_START_OFFSET).floor() as i32);
             self.world.set_rainbow(RainbowState::Active(Rainbow { from, gold: (x, y, z) }));
             self.toasts.push("A rainbow appears! Follow it to the gold at its end.".to_string());
             return true;
@@ -1425,9 +1434,43 @@ impl Game {
             + self.rng.unit() * (WHISP_STORM_LIGHTNING_MAX_INTERVAL - WHISP_STORM_LIGHTNING_MIN_INTERVAL)
     }
 
+    /// A bolt strikes `pos`: it is drawn for a moment (`storm_lightning`), and every creature within
+    /// `LIGHTNING_RADIUS` blocks of it is hurt, most at the centre. The player is never hurt.
     fn trigger_storm_lightning(&mut self, pos: Vec3) {
         self.storm_lightning_pos = pos;
         self.storm_lightning_flash = WHISP_STORM_LIGHTNING_FLASH_SECONDS;
+        let hits = self.lightning_hits(pos);
+        self.hurt_animals_from(&hits, pos);
+    }
+
+    /// The creatures a bolt at `pos` hurts, as (index, damage): `LIGHTNING_DAMAGE` at the centre, half of it at the
+    /// edge of `LIGHTNING_RADIUS`, measured from the middle of the creature.
+    fn lightning_hits(&self, pos: Vec3) -> Vec<(usize, i32)> {
+        self.animals
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.kind.is_huntable())
+            .filter_map(|(i, a)| {
+                let middle = a.pos + vec3(0.0, a.kind.height() / 2.0, 0.0);
+                let distance = (middle - pos).length();
+                (distance <= LIGHTNING_RADIUS).then(|| (i, ((LIGHTNING_DAMAGE as f32) * (1.0 - 0.5 * distance / LIGHTNING_RADIUS)).round() as i32))
+            })
+            .collect()
+    }
+
+    /// Where a held Holly Rod would call lightning now: the creature under the crosshair, or else the top of the block
+    /// there, out to `HOLLY_ROD_REACH` blocks (far beyond the ordinary `REACH`). `None` with anything else in hand, or
+    /// when the rod points at nothing.
+    pub fn holly_rod_strike_point(&self, eye: Vec3, dir: Vec3) -> Option<Vec3> {
+        if self.held_item() != Some(ItemKind::HollyRod) {
+            return None;
+        }
+        if let Some(i) = self.animal_along(eye, dir, HOLLY_ROD_REACH) {
+            return Some(self.animals[i].pos);
+        }
+        let hit = self.world.raycast_hit(eye, dir, HOLLY_ROD_REACH)?;
+        let top = hit.block.bounds().map_or(1.0, |(_, hi)| hi[1]);
+        Some(vec3(hit.x as f32 + 0.5, hit.y as f32 + top, hit.z as f32 + 0.5))
     }
 
     fn trigger_distant_storm_lightning(&mut self) {
@@ -1480,11 +1523,12 @@ impl Game {
         }
     }
 
-    /// Call harmless lightning and dismiss one bonded whisp when a Holly Rod hits a block during a storm.
-    /// The rod is not consumed; each successful strike costs one following whisp.
-    pub fn use_holly_rod_on_target(&mut self, hit_something: bool) -> bool {
-        if !hit_something
-            || !self.storm_active
+    /// Call lightning onto `strike` (see `holly_rod_strike_point`) and dismiss one bonded whisp when a Holly Rod is
+    /// used during a storm. The bolt never hurts the player, but it hurts any creature near where it lands. The rod
+    /// is not consumed; each successful strike costs one following whisp.
+    pub fn use_holly_rod_on_target(&mut self, strike: Option<Vec3>) -> bool {
+        let Some(strike_pos) = strike else { return false };
+        if !self.storm_active
             || self.held_item() != Some(ItemKind::HollyRod)
             || self.following_whisp_count() == 0
         {
@@ -1494,7 +1538,6 @@ impl Game {
             return false;
         };
         self.animals.remove(index);
-        let strike_pos = self.player.pos;
         self.trigger_storm_lightning(strike_pos);
         self.storm_lightning_timer = self.next_storm_lightning_delay();
         self.toasts.push("Lightning answers the Holly Rod.".to_string());
@@ -3748,7 +3791,7 @@ mod landmark_tests {
         g.bring_in(TrekEvent::Lake { at, dir: (1.0, 0.0) });
         assert_eq!(g.world.landmarks.lakes.len(), 1);
         let lake = g.world.landmarks.lakes[0];
-        assert!(lake.x as f32 - at.0 >= LAKE_DISTANCE as f32, "beyond the generated land");
+        assert!(lake.x as f32 - at.0 >= lake_distance() as f32, "beyond the generated land");
         // A point in the water between the island and the shore.
         let (wx, wz) = (lake.x + (lake.radius as f32 * 0.55) as i32, lake.z);
         load_column(&mut g, wx, wz);
@@ -3807,7 +3850,7 @@ mod landmark_tests {
         let at = (g.player.pos.x, g.player.pos.z);
         g.bring_in(TrekEvent::Mountain { at, dir: crate::landmarks::compass_direction() });
         let m = g.world.landmarks.mountains[0];
-        assert!(m.z < at.1 as i32 - MOUNTAIN_DISTANCE, "north of the player, beyond the loaded land");
+        assert!(m.z < at.1 as i32 - mountain_distance(), "north of the player, beyond the loaded land");
         assert!(g.toasts.contains("mountain"));
         // Along a line from the far side to the summit the ground climbs, but only in steps of a jump or a ledge.
         let mut last = g.world.ground_top(m.x + m.radius * 2, m.z);
@@ -3861,7 +3904,7 @@ mod landmark_tests {
     }
 
     #[test]
-    fn a_peep_stone_in_hand_shows_one_rainbow_that_ends_in_gold_within_walking_distance() {
+    fn a_peep_stone_in_hand_shows_one_rainbow_that_ends_in_gold_beyond_the_render_distance() {
         let mut g = game(5);
         assert!(!g.try_show_rainbow(), "no peep stone in hand");
         assert_eq!(g.world.landmarks.rainbow, RainbowState::Unseen);
@@ -3871,13 +3914,15 @@ mod landmark_tests {
         assert!(g.try_show_rainbow());
         let rainbow = g.world.active_rainbow().expect("a rainbow");
         let (x, y, z) = rainbow.gold;
+        load_column(&mut g, x, z);
         assert_eq!(g.world.block_at(x, y, z), Block::GoldPile);
         assert_eq!(g.world.block_at(x, y - 1, z), Block::Dirt, "the gold lies on the ground");
         let p = g.player.pos;
-        let away = ((x as f32 + 0.5 - p.x).powi(2) + (z as f32 + 0.5 - p.z).powi(2)).sqrt();
-        assert!(away >= RAINBOW_GOLD_MIN_DISTANCE - 1.5 && away <= RAINBOW_GOLD_MAX_DISTANCE + 1.5, "{away} blocks away");
-        let start = (((rainbow.from.0 as f32 + 0.5) - p.x).powi(2) + ((rainbow.from.1 as f32 + 0.5) - p.z).powi(2)).sqrt();
-        assert!(start < 8.0, "the arc begins beside the player ({start} blocks)");
+        let view = ((render_radius() + 1) * CHUNK_SIZE) as f32;
+        let along_an_axis = |cx: i32, cz: i32| (cx as f32 + 0.5 - p.x).abs().max((cz as f32 + 0.5 - p.z).abs());
+        assert!(along_an_axis(x, z) > view, "the gold is {} blocks out, beyond the {view} that are drawn", along_an_axis(x, z));
+        assert!(along_an_axis(rainbow.from.0, rainbow.from.1) > view, "so is the far end of the arc");
+        assert!(rainbow_clear_of_view((p.x, p.z), rainbow.from, (x, z)), "and every part of the arch between them");
         assert!(g.toasts.contains("rainbow"));
         assert!(!g.try_show_rainbow(), "only one rainbow while the gold is out there");
         // It shows only while the peep stone is in hand.
@@ -3887,11 +3932,30 @@ mod landmark_tests {
     }
 
     #[test]
+    fn the_rainbow_stays_beyond_the_render_distance_whatever_it_is_set_to() {
+        let before = render_radius();
+        for radius in [MIN_RENDER_RADIUS, 6, MAX_RENDER_RADIUS] {
+            set_render_radius(radius);
+            let mut g = game(60 + radius as u64);
+            hold(&mut g, ItemKind::PeepStone);
+            assert!(g.try_show_rainbow(), "radius {radius}");
+            let rainbow = g.world.active_rainbow().unwrap();
+            let p = g.player.pos;
+            let view = ((radius + 1) * CHUNK_SIZE) as f32;
+            let (x, z) = (rainbow.gold.0, rainbow.gold.2);
+            assert!(((x as f32 - p.x).abs().max((z as f32 - p.z).abs())) > view, "radius {radius}: gold inside the view");
+            assert!(rainbow_clear_of_view((p.x, p.z), rainbow.from, (x, z)), "radius {radius}: arch inside the view");
+        }
+        set_render_radius(before);
+    }
+
+    #[test]
     fn taking_the_gold_ends_rainbows_for_the_rest_of_the_game_even_after_saving_and_loading() {
         let mut g = game(6);
         hold(&mut g, ItemKind::PeepStone);
         assert!(g.try_show_rainbow());
         let (x, y, z) = g.world.active_rainbow().unwrap().gold;
+        load_column(&mut g, x, z);
         let drops = g.mine(x, y, z);
         assert_eq!(drops, vec![ItemKind::Gold; RAINBOW_GOLD_DROP as usize]);
         assert_eq!(g.world.block_at(x, y, z), Block::Air);
@@ -3921,6 +3985,7 @@ mod landmark_tests {
         let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
         let mut again = Game::from_save(info, crate::save::parse_save(&text), 9);
         assert_eq!(again.world.active_rainbow(), Some(rainbow));
+        load_column(&mut again, rainbow.gold.0, rainbow.gold.2);
         assert_eq!(again.world.block_at(rainbow.gold.0, rainbow.gold.1, rainbow.gold.2), Block::GoldPile);
         hold(&mut again, ItemKind::PeepStone);
         assert!(!again.try_show_rainbow(), "the same rainbow is still out there");
@@ -3960,8 +4025,8 @@ mod landmark_tests {
         let castle = g.world.landmarks.grand_castle.expect("a castle");
         let p = g.player.pos;
         let nearest = (castle.x as f32 - p.x).abs().max((castle.z as f32 - p.z).abs()) - GRAND_REACH as f32;
-        assert!(nearest >= GRAND_DISTANCE as f32 - 1.5);
-        assert!(nearest >= ((GEN_RADIUS + 1) * CHUNK_SIZE) as f32 - 1.0, "beyond the generated land: {nearest}");
+        assert!(nearest >= grand_distance() as f32 - 1.5);
+        assert!(nearest >= ((gen_radius() + 1) * CHUNK_SIZE) as f32 - 1.0, "beyond the generated land: {nearest}");
         assert!(g.world.landmarks.has_room_for(&castle));
         assert!(!g.try_show_grand_castle(), "only one grand castle");
         // The trail leads from the player to the gate and on to the door of the keep.
@@ -4001,7 +4066,7 @@ mod landmark_tests {
         }
         assert!(g.try_show_grand_castle());
         let castle = g.world.landmarks.grand_castle.unwrap();
-        assert!(castle.x < p.x as i32 + GRAND_DISTANCE / 2, "it went west: {castle:?}");
+        assert!(castle.x < p.x as i32 + grand_distance() / 2, "it went west: {castle:?}");
         assert!(g.world.landmarks.lakes.iter().all(|l| {
             let (x0, z0, x1, z1) = l.bounds(0);
             castle.x + GRAND_REACH < x0 || castle.x - GRAND_REACH > x1 || castle.z + GRAND_REACH < z0 || castle.z - GRAND_REACH > z1
@@ -4015,6 +4080,7 @@ mod landmark_tests {
         assert_eq!(g.trail_path(), None, "no rainbow yet");
         assert!(g.try_show_rainbow());
         let (x, y, z) = g.world.active_rainbow().unwrap().gold;
+        load_column(&mut g, x, z);
         let p = g.player.pos;
         assert_eq!(g.trail_path(), Some(vec![(p.x, p.z), (x as f32 + 0.5, z as f32 + 0.5)]));
         // The gold is taken and the rainbow is gone, but the trail still leads to the place.
@@ -4265,10 +4331,76 @@ mod landmark_tests {
         g.storm_active = true;
         assert_eq!(g.following_whisp_count(), 2);
         g.health = MAX_HEALTH - 1;
-        assert!(g.use_holly_rod_on_target(true));
+        let strike = g.player.pos + vec3(30.0, 0.0, 0.0);
+        assert!(!g.use_holly_rod_on_target(None), "pointing at nothing calls nothing");
+        assert!(g.use_holly_rod_on_target(Some(strike)));
         assert_eq!(g.following_whisp_count(), 1);
         assert_eq!(g.health, MAX_HEALTH - 1, "Holly Rod lightning does not hurt the player");
         assert!(g.toasts.contains("Lightning answers the Holly Rod"));
+        let (pos, flash) = g.storm_lightning().expect("the bolt is out");
+        assert_eq!(pos, strike, "it lands where the rod pointed, not on the player");
+        assert!(flash > 0.0);
+    }
+
+    #[test]
+    fn lightning_hurts_creatures_near_the_strike_most_at_the_centre_and_never_the_player() {
+        let mut g = game(51);
+        g.animals.clear();
+        let strike = g.player.pos + vec3(30.0, 0.0, 0.0);
+        let mut rng = crate::rng::Rng::new(5);
+        let at = |dx: f32| strike + vec3(dx, 0.0, 0.0);
+        g.animals.push(Animal::new(AnimalKind::Deer, at(0.0), &mut rng));
+        g.animals.push(Animal::new(AnimalKind::Bear, at(4.0), &mut rng));
+        g.animals.push(Animal::new(AnimalKind::Rabbit, at(12.0), &mut rng));
+        g.health = MAX_HEALTH - 2;
+        g.trigger_storm_lightning(strike);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::Deer), "the deer at the centre is killed");
+        assert!(g.items.iter().any(|i| i.kind == ItemKind::Venison), "and drops its loot");
+        let bear = g.animals.iter().find(|a| a.kind == AnimalKind::Bear).expect("a bear survives a glancing blow");
+        assert!(bear.health < AnimalKind::Bear.max_health() - 10 && bear.health > 0, "but is badly hurt: {}", bear.health);
+        let rabbit = g.animals.iter().find(|a| a.kind == AnimalKind::Rabbit).expect("the rabbit is out of reach");
+        assert_eq!(rabbit.health, AnimalKind::Rabbit.max_health(), "beyond the radius nothing happens");
+        assert_eq!(g.health, MAX_HEALTH - 2, "the player is never hurt");
+    }
+
+    #[test]
+    fn a_holly_rod_points_far_beyond_ordinary_reach_at_a_creature_or_a_block() {
+        let mut g = game(52);
+        g.world.stream_chunks(g.player.pos);
+        let eye = g.player.eye();
+        // Clear a corridor of trees and rocks, and put a wall of planks forty blocks away, far beyond a hand's reach.
+        for x in 8..46 {
+            for z in 9..18 {
+                for y in GROUND_TOP + 1..GROUND_TOP + 14 {
+                    if g.world.block_at(x, y, z) != Block::Air {
+                        g.world.break_block(x, y, z);
+                    }
+                }
+            }
+        }
+        for z in 9..18 {
+            for y in GROUND_TOP + 1..GROUND_TOP + 7 {
+                g.world.set_block(40, y, z, Block::Planks);
+            }
+        }
+        let dir = (vec3(40.5, GROUND_TOP as f32 + 3.0, 13.5) - eye).normalize();
+        hold(&mut g, ItemKind::Stone);
+        assert!(g.holly_rod_strike_point(eye, dir).is_none(), "only a held Holly Rod points");
+        hold(&mut g, ItemKind::HollyRod);
+        let spot = g.holly_rod_strike_point(eye, dir).expect("the rod reaches the far wall");
+        assert!((spot - eye).length() > 25.0, "{} blocks away", (spot - eye).length());
+        assert!(g.world.raycast_hit(eye, dir, REACH).is_none(), "an ordinary reach would have hit nothing");
+        assert!(HOLLY_ROD_REACH > REACH * 8.0);
+        assert!(g.holly_rod_strike_point(eye, vec3(0.0, 1.0, 0.0)).is_none(), "pointing at the sky hits nothing");
+        // A creature in the line of fire is the target, whatever lies behind it.
+        g.animals.clear();
+        let mut rng = crate::rng::Rng::new(9);
+        let deer_at = vec3(eye.x + 22.0, GROUND_TOP as f32 + 1.0, eye.z);
+        g.animals.push(Animal::new(AnimalKind::Deer, deer_at, &mut rng));
+        let to_deer = (deer_at + vec3(0.0, 0.7, 0.0) - eye).normalize();
+        if let Some(found) = g.holly_rod_strike_point(eye, to_deer) {
+            assert!((found - deer_at).length() < 1.0 || (found - eye).length() < (deer_at - eye).length(), "{found:?}");
+        }
     }
 
     #[test]
@@ -4412,7 +4544,7 @@ mod totem_horizen_and_wear_tests {
         assert!(g.world.landmarks.graveyard.is_none(), "by day only the well");
         let p = g.player.pos;
         let nearest = (well.x as f32 - p.x).abs().max((well.z as f32 - p.z).abs());
-        assert!(nearest >= ((GEN_RADIUS + 1) * CHUNK_SIZE) as f32, "beyond the generated land: {nearest}");
+        assert!(nearest >= ((gen_radius() + 1) * CHUNK_SIZE) as f32, "beyond the generated land: {nearest}");
         assert!(!g.try_show_well_or_graveyard(), "only one well");
         let path = g.trail_path().expect("a trail");
         assert_eq!((path[0], *path.last().unwrap()), ((p.x, p.z), well.centre()));

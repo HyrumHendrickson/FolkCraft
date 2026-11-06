@@ -47,6 +47,7 @@ pub fn cloud_density(seed: i64, cx: i32, cz: i32) -> f32 {
 }
 
 /// Whether the cell (cx, cz) holds cloud.
+#[cfg(test)]
 pub fn is_cloud(seed: i64, cx: i32, cz: i32) -> bool {
     cloud_density(seed, cx, cz) > CLOUD_THRESHOLD
 }
@@ -160,7 +161,7 @@ fn draw_clouds(seed: i64, eye: Vec3, time: f32, storm: bool) {
     let under = CLOUD_THICKNESS * 0.3;
     let top = CLOUD_THICKNESS - under;
     let runs = if storm {
-        storm_cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS)
+        storm_cloud_runs(seed, cx, cz, STORM_CLOUD_RADIUS_CELLS)
     } else {
         cloud_runs(seed, cx, cz, CLOUD_RADIUS_CELLS)
     };
@@ -225,6 +226,26 @@ mod tests {
             }
         }
         assert!(with_neighbour as f32 / seen as f32 > 0.8);
+    }
+
+    #[test]
+    fn a_storm_covers_nearly_the_whole_sky_and_far_more_than_fair_weather_clouds() {
+        for seed in [1, 9, 77] {
+            let (mut fair, mut storm, mut total) = (0, 0, 0);
+            for z in -60..60 {
+                for x in -60..60 {
+                    total += 1;
+                    let d = cloud_density(seed, x, z);
+                    fair += (d > CLOUD_THRESHOLD) as i32;
+                    storm += (d > STORM_CLOUD_THRESHOLD) as i32;
+                }
+            }
+            let (fair, storm) = (fair as f32 / total as f32, storm as f32 / total as f32);
+            assert!(storm > 0.9, "seed {seed}: a storm covers {storm} of the sky");
+            assert!(storm > fair * 2.0, "seed {seed}: {storm} against {fair}");
+        }
+        assert!(STORM_CLOUD_RADIUS_CELLS > CLOUD_RADIUS_CELLS, "storm clouds reach nearer the horizon");
+        assert!(SUN_DISTANCE > CLOUD_CELL * STORM_CLOUD_RADIUS_CELLS as f32, "the sun still lies behind the clouds");
     }
 
     #[test]

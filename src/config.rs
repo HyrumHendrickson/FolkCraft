@@ -1,5 +1,7 @@
 //! Tunable game constants, grouped by the system that consumes them.
 
+use std::sync::atomic::{AtomicI32, Ordering};
+
 // --- World and rendering --------------------------------------------------------------
 
 pub const CHUNK_SIZE: i32 = 20;
@@ -10,10 +12,36 @@ pub const DIRT_LAYERS: i32 = 5;
 /// Y of the highest dirt block; players stand at `GROUND_TOP + 1`.
 pub const GROUND_TOP: i32 = STONE_LAYERS + DIRT_LAYERS - 1;
 
-/// Chunks within this many chunks of the player are rendered.
-pub const RENDER_RADIUS: i32 = 3;
+/// Chunks within this many chunks of the player are rendered. The player picks it in the Settings screen, between
+/// `MIN_RENDER_RADIUS` and `MAX_RENDER_RADIUS`; read it with `render_radius()`.
+pub const MIN_RENDER_RADIUS: i32 = 3;
+pub const MAX_RENDER_RADIUS: i32 = 10;
+pub const DEFAULT_RENDER_RADIUS: i32 = 3;
+
+static RENDER_RADIUS_SETTING: AtomicI32 = AtomicI32::new(DEFAULT_RENDER_RADIUS);
+
+/// The render radius in chunks that is in force now.
+pub fn render_radius() -> i32 {
+    RENDER_RADIUS_SETTING.load(Ordering::Relaxed)
+}
+
+/// Set the render radius, kept between `MIN_RENDER_RADIUS` and `MAX_RENDER_RADIUS`. Returns the value stored.
+pub fn set_render_radius(radius: i32) -> i32 {
+    let radius = radius.clamp(MIN_RENDER_RADIUS, MAX_RENDER_RADIUS);
+    RENDER_RADIUS_SETTING.store(radius, Ordering::Relaxed);
+    radius
+}
+
 /// Chunks are generated one ring beyond the render radius so outer mesh edges cull correctly.
-pub const GEN_RADIUS: i32 = RENDER_RADIUS + 1;
+pub fn gen_radius() -> i32 {
+    render_radius() + 1
+}
+
+/// How far (blocks) from the player a new structure's nearest edge lies: one chunk beyond the generated ring, so
+/// that it appears outside the render distance and is never seen to pop in.
+pub fn structure_distance() -> i32 {
+    (gen_radius() + 1) * CHUNK_SIZE
+}
 /// Chunk meshes rebuilt per frame to keep frame times steady while exploring.
 pub const MESH_BUDGET_PER_FRAME: usize = 2;
 /// Ambient-occlusion brightness for 0..=3 neighboring solid corners.
@@ -106,9 +134,11 @@ pub const LAKE_TREK_CHUNKS: i32 = 8;
 /// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter). The lake
 /// is large: about a hundred blocks from shore to shore each way.
 pub const LAKE_RADIUS: i32 = 130;
-/// Gap in blocks between the player and the near shore of a new lake. It is more than `GEN_RADIUS` chunks, so
-/// the lake appears beyond the edge of the generated land instead of in front of the player.
-pub const LAKE_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
+/// Gap in blocks between the player and the near shore of a new lake: `structure_distance()`, more than the
+/// generated ring, so the lake appears beyond the edge of the generated land instead of in front of the player.
+pub fn lake_distance() -> i32 {
+    structure_distance()
+}
 /// The island in the middle of a lake has this share of the lake's radius (about 58 blocks for a big lake).
 pub const LAKE_ISLAND_SHARE: f32 = 0.45;
 /// The island is a hill: it rises this many blocks above the plain to a flat top, which the small castle stands
@@ -129,8 +159,10 @@ pub const COMPASS_NORTH_BEARING: f32 = -std::f32::consts::FRAC_PI_2;
 pub const MOUNTAIN_RADIUS: i32 = 400;
 /// Blocks the ground is raised at the summit: ten times what it once was (17). Hills are at most `HILL_MAX_HEIGHT`.
 pub const MOUNTAIN_HEIGHT: i32 = 170;
-/// Gap in blocks between the player and the foot of a new mountain (see `LAKE_DISTANCE`).
-pub const MOUNTAIN_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE;
+/// Gap in blocks between the player and the foot of a new mountain (see `lake_distance`).
+pub fn mountain_distance() -> i32 {
+    structure_distance()
+}
 /// A mountain is steeper in parts: its slope is broken by ledges, rings of cliff `MOUNTAIN_LEDGE_HEIGHT` blocks high
 /// (more than a jump clears) that run round it. Each ring has one gap, a ramp, and the gaps of one ring and the next
 /// lie on opposite sides of the mountain, so the climb zigzags and cannot be run straight up. A mountain has one
@@ -174,21 +206,27 @@ pub const GRAND_TREE_MARGIN: i32 = 8;
 pub const GRAND_STOREY: i32 = 5;
 pub const GRAND_STOREYS: i32 = 5;
 /// The grand castle rises this far beyond the generated land (the nearest part is at least this far from the player).
-pub const GRAND_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
+pub fn grand_distance() -> i32 {
+    structure_distance() + 20
+}
 
 /// The bone totem's two landmarks, each of which the world has only once. The well is a square of water `WELL_SIZE`
 /// blocks across, sunk to the stone floor of the world (so `GROUND_TOP - STONE_LAYERS + 1` blocks deep) and ringed by
-/// a one-block rim; the nearest edge of the well is `WELL_DISTANCE` blocks from the player when it appears. The
+/// a one-block rim; the nearest edge of the well is `well_distance()` blocks from the player when it appears. The
 /// graveyard is a walled square (`GRAVEYARD_HALF` blocks from the centre to its wall) of gravestones, with a gate
-/// in its south side, and it appears `GRAVEYARD_DISTANCE` blocks from the player.
+/// in its south side, and it appears `graveyard_distance()` blocks from the player.
 pub const WELL_SIZE: i32 = 4;
 /// The rim round the well: one block high and this many blocks wide.
 pub const WELL_RIM_WIDTH: i32 = 1;
-pub const WELL_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
+pub fn well_distance() -> i32 {
+    structure_distance() + 20
+}
 pub const WELL_TREE_MARGIN: i32 = 6;
 pub const GRAVEYARD_HALF: i32 = 12;
 pub const GRAVEYARD_REACH: i32 = 14;
-pub const GRAVEYARD_DISTANCE: i32 = (GEN_RADIUS + 1) * CHUNK_SIZE + 20;
+pub fn graveyard_distance() -> i32 {
+    structure_distance() + 20
+}
 pub const GRAVEYARD_TREE_MARGIN: i32 = 6;
 /// Gravestones stand this many blocks apart inside the graveyard.
 pub const GRAVEYARD_SPACING: i32 = 3;
@@ -211,12 +249,21 @@ pub const TRAIL_HEIGHT: f32 = 1.1;
 /// stays black while the sky changes, and fades back.
 pub const DAY_NIGHT_BLACKOUT_SECONDS: f32 = 1.0;
 
-/// Holding a peep stone shows a rainbow once. Its gold lies this far from the player (min, max), in blocks.
-pub const RAINBOW_GOLD_MIN_DISTANCE: f32 = 26.0;
-pub const RAINBOW_GOLD_MAX_DISTANCE: f32 = 36.0;
-/// Places tried per frame for the rainbow's gold, and how far to the side of the player its arc begins.
-pub const RAINBOW_SPOT_TRIES: usize = 30;
-pub const RAINBOW_START_OFFSET: f32 = 5.0;
+/// Holding a peep stone shows a rainbow once. The whole rainbow, both ends and every block of the arc, appears
+/// beyond the render distance, so it is never seen to pop in: the gold lies `RAINBOW_DISTANCE_MARGIN` blocks beyond the
+/// farthest chunk that is drawn, plus up to `RAINBOW_GOLD_EXTRA_DISTANCE` more (counted along either axis, as the
+/// chunks are), and the arc's other end stands `RAINBOW_SPAN` blocks from the gold, sideways.
+pub const RAINBOW_DISTANCE_MARGIN: f32 = 12.0;
+pub const RAINBOW_GOLD_EXTRA_DISTANCE: f32 = 24.0;
+pub const RAINBOW_SPAN: f32 = 90.0;
+/// Places tried per frame for the rainbow's gold.
+pub const RAINBOW_SPOT_TRIES: usize = 60;
+
+/// How far (blocks, along either axis from the player) the nearest gold of a new rainbow lies: beyond every chunk that
+/// is drawn, which reaches at most `render_radius() + 1` chunks from the player, plus a margin.
+pub fn rainbow_distance() -> f32 {
+    ((render_radius() + 1) * CHUNK_SIZE) as f32 + RAINBOW_DISTANCE_MARGIN
+}
 /// How high the rainbow's arc rises above the line between its ends, as a share of the span.
 pub const RAINBOW_ARC_RATIO: f32 = 0.45;
 /// Gold in the pile at the end of the rainbow.
@@ -224,6 +271,24 @@ pub const RAINBOW_GOLD_DROP: u32 = 6;
 pub const BREAK_SECONDS_GOLD_PILE: f32 = 1.5;
 /// Taking the royal armour off its stand.
 pub const BREAK_SECONDS_ARMOR: f32 = 1.0;
+
+// --- Mineshafts under the mountain --------------------------------------------------------
+
+/// The mountain is hollow in a network of mineshafts (`mines.rs`): this many entrances at its foot, each leading
+/// down a stair and then along a shaft towards the heart of the mountain.
+pub const MINE_ENTRANCES: usize = 5;
+/// Rings of tunnel that join the shafts, as shares of the distance from the summit to the foot, outermost first.
+pub const MINE_RING_SHARES: [f32; 3] = [0.72, 0.48, 0.26];
+/// A tunnel is this many blocks wide (carved within `MINE_HALF_WIDTH` of its centre line) and this many high.
+pub const MINE_HALF_WIDTH: f32 = 1.6;
+pub const MINE_HEIGHT: i32 = 4;
+/// Solid ground left over the roof of a tunnel under the mountain, in blocks.
+pub const MINE_COVER: i32 = 5;
+/// Rise of a stair or ramp in the shafts per block walked (one block every two blocks: easy to hop up).
+pub const MINE_SLOPE: f32 = 0.5;
+/// Half the width of the chamber at each place a ring crosses a shaft, and its height.
+pub const MINE_ROOM_HALF: i32 = 4;
+pub const MINE_ROOM_HEIGHT: i32 = 5;
 
 // --- The Horizen ------------------------------------------------------------------------
 
@@ -260,10 +325,12 @@ pub const HORIZEN_TORNADO_INTERVAL: f32 = 30.0;
 /// The tornado begins this far from the player and travels toward the position it recorded at spawn.
 pub const HORIZEN_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
 pub const HORIZEN_TORNADO_SPEED: f32 = 7.0;
-/// Angular speed of the tornado's visible fire layers. The tornado was originally drawn at 4 radians per second;
-/// the current value is twice as fast.
-pub const HORIZEN_TORNADO_SPIN_SPEED: f32 = 8.0;
-pub const HORIZEN_TORNADO_CAP_SPIN_SPEED: f32 = 1.4;
+/// Angular speed of the tornado's visible fire layers. The tornado was originally drawn at 4 radians per second,
+/// then at 8; the current value is half as fast again (12). The smoke cap turns 50% faster too.
+pub const HORIZEN_TORNADO_SPIN_SPEED: f32 = 12.0;
+pub const HORIZEN_TORNADO_CAP_SPIN_SPEED: f32 = 2.1;
+/// The tornado is a funnel: this share of the full radius at its foot, widening to the full radius at its top.
+pub const HORIZEN_TORNADO_FOOT_SHARE: f32 = 0.28;
 pub const HORIZEN_TORNADO_RADIUS: f32 = 1.8;
 pub const HORIZEN_TORNADO_HEIGHT: f32 = 6.0;
 pub const HORIZEN_TORNADO_DAMAGE: u32 = 2;
@@ -419,7 +486,18 @@ pub const WHISP_STORM_CLEAR_SECONDS: f32 = 20.0;
 pub const WHISP_STORM_SCENE_BRIGHTNESS: f32 = 0.80;
 pub const WHISP_STORM_LIGHTNING_MIN_INTERVAL: f32 = 4.0;
 pub const WHISP_STORM_LIGHTNING_MAX_INTERVAL: f32 = 11.0;
-pub const WHISP_STORM_LIGHTNING_FLASH_SECONDS: f32 = 0.22;
+pub const WHISP_STORM_LIGHTNING_FLASH_SECONDS: f32 = 0.5;
+/// A Holly Rod calls lightning onto whatever it points at within this many blocks (the ordinary reach is `REACH`).
+pub const HOLLY_ROD_REACH: f32 = 64.0;
+/// Every creature within this many blocks of a lightning strike is hurt: `LIGHTNING_DAMAGE` at the centre, falling
+/// to half of it at the edge. Even a moose or a bear feels it (it is enough to kill a deer, a rabbit or a quail).
+pub const LIGHTNING_RADIUS: f32 = 5.0;
+pub const LIGHTNING_DAMAGE: i32 = 30;
+/// How wide (blocks) the main trunk of a bolt is drawn, and how bright the whole screen flashes at the strike.
+pub const LIGHTNING_BOLT_WIDTH: f32 = 0.34;
+/// A bolt is drawn from at least this far above where it lands, even if the clouds are lower than that.
+pub const LIGHTNING_MIN_HEIGHT: f32 = 24.0;
+pub const LIGHTNING_SCREEN_FLASH: f32 = 0.45;
 pub const WHISP_STORM_LIGHTNING_DISTANCE: f32 = 45.0;
 pub const WHISP_STORM_RAIN_COUNT: usize = 140;
 pub const WHISP_STORM_RAIN_RADIUS: f32 = 18.0;
@@ -496,8 +574,10 @@ pub const CLOUD_HEIGHT: f32 = 62.0;
 pub const CLOUD_THICKNESS: f32 = 4.0;
 pub const CLOUD_RADIUS_CELLS: i32 = 11;
 pub const CLOUD_THRESHOLD: f32 = 0.56;
-/// Storm clouds use the same shape and slab geometry as ordinary clouds, but this lower threshold makes them denser.
-pub const STORM_CLOUD_THRESHOLD: f32 = 0.36;
+/// Storm clouds use the same shape and slab geometry as ordinary clouds, but this much lower threshold makes them
+/// cover nearly the whole sky (ordinary clouds cover about a third of it), out to `STORM_CLOUD_RADIUS_CELLS`.
+pub const STORM_CLOUD_THRESHOLD: f32 = 0.20;
+pub const STORM_CLOUD_RADIUS_CELLS: i32 = 18;
 pub const CLOUD_DRIFT_SPEED: f32 = 0.8;
 pub const CLOUD_NOISE_CELLS: f32 = 4.0;
 pub const STAR_COUNT: u32 = 120;

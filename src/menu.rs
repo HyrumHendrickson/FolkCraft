@@ -71,8 +71,9 @@ pub fn worlds_screen(app: &mut App) {
         text_centered(&app.error, w / 2.0, 146.0, 22, Color::new(0.95, 0.4, 0.4, 1.0));
     }
 
-    let create_rect = Rect::new(w / 2.0 - 290.0, h - 90.0, 360.0, 56.0);
-    let help_rect = Rect::new(w / 2.0 + 90.0, h - 90.0, 200.0, 56.0);
+    let create_rect = Rect::new(w / 2.0 - 360.0, h - 90.0, 300.0, 56.0);
+    let settings_rect = Rect::new(w / 2.0 - 50.0, h - 90.0, 200.0, 56.0);
+    let help_rect = Rect::new(w / 2.0 + 160.0, h - 90.0, 200.0, 56.0);
     if button(create_rect, "Create New World", !modal) {
         app.name.clear();
         app.seed.clear();
@@ -81,6 +82,11 @@ pub fn worlds_screen(app: &mut App) {
         app.field = Field::Name;
         app.mode = Mode::Create;
         while get_char_pressed().is_some() {}
+        return;
+    }
+    if button(settings_rect, "Settings", !modal) {
+        app.error.clear();
+        app.open_settings();
         return;
     }
     if button(help_rect, "Help", !modal) {

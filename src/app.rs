@@ -10,6 +10,7 @@ pub enum Mode {
     Worlds,
     Create,
     Help,
+    Settings,
     Playing,
 }
 
@@ -37,10 +38,15 @@ pub struct App {
     pub help_scroll: f32,
     /// Whether the help was opened from inside a game (F1), so that closing it goes back to that game.
     pub help_from_game: bool,
+    /// Whether the settings were opened from inside a game (F2), so that closing them goes back to that game.
+    pub settings_from_game: bool,
+    /// Whether the render-distance slider is being dragged.
+    pub slider_dragging: bool,
 }
 
 impl App {
     pub fn new() -> Self {
+        crate::settings::load_settings();
         App {
             mode: Mode::Worlds,
             worlds: list_worlds(),
@@ -55,6 +61,8 @@ impl App {
             pending_delete: None,
             help_scroll: 0.0,
             help_from_game: false,
+            settings_from_game: false,
+            slider_dragging: false,
         }
     }
 
@@ -113,6 +121,37 @@ impl App {
             }
         } else {
             self.help_from_game = false;
+            self.mode = Mode::Worlds;
+        }
+    }
+
+    pub fn open_settings(&mut self) {
+        self.settings_from_game = false;
+        self.slider_dragging = false;
+        self.mode = Mode::Settings;
+    }
+
+    /// Open the settings over a running game (F2). The game is paused and the cursor freed until they are closed.
+    pub fn open_settings_in_game(&mut self) {
+        self.settings_from_game = true;
+        self.slider_dragging = false;
+        self.mode = Mode::Settings;
+        set_cursor_grab(false);
+        show_mouse(true);
+    }
+
+    /// Close the settings: back to the game they were opened from, or to the list of worlds.
+    pub fn close_settings(&mut self) {
+        if self.settings_from_game && self.game.is_some() {
+            self.settings_from_game = false;
+            self.mode = Mode::Playing;
+            set_cursor_grab(true);
+            show_mouse(false);
+            if let Some(game) = self.game.as_mut() {
+                game.skip_look_frames = 3;
+            }
+        } else {
+            self.settings_from_game = false;
             self.mode = Mode::Worlds;
         }
     }

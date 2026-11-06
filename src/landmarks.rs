@@ -75,9 +75,9 @@ pub struct Lake {
 
 impl Lake {
     /// A lake in the direction `dir` (a unit vector) from the player's column `at`, its near shore at least
-    /// `LAKE_DISTANCE` blocks away, joined to `at` by a channel.
+    /// `lake_distance()` blocks away, joined to `at` by a channel.
     pub fn ahead(at: (f32, f32), dir: (f32, f32), phase: i32) -> Lake {
-        let gap = LAKE_DISTANCE as f32 + farthest_reach(LAKE_RADIUS);
+        let gap = lake_distance() as f32 + farthest_reach(LAKE_RADIUS);
         Lake {
             x: (at.0 + dir.0 * gap).round() as i32,
             z: (at.1 + dir.1 * gap).round() as i32,
@@ -241,9 +241,9 @@ pub struct Mountain {
 
 impl Mountain {
     /// A mountain in the direction `dir` (a unit vector) from the player's column `at`, its foot at least
-    /// `MOUNTAIN_DISTANCE` blocks away.
+    /// `mountain_distance()` blocks away.
     pub fn ahead(at: (f32, f32), dir: (f32, f32), phase: i32) -> Mountain {
-        let gap = MOUNTAIN_DISTANCE as f32 + farthest_reach(MOUNTAIN_RADIUS);
+        let gap = mountain_distance() as f32 + farthest_reach(MOUNTAIN_RADIUS);
         Mountain {
             x: (at.0 + dir.0 * gap).round() as i32,
             z: (at.1 + dir.1 * gap).round() as i32,
@@ -261,6 +261,11 @@ impl Mountain {
             return dist - farthest_reach(self.radius);
         }
         dist - self.radius as f32 * lobes(self.phase, dz.atan2(dx))
+    }
+
+    /// How far from the centre the foot of the mountain lies in the direction `angle` (radians).
+    pub fn foot_at(&self, angle: f32) -> f32 {
+        self.radius as f32 * lobes(self.phase, angle)
     }
 
     /// How many ledges (rings of cliff) break the mountain's slope.
@@ -357,11 +362,11 @@ impl GrandCastle {
         (self.x as f32 + 0.5, (self.z + GRAND_KEEP_HALF + 2) as f32 + 0.5)
     }
 
-    /// A castle whose nearest edge is `GRAND_DISTANCE` blocks from `at` (counting along either axis, as the chunks
+    /// A castle whose nearest edge is `grand_distance()` blocks from `at` (counting along either axis, as the chunks
     /// do), in the direction `angle`: beyond the land that is already made.
     pub fn ahead(at: (f32, f32), angle: f32) -> GrandCastle {
         let (c, s) = (angle.cos(), angle.sin());
-        let gap = (GRAND_DISTANCE + GRAND_REACH) as f32 / c.abs().max(s.abs());
+        let gap = (grand_distance() + GRAND_REACH) as f32 / c.abs().max(s.abs());
         GrandCastle { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
     }
 }
@@ -627,11 +632,11 @@ impl Well {
         (self.x as f32 + WELL_SIZE as f32 / 2.0, self.z as f32 + WELL_SIZE as f32 / 2.0)
     }
 
-    /// A well whose nearest edge is `WELL_DISTANCE` blocks from `at` (counting along either axis, as the chunks do),
+    /// A well whose nearest edge is `well_distance()` blocks from `at` (counting along either axis, as the chunks do),
     /// in the direction `angle`: beyond the land that is already made.
     pub fn ahead(at: (f32, f32), angle: f32) -> Well {
         let (c, s) = (angle.cos(), angle.sin());
-        let gap = (WELL_DISTANCE + WELL_SIZE) as f32 / c.abs().max(s.abs());
+        let gap = (well_distance() + WELL_SIZE) as f32 / c.abs().max(s.abs());
         Well { x: (at.0 + c * gap).round() as i32 - WELL_SIZE / 2, z: (at.1 + s * gap).round() as i32 - WELL_SIZE / 2 }
     }
 }
@@ -683,11 +688,11 @@ impl Graveyard {
         (self.x as f32 + 0.5, self.z as f32 + 0.5)
     }
 
-    /// A graveyard whose nearest edge is `GRAVEYARD_DISTANCE` blocks from `at` (counting along either axis), in the
+    /// A graveyard whose nearest edge is `graveyard_distance()` blocks from `at` (counting along either axis), in the
     /// direction `angle`.
     pub fn ahead(at: (f32, f32), angle: f32) -> Graveyard {
         let (c, s) = (angle.cos(), angle.sin());
-        let gap = (GRAVEYARD_DISTANCE + GRAVEYARD_REACH) as f32 / c.abs().max(s.abs());
+        let gap = (graveyard_distance() + GRAVEYARD_REACH) as f32 / c.abs().max(s.abs());
         Graveyard { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
     }
 }
@@ -1013,11 +1018,11 @@ mod tests {
         assert!(l.contains(10, 10), "the channel starts in the river the player stood in");
         assert!(l.contains((10 + l.x - l.radius) / 2, 10), "and runs straight to the lake");
         assert!(!l.contains(l.x, l.z + LAKE_RADIUS * 2) && !l.contains(l.x, l.z - LAKE_RADIUS * 2));
-        // The near shore, off the channel, is at least LAKE_DISTANCE blocks from the player.
+        // The near shore, off the channel, is at least lake_distance() blocks from the player.
         let reach = farthest_reach(LAKE_RADIUS) as i32;
         let near = (-reach..=reach).step_by(2).flat_map(|dz| (-reach..=reach).step_by(2).map(move |dx| (l.x + dx, l.z + dz))).filter(|&(x, z)| l.contains(x, z) && (z - 10).abs() > 4);
         for (x, z) in near {
-            assert!((((x - 10) as f32).hypot((z - 10) as f32)) >= LAKE_DISTANCE as f32 - 1.0, "water at {x},{z} is too close");
+            assert!((((x - 10) as f32).hypot((z - 10) as f32)) >= lake_distance() as f32 - 1.0, "water at {x},{z} is too close");
         }
     }
 
@@ -1478,10 +1483,10 @@ mod tests {
     #[test]
     fn a_new_mountain_lies_north_of_the_player_beyond_the_generated_land() {
         let m = Mountain::ahead((100.0, 500.0), compass_direction(), 4);
-        assert!((m.x - 100).abs() <= 1 && m.z < 500 - MOUNTAIN_DISTANCE, "north is smaller z: {m:?}");
+        assert!((m.x - 100).abs() <= 1 && m.z < 500 - mountain_distance(), "north is smaller z: {m:?}");
         assert_eq!(m.height, MOUNTAIN_HEIGHT);
         let nearest = (-reach_of(&m)..=reach_of(&m)).flat_map(|dz| (-reach_of(&m)..=reach_of(&m)).map(move |dx| (m.x + dx, m.z + dz))).filter(|&(x, z)| m.rise_at(x, z) > 0).map(|(x, z)| ((x - 100) as f32).hypot((z - 500) as f32)).fold(f32::MAX, f32::min);
-        assert!(nearest >= MOUNTAIN_DISTANCE as f32 - 1.0, "the foot is {nearest} away");
+        assert!(nearest >= mountain_distance() as f32 - 1.0, "the foot is {nearest} away");
     }
 
     fn reach_of(m: &Mountain) -> i32 {

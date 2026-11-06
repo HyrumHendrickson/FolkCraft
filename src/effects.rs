@@ -6,6 +6,7 @@ use crate::block::Block;
 use crate::config::*;
 use crate::dropped::draw_box;
 use crate::landmarks::Rainbow;
+use crate::rng::hash3;
 use crate::tornado::FireTornado;
 use crate::world::{in_render_range, World};
 
@@ -102,6 +103,12 @@ pub fn draw_pots(world: &World, player_chunk: (i32, i32)) {
     }
 }
 
+/// How wide a layer of the fire tornado is, as a share of `HORIZEN_TORNADO_RADIUS`, at height share `t` (0 at the
+/// ground, 1 at the top): a funnel that is narrowest at its foot and widest at its top.
+pub fn tornado_radius_share(t: f32) -> f32 {
+    HORIZEN_TORNADO_FOOT_SHARE + (1.0 - HORIZEN_TORNADO_FOOT_SHARE) * t.clamp(0.0, 1.0)
+}
+
 /// Draw the active Horizen hazard as a tall, layered spiral of fire. The simulation keeps only one tornado alive;
 /// once it reaches its recorded target these layers continue to whirl in place until the next spawn.
 pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i32)) {
@@ -110,7 +117,8 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     }
     for layer in 0..9 {
         let t = layer as f32 / 8.0;
-        let radius = HORIZEN_TORNADO_RADIUS * (1.0 - 0.72 * t);
+        // A funnel: narrow at the foot, wide at the top.
+        let radius = HORIZEN_TORNADO_RADIUS * tornado_radius_share(t);
         let angle = time * HORIZEN_TORNADO_SPIN_SPEED + layer as f32 * 1.35;
         let centre = tornado.pos
             + vec3(angle.cos() * radius * 0.48, t * HORIZEN_TORNADO_HEIGHT + 0.35, angle.sin() * radius * 0.48);
@@ -132,7 +140,7 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     // A dark, translucent cap makes the top read as smoke rather than a stack of unrelated boxes.
     draw_box(
         tornado.pos + vec3(0.0, HORIZEN_TORNADO_HEIGHT + 0.35, 0.0),
-        vec3(HORIZEN_TORNADO_RADIUS * 0.42, 0.32, HORIZEN_TORNADO_RADIUS * 0.42),
+        vec3(HORIZEN_TORNADO_RADIUS * 0.8, 0.32, HORIZEN_TORNADO_RADIUS * 0.8),
         time * HORIZEN_TORNADO_CAP_SPIN_SPEED,
         Color::new(0.16, 0.10, 0.07, 0.42),
     );
@@ -152,22 +160,102 @@ pub fn draw_storm_rain(eye: Vec3, time: f32) {
     }
 }
 
-/// Draw a brief distant lightning bolt. `base` is the ground position where the strike lands and `flash` is the
-/// remaining flash time, which makes the bolt disappear automatically after the strike.
-pub fn draw_storm_lightning(base: Vec3, time: f32, flash: f32) {
+/// A straight, square-sectioned beam of half-width `half` from `a` to `b`, lit all round and drawn from every side.
+/// Unlike `draw_line_3d` (always one pixel wide) it has real thickness, so a lightning bolt can be seen.
+fn draw_beam(a: Vec3, b: Vec3, half: f32, color: Color) {
+    let along = (b - a).normalize_or_zero();
+    if along == Vec3::ZERO {
+        return;
+    }
+    let helper = if along.y.abs() > 0.95 { Vec3::X } else { Vec3::Y };
+    let p1 = along.cross(helper).normalize() * half;
+    let p2 = along.cross(p1).normalize() * half;
+    let corners = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)];
+    let mut vertices = Vec::with_capacity(8);
+    for end in [a, b] {
+        for (u, v) in corners {
+            let p = end + p1 * u + p2 * v;
+            vertices.push(Vertex::new(p.x, p.y, p.z, 0.0, 0.0, color));
+        }
+    }
+    let mut indices: Vec<u16> = Vec::with_capacity(48);
+    for i in 0..4u16 {
+        let j = (i + 1) % 4;
+        let (a0, a1, b0, b1) = (i, j, i + 4, j + 4);
+        // Both windings, so neither side is culled.
+        indices.extend_from_slice(&[a0, a1, b1, a0, b1, b0, b1, a1, a0, b0, b1, a0]);
+    }
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+}
+
+/// The jagged line of a lightning bolt that lands at `base`, from the underside of the clouds (or at least `LIGHTNING_MIN_HEIGHT`
+/// above the ground) down to the strike, as points from the top to `base`. It wanders sideways between its ends and is a pure
+/// function of where it lands, so it keeps its shape for as long as it is drawn.
+pub fn bolt_points(base: Vec3) -> Vec<Vec3> {
+    let top_y = CLOUD_HEIGHT.max(base.y + LIGHTNING_MIN_HEIGHT);
+    let segments = (((top_y - base.y) / 3.0).ceil() as usize).clamp(8, 48);
+    let (bx, bz) = (base.x.floor() as i32, base.z.floor() as i32);
+    let wobble = |i: usize, salt: i32| (hash3(0x1B07, bx, bz, i as i32 * 4 + salt) % 2001) as f32 / 1000.0 - 1.0;
+    (0..=segments)
+        .map(|i| {
+            let t = i as f32 / segments as f32;
+            let swing = (t * std::f32::consts::PI).sin() * 3.2;
+            vec3(base.x + wobble(i, 0) * swing, top_y + (base.y - top_y) * t, base.z + wobble(i, 1) * swing)
+        })
+        .collect()
+}
+
+/// A short side branch that leaves the bolt at `from` and forks down and away, as points.
+fn bolt_branch(from: Vec3, salt: i32) -> Vec<Vec3> {
+    let (fx, fz) = (from.x.floor() as i32, from.z.floor() as i32);
+    let angle = (hash3(0x1B08, fx, fz, salt) % 6283) as f32 / 1000.0;
+    let mut point = from;
+    let mut points = vec![point];
+    for k in 0..5 {
+        let drift = 1.8 + (hash3(0x1B09, fx, fz, salt * 8 + k) % 100) as f32 / 100.0;
+        let bend = angle + (k as f32) * 0.5;
+        point += vec3(bend.cos() * drift, -3.0, bend.sin() * drift);
+        points.push(point);
+    }
+    points
+}
+
+/// How strongly the whole screen flashes white while a bolt is out: 0 to `LIGHTNING_SCREEN_FLASH`, dying away as the
+/// flash ends and fainter the farther the strike is (`distance` blocks from the player).
+pub fn lightning_flash_alpha(flash: f32, distance: f32) -> f32 {
+    let left = (flash / WHISP_STORM_LIGHTNING_FLASH_SECONDS).clamp(0.0, 1.0);
+    let near = (1.0 - distance / 120.0).clamp(0.3, 1.0);
+    left * left * LIGHTNING_SCREEN_FLASH * near
+}
+
+/// Draw a lightning bolt that lands at `base` while its `flash` (seconds left) lasts, seen from `eye`: a thick white core
+/// inside a blue glow, jagged, with a few forks, running from the clouds to the ground, and a bright burst where it lands.
+/// The bolt is thicker the farther it is, so a distant strike is as easy to see. Call while the 3D camera is active.
+pub fn draw_storm_lightning(eye: Vec3, base: Vec3, time: f32, flash: f32) {
     if flash <= 0.0 {
         return;
     }
-    let top = base + vec3(0.0, 24.0, 0.0);
-    let mut previous = top;
-    let brightness = (flash / WHISP_STORM_LIGHTNING_FLASH_SECONDS).clamp(0.0, 1.0);
-    for i in 1..=7 {
-        let t = i as f32 / 7.0;
-        let sway = (time * 17.0 + i as f32 * 4.7).sin() * (0.7 + t * 0.7);
-        let next = base + vec3(sway, 24.0 * (1.0 - t), (time * 13.0 + i as f32 * 2.9).cos() * 0.5);
-        draw_line_3d(previous, next, Color::new(0.82, 0.92, 1.0, 0.92 * brightness));
-        previous = next;
+    let left = (flash / WHISP_STORM_LIGHTNING_FLASH_SECONDS).clamp(0.0, 1.0);
+    // The bolt flickers, as real ones do, but never goes out until the flash is over.
+    let flicker = if (time * 45.0).sin() > -0.4 { 1.0 } else { 0.6 };
+    let alpha = (0.45 + 0.55 * left) * flicker;
+    let scale = 1.0 + (base - eye).length() / 35.0;
+    let core = LIGHTNING_BOLT_WIDTH * 0.5 * scale;
+    let points = bolt_points(base);
+    let draw_path = |path: &[Vec3], width: f32, strength: f32| {
+        for pair in path.windows(2) {
+            draw_beam(pair[0], pair[1], width * 3.2, Color::new(0.55, 0.70, 1.0, alpha * 0.30 * strength));
+            draw_beam(pair[0], pair[1], width, Color::new(1.0, 1.0, 1.0, (alpha * strength).min(1.0)));
+        }
+    };
+    draw_path(&points, core, 1.0);
+    for (k, share) in [0.3_f32, 0.5, 0.7].iter().enumerate() {
+        let from = points[((points.len() - 1) as f32 * share) as usize];
+        draw_path(&bolt_branch(from, k as i32), core * 0.55, 0.8);
     }
+    // Where it lands: a flat burst of light on the ground.
+    let burst = 0.8 + LIGHTNING_RADIUS * 0.3 * (1.0 - left);
+    draw_box(base + vec3(0.0, 0.15, 0.0), vec3(burst, 0.15, burst), 0.0, Color::new(1.0, 1.0, 0.85, 0.55 * left));
 }
 
 /// The colours of the rainbow, outermost first.
@@ -199,32 +287,81 @@ pub struct RainbowBlock {
     pub band: usize,
 }
 
+/// The blocks the rainbow from `from` to `to` is built of over level ground (each end at its own height). See
+/// `rainbow_blocks_on`.
+#[cfg(test)]
+pub fn rainbow_blocks(from: Vec3, to: Vec3) -> Vec<RainbowBlock> {
+    let flat = |x: i32, z: i32| {
+        let (dx, dz) = (x as f32 + 0.5 - from.x, z as f32 + 0.5 - from.z);
+        let (ex, ez) = (x as f32 + 0.5 - to.x, z as f32 + 0.5 - to.z);
+        (if dx * dx + dz * dz <= ex * ex + ez * ez { from.y } else { to.y }).floor() as i32
+    };
+    rainbow_blocks_on(from, to, &flat)
+}
+
 /// The blocks the rainbow from `from` to `to` is built of: the arc is lifted into a stack of seven bands, red on the
 /// outside and violet on the inside, one block thick each, and every band is the cells that its curve passes through.
 /// A cell is in one band only (the outer band wins where two overlap), and a rainbow with both ends in one column
-/// does not break. Plain geometry; `draw_rainbow` puts it on the screen.
-pub fn rainbow_blocks(from: Vec3, to: Vec3) -> Vec<RainbowBlock> {
+/// does not break. `ground(x, z)` is the lowest cell above the ground in a column. Where the arch meets the ground its
+/// inner bands would sink into the land and its outer bands would hang in the air, hiding some colours, so a cell
+/// under the ground is left out and the first and last cell of every band are carried straight down to the ground:
+/// all seven colours stand on the ground at each end. Plain geometry; `draw_rainbow` puts it on the screen.
+pub fn rainbow_blocks_on(from: Vec3, to: Vec3, ground: &dyn Fn(i32, i32) -> i32) -> Vec<RainbowBlock> {
     let chord = vec3(to.x - from.x, 0.0, to.z - from.z);
     // Horizontal, across the arc: the arc lies in the vertical plane through its ends.
     let across = Vec3::Y.cross(chord).try_normalize().unwrap_or(Vec3::X);
+    // Fine enough that no block is skipped, however long the arch (a long one is several blocks per sample otherwise).
+    let samples = (((to - from).length() * 3.0).ceil() as usize).max(RAINBOW_SAMPLES);
     let mut taken: std::collections::HashSet<(i32, i32, i32)> = std::collections::HashSet::new();
     let mut blocks = Vec::new();
     for band in 0..RAINBOW_COLORS.len() {
         let inward = band as i32 - (RAINBOW_BAND_BLOCKS - 1) / 2;
-        for i in 0..=RAINBOW_SAMPLES {
-            let t = i as f32 / RAINBOW_SAMPLES as f32;
+        let mut ends: [Option<(i32, i32, i32)>; 2] = [None, None];
+        for i in 0..=samples {
+            let t = i as f32 / samples as f32;
             let step = 1e-3;
             let tangent = (rainbow_point(from, to, (t + step).min(1.0)) - rainbow_point(from, to, (t - step).max(0.0))).normalize_or_zero();
             let outwards = tangent.cross(across).normalize_or_zero();
             // The band lies `inward` blocks towards the middle of the curve from the line of the arc.
             let spot = rainbow_point(from, to, t) - outwards * inward as f32;
             let cell = (spot.x.floor() as i32, spot.y.floor() as i32, spot.z.floor() as i32);
+            if cell.1 < ground(cell.0, cell.2) {
+                continue; // buried in the land
+            }
+            ends[0].get_or_insert(cell);
+            ends[1] = Some(cell);
             if taken.insert(cell) {
                 blocks.push(RainbowBlock { cell, band });
             }
         }
+        for (x, y, z) in ends.into_iter().flatten() {
+            for below in ground(x, z)..y {
+                if taken.insert((x, below, z)) {
+                    blocks.push(RainbowBlock { cell: (x, below, z), band });
+                }
+            }
+        }
     }
     blocks
+}
+
+/// Whether the whole arch from the column `from` to the column `gold` lies beyond the render distance of a player at
+/// `player` (x, z): every point along it, with the width of its bands, is farther than any drawn chunk, counting
+/// along either axis as the chunks are.
+pub fn rainbow_clear_of_view(player: (f32, f32), from: (i32, i32), gold: (i32, i32)) -> bool {
+    let end = |c: (i32, i32)| vec3(c.0 as f32 + 0.5, 0.0, c.1 as f32 + 0.5);
+    let (a, b) = (end(from), end(gold));
+    let seen = ((render_radius() + 1) * CHUNK_SIZE) as f32 + RAINBOW_BAND_BLOCKS as f32;
+    (0..=64).all(|i| {
+        let p = rainbow_point(a, b, i as f32 / 64.0);
+        (p.x - player.0).abs().max((p.z - player.1).abs()) > seen
+    })
+}
+
+thread_local! {
+    /// The blocks of the rainbow last drawn, kept while it stays the same: working them out samples the terrain
+    /// hundreds of times, which is too much to do every frame.
+    static RAINBOW_CACHE: std::cell::RefCell<Option<(Rainbow, std::rc::Rc<Vec<RainbowBlock>>)>> = std::cell::RefCell::new(None);
 }
 
 /// Draw the rainbow, a translucent shimmering arch of blocks from beside the player to the pile of gold. Faces
@@ -235,7 +372,17 @@ pub fn draw_rainbow(world: &World, rainbow: &Rainbow, time: f32) {
     let from = vec3(rainbow.from.0 as f32 + 0.5, ground(rainbow.from.0, rainbow.from.1), rainbow.from.1 as f32 + 0.5);
     let (gx, gy, gz) = rainbow.gold;
     let to = vec3(gx as f32 + 0.5, gy as f32 + 0.3, gz as f32 + 0.5);
-    let blocks = rainbow_blocks(from, to);
+    let blocks = RAINBOW_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((cached, blocks)) = cache.as_ref() {
+            if cached == rainbow {
+                return blocks.clone();
+            }
+        }
+        let blocks = std::rc::Rc::new(rainbow_blocks_on(from, to, &|x, z| world.ground_top(x, z) + 1));
+        *cache = Some((*rainbow, blocks.clone()));
+        blocks
+    });
     // Keep the band owning each cell. The old renderer culled a face whenever *any* rainbow block touched it,
     // which enclosed middle colours behind neighbouring bands. Faces between different bands are part of the
     // rainbow's visible colour separation and must remain, especially when the camera is close to the arch.
@@ -256,7 +403,7 @@ pub fn draw_rainbow(world: &World, rainbow: &Rainbow, time: f32) {
             draw_mesh(&Mesh { vertices: std::mem::take(vertices), indices: std::mem::take(indices), texture: None });
         }
     };
-    for block in &blocks {
+    for block in blocks.iter() {
         let (r, g, b) = RAINBOW_COLORS[block.band];
         let alpha = 0.78 + 0.12 * (time * 1.7 + block.band as f32 * 0.6).sin();
         let (cx, cy, cz) = block.cell;
@@ -358,6 +505,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_fire_tornado_is_a_funnel_wide_at_the_top_and_spins_half_again_as_fast() {
+        assert!(tornado_radius_share(0.0) < tornado_radius_share(0.5) && tornado_radius_share(0.5) < tornado_radius_share(1.0));
+        assert!((tornado_radius_share(0.0) - HORIZEN_TORNADO_FOOT_SHARE).abs() < 1e-6, "narrow at the foot");
+        assert!((tornado_radius_share(1.0) - 1.0).abs() < 1e-6, "full width at the top");
+        assert!((HORIZEN_TORNADO_SPIN_SPEED - 8.0 * 1.5).abs() < 1e-6, "50% faster than the 8 radians per second it had");
+        assert!((HORIZEN_TORNADO_CAP_SPIN_SPEED - 1.4 * 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_lightning_bolt_runs_from_the_clouds_to_the_strike_and_keeps_its_shape() {
+        let base = vec3(10.5, 7.0, -20.5);
+        let points = bolt_points(base);
+        assert_eq!(points, bolt_points(base), "the same strike always has the same shape");
+        assert!(points.len() >= 9);
+        let (first, last) = (points[0], *points.last().unwrap());
+        assert!(first.y >= CLOUD_HEIGHT, "it starts in the clouds: {}", first.y);
+        assert_eq!(last, base, "and ends exactly where it lands");
+        assert!(points.windows(2).all(|w| w[1].y < w[0].y), "always downwards");
+        assert!(points.iter().any(|p| (p.x - base.x).abs() > 0.3 || (p.z - base.z).abs() > 0.3), "jagged, not straight");
+        assert!(points.iter().all(|p| (p.x - base.x).abs() < 4.0 && (p.z - base.z).abs() < 4.0), "but it stays near the strike");
+        // A strike on a mountainside above the clouds still has a long bolt to be seen.
+        let high = bolt_points(vec3(0.5, 150.0, 0.5));
+        assert!(high[0].y >= 150.0 + LIGHTNING_MIN_HEIGHT);
+    }
+
+    #[test]
+    fn the_whole_screen_flashes_at_a_strike_and_fades_with_it_and_with_distance() {
+        let full = lightning_flash_alpha(WHISP_STORM_LIGHTNING_FLASH_SECONDS, 0.0);
+        assert!((full - LIGHTNING_SCREEN_FLASH).abs() < 1e-6);
+        assert!(lightning_flash_alpha(WHISP_STORM_LIGHTNING_FLASH_SECONDS / 2.0, 0.0) < full);
+        assert_eq!(lightning_flash_alpha(0.0, 0.0), 0.0, "nothing once it is over");
+        assert!(lightning_flash_alpha(WHISP_STORM_LIGHTNING_FLASH_SECONDS, 90.0) < full, "a far strike is fainter");
+        assert!(lightning_flash_alpha(WHISP_STORM_LIGHTNING_FLASH_SECONDS, 90.0) > 0.0, "but still seen");
+        assert!(WHISP_STORM_LIGHTNING_FLASH_SECONDS >= 0.4, "long enough to notice");
+    }
+
+    #[test]
     fn the_arc_runs_from_one_end_to_the_other_and_rises_in_between() {
         let (from, to) = (vec3(0.0, 6.0, 0.0), vec3(30.0, 7.0, 10.0));
         assert!((rainbow_point(from, to, 0.0) - from).length() < 1e-4 && (rainbow_point(from, to, 1.0) - to).length() < 1e-4);
@@ -393,6 +577,67 @@ mod tests {
         // The red band is on the outside, the violet on the inside.
         let band_top = |band: usize| crown.iter().filter(|b| b.band == band).map(|b| b.cell.1).max();
         assert!(band_top(0) > band_top(6), "red above violet: {:?} {:?}", band_top(0), band_top(6));
+    }
+
+    #[test]
+    fn all_seven_colours_stand_on_the_ground_at_both_ends_of_the_arch() {
+        for (from, to) in [
+            (vec3(0.0, 6.0, 0.0), vec3(30.0, 6.0, 0.0)),
+            (vec3(0.0, 6.0, 0.0), vec3(90.0, 6.0, 40.0)),
+            (vec3(5.0, 8.0, 5.0), vec3(-70.0, 5.0, 60.0)),
+        ] {
+            let blocks = rainbow_blocks(from, to);
+            for band in 0..RAINBOW_COLORS.len() {
+                for end in [from, to] {
+                    let near: Vec<_> = blocks
+                        .iter()
+                        .filter(|b| b.band == band)
+                        .filter(|b| ((b.cell.0 as f32 + 0.5 - end.x).powi(2) + (b.cell.2 as f32 + 0.5 - end.z).powi(2)).sqrt() < 7.0)
+                        .collect();
+                    assert!(!near.is_empty(), "band {band} is missing at the end {end:?}");
+                    let lowest = near.iter().map(|b| b.cell.1).min().unwrap();
+                    assert_eq!(lowest, end.y.floor() as i32, "band {band} does not reach the ground at {end:?}");
+                    // And it is a column or a slope, not a stray block: it joins up with the rest of its band.
+                    assert!(near.len() >= 2, "band {band} at {end:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_rainbow_over_rising_ground_is_never_buried_and_still_reaches_the_ground() {
+        let (from, to) = (vec3(0.5, 6.0, 0.5), vec3(60.5, 6.0, 0.5));
+        // Ground that climbs a block every four columns on the first stretch, like a hill at the start of the arch.
+        let ground = |x: i32, _z: i32| 6 + (x.clamp(0, 20) / 4);
+        let blocks = rainbow_blocks_on(from, to, &ground);
+        assert!(blocks.iter().all(|b| b.cell.1 >= ground(b.cell.0, b.cell.2)), "no block is under the ground");
+        for band in 0..RAINBOW_COLORS.len() {
+            assert!(blocks.iter().filter(|b| b.band == band).count() > 15, "band {band} shows");
+            let of_band = || blocks.iter().filter(|b| b.band == band);
+            let first_x = of_band().map(|b| b.cell.0).min().unwrap();
+            let lowest = of_band().filter(|b| b.cell.0 == first_x).map(|b| b.cell.1).min().unwrap();
+            assert_eq!(lowest, ground(first_x, 0), "band {band} stands on the ground at the start");
+        }
+    }
+
+    #[test]
+    fn a_long_rainbow_has_no_gaps_in_its_bands() {
+        let (from, to) = (vec3(0.0, 6.0, 0.0), vec3(150.0, 6.0, 60.0));
+        let blocks = rainbow_blocks(from, to);
+        let cells: std::collections::HashSet<_> = blocks.iter().map(|b| b.cell).collect();
+        for b in &blocks {
+            let joined = (-1..=1).any(|dx| (-1..=1).any(|dy| (-1..=1).any(|dz| (dx, dy, dz) != (0, 0, 0) && cells.contains(&(b.cell.0 + dx, b.cell.1 + dy, b.cell.2 + dz)))));
+            assert!(joined, "{b:?} stands alone: the arch has a gap");
+        }
+    }
+
+    #[test]
+    fn an_arch_beyond_the_render_distance_is_clear_of_view_and_one_across_the_player_is_not() {
+        let view = ((render_radius() + 1) * CHUNK_SIZE) as f32;
+        let far = view as i32 + 40;
+        assert!(rainbow_clear_of_view((0.0, 0.0), (far, 0), (far, 90)));
+        assert!(!rainbow_clear_of_view((0.0, 0.0), (far, 0), (-far, 0)), "the middle of this arch passes over the player");
+        assert!(!rainbow_clear_of_view((0.0, 0.0), (far, 0), (view as i32 - 20, 90)), "an end inside the view");
     }
 
     #[test]

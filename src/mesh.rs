@@ -329,7 +329,7 @@ mod tests {
         w.stream_chunks(pos);
         let centre = World::chunk_of_pos(pos);
         let pending = |w: &World| w.chunks.iter().filter(|(k, c)| c.dirty && in_render_range(centre, **k)).count();
-        let render_side = (2 * RENDER_RADIUS + 1) as usize;
+        let render_side = (2 * render_radius() + 1) as usize;
         assert_eq!(pending(&w), render_side * render_side);
         w.rebuild_dirty(pos, 2);
         assert_eq!(pending(&w), render_side * render_side - 2);

@@ -316,6 +316,18 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
         }
     }
 
+    // The mineshafts under the mountain are dug out of the dirt now, before anything is planted over them.
+    let mut mined = vec![false; (CHUNK_SIZE * CHUNK_SIZE) as usize];
+    for mountain in landmarks.mountains.iter().filter(|m| {
+        let (bx0, bz0, bx1, bz1) = m.bounds(0);
+        bx0 < (cx + 1) * CHUNK_SIZE && bx1 >= cx * CHUNK_SIZE && bz0 < (cz + 1) * CHUNK_SIZE && bz1 >= cz * CHUNK_SIZE
+    }) {
+        let tops: Vec<i32> = surfaces.iter().map(|s| s.0).collect();
+        for (open, now) in mined.iter_mut().zip(crate::mines::carve(mountain, cx, cz, &mut blocks, &tops)) {
+            *open |= now;
+        }
+    }
+
     // Things lying on the bed under the water: clay, pebbles and stones (each takes the water's place in its cell).
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
@@ -356,7 +368,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
         if clearing.map_or(false, |c| c.blocks_trees_at(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz)) {
             continue;
         }
-        if wet_at(lx, lz) {
+        if wet_at(lx, lz) || mined[column(lx, lz)] {
             continue;
         }
         // Above the tree line the ground is bare (and a pine there would not fit under the sky).
@@ -387,7 +399,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
-                if !c.contains(wx, wz) || wet_at(lx, lz) || top_at(lx, lz) > GROUND_TOP + TREE_LINE_RISE {
+                if !c.contains(wx, wz) || wet_at(lx, lz) || mined[column(lx, lz)] || top_at(lx, lz) > GROUND_TOP + TREE_LINE_RISE {
                     continue;
                 }
                 let roll = hash3(seed, wx, wz, 0x91A7) % 100;
@@ -413,7 +425,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
     // can be picked up (and put back) the same way.
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
-            if wet_at(lx, lz) || top_at(lx, lz) >= SNOW_Y {
+            if wet_at(lx, lz) || mined[column(lx, lz)] || top_at(lx, lz) >= SNOW_Y {
                 continue;
             }
             let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
@@ -502,6 +514,9 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
                 }
             }
         }
+    }
+    for mountain in &landmarks.mountains {
+        crate::mines::frame(mountain, cx, cz, &mut blocks);
     }
     blocks
 }

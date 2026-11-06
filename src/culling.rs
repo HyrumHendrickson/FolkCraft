@@ -61,16 +61,16 @@ mod tests {
         w.rebuild_dirty(eye, usize::MAX);
         let wide = 170.0_f32.to_radians(); // effectively no cone culling
         let drawn = chunks_to_draw(&w, eye, vec3(1.0, 0.0, 0.0), wide);
-        let side = (2 * RENDER_RADIUS + 1) as usize;
+        let side = (2 * render_radius() + 1) as usize;
         assert_eq!(drawn.len(), side * side);
-        assert!(drawn.iter().all(|&(x, z)| x.abs() <= RENDER_RADIUS && z.abs() <= RENDER_RADIUS));
+        assert!(drawn.iter().all(|&(x, z)| x.abs() <= render_radius() && z.abs() <= render_radius()));
         // Generated-but-distant ring chunks exist yet are not drawn.
         assert!(w.chunks.len() > drawn.len());
-        assert!(!drawn.contains(&(GEN_RADIUS, 0)));
+        assert!(!drawn.contains(&(gen_radius(), 0)));
 
         // With a normal view cone, chunks directly behind are skipped too.
         let narrow = chunks_to_draw(&w, eye, vec3(1.0, 0.0, 0.0), 60.0_f32.to_radians());
-        assert!(narrow.contains(&(0, 0)) && narrow.contains(&(RENDER_RADIUS, 0)));
-        assert!(!narrow.contains(&(-RENDER_RADIUS, 0)));
+        assert!(narrow.contains(&(0, 0)) && narrow.contains(&(render_radius(), 0)));
+        assert!(!narrow.contains(&(-render_radius(), 0)));
     }
 }

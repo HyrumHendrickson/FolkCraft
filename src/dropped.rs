@@ -220,7 +220,14 @@ pub fn collect_nearby(items: &mut Vec<DroppedItem>, inventory: &mut Inventory, p
 
 /// Draw a rotated, flat-shaded box (translucent if the colour's alpha is below 1). Call while the 3D camera is active.
 pub fn draw_box(centre: Vec3, half: Vec3, yaw: f32, color: Color) {
+    draw_box_tilted(centre, half, yaw, 0.0, color);
+}
+
+/// `draw_box`, tilted first by `pitch` radians about the box's own z axis (positive tips the top of the box back, towards
+/// -x, and swings the bottom forward) and then turned by `yaw` about the vertical. Used to pose limbs, necks and ears.
+pub fn draw_box_tilted(centre: Vec3, half: Vec3, yaw: f32, pitch: f32, color: Color) {
     let (s, c) = yaw.sin_cos();
+    let (sp, cp) = pitch.sin_cos();
     let mut vertices = Vec::with_capacity(24);
     let mut indices: Vec<u16> = Vec::with_capacity(36);
     for face in FACES.iter() {
@@ -228,7 +235,8 @@ pub fn draw_box(centre: Vec3, half: Vec3, yaw: f32, color: Color) {
         let shade = face.shade;
         let col = Color::new(color.r * shade, color.g * shade, color.b * shade, color.a);
         for &(ox, oy, oz) in &face.corners {
-            let (lx, ly, lz) = ((ox - 0.5) * 2.0 * half.x, (oy - 0.5) * 2.0 * half.y, (oz - 0.5) * 2.0 * half.z);
+            let (px, py, lz) = ((ox - 0.5) * 2.0 * half.x, (oy - 0.5) * 2.0 * half.y, (oz - 0.5) * 2.0 * half.z);
+            let (lx, ly) = (px * cp - py * sp, px * sp + py * cp);
             let (rx, rz) = (lx * c - lz * s, lx * s + lz * c);
             vertices.push(Vertex::new(centre.x + rx, centre.y + ly, centre.z + rz, 0.0, 0.0, col));
         }

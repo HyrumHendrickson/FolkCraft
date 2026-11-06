@@ -141,7 +141,7 @@ pub fn ray_box(origin: Vec3, dir: Vec3, lo: [f32; 3], hi: [f32; 3]) -> Option<f3
 /// True when chunk `key` is within the render radius of chunk `centre`
 /// (a square radius: Chebyshev distance in chunks).
 pub fn in_render_range(centre: (i32, i32), key: (i32, i32)) -> bool {
-    (key.0 - centre.0).abs() <= RENDER_RADIUS && (key.1 - centre.1).abs() <= RENDER_RADIUS
+    (key.0 - centre.0).abs() <= render_radius() && (key.1 - centre.1).abs() <= render_radius()
 }
 
 impl World {
@@ -188,6 +188,29 @@ impl World {
             return horizen::ground_top(self.seed, wx, wz);
         }
         ground_top_with(self.seed, &self.landmarks, wx, wz)
+    }
+
+    /// Whether the column (wx, wz) is dry, bare ground: its top block is dirt and the cell above it is empty (no tree,
+    /// plant, rock or castle stands there). Works for a chunk that is not loaded by generating it for a moment.
+    pub fn is_bare_dry_ground(&self, wx: i32, wz: i32) -> bool {
+        if self.is_wet_column(wx, wz) {
+            return false;
+        }
+        let ground = self.ground_top(wx, wz);
+        if ground + 1 >= WORLD_HEIGHT {
+            return false;
+        }
+        let (key, lx, lz) = (Self::chunk_of(wx, wz), wx.rem_euclid(CHUNK_SIZE), wz.rem_euclid(CHUNK_SIZE));
+        let generated;
+        let blocks: &[Block] = match self.chunks.get(&key) {
+            Some(chunk) => &chunk.blocks,
+            None if self.dimension == Dimension::Overworld => {
+                generated = generate_chunk_for(self.seed, key.0, key.1, &self.landmarks, self.night);
+                &generated
+            }
+            None => return false,
+        };
+        blocks[idx(lx, ground, lz)] == Block::Dirt && blocks[idx(lx, ground + 1, lz)] == Block::Air
     }
 
     /// Whether water (a river or a lake) covers the column (wx, wz).
@@ -426,12 +449,12 @@ impl World {
         Self::chunk_of(pos.x.floor() as i32, pos.z.floor() as i32)
     }
 
-    /// Keep every chunk within `GEN_RADIUS` of the player generated, and release the
+    /// Keep every chunk within `gen_radius()` of the player generated, and release the
     /// meshes of chunks that have left render range (they are rebuilt if the player returns).
     pub fn stream_chunks(&mut self, pos: Vec3) {
         let centre = Self::chunk_of_pos(pos);
-        for dz in -GEN_RADIUS..=GEN_RADIUS {
-            for dx in -GEN_RADIUS..=GEN_RADIUS {
+        for dz in -gen_radius()..=gen_radius() {
+            for dx in -gen_radius()..=gen_radius() {
                 self.ensure_chunk(centre.0 + dx, centre.1 + dz);
             }
         }
@@ -848,16 +871,16 @@ mod tests {
         let mut w = World::new(1, HashSet::new());
         let pos = vec3(10.0, 6.0, 10.0);
         w.stream_chunks(pos);
-        let gen_side = (2 * GEN_RADIUS + 1) as usize;
+        let gen_side = (2 * gen_radius() + 1) as usize;
         assert_eq!(w.chunks.len(), gen_side * gen_side);
 
         w.rebuild_dirty(pos, usize::MAX);
         let meshed = w.chunks.values().filter(|c| !c.meshes.is_empty()).count();
-        let render_side = (2 * RENDER_RADIUS + 1) as usize;
+        let render_side = (2 * render_radius() + 1) as usize;
         assert_eq!(meshed, render_side * render_side);
-        assert!(!w.chunks[&(RENDER_RADIUS, RENDER_RADIUS)].meshes.is_empty());
-        assert!(w.chunks[&(GEN_RADIUS, 0)].meshes.is_empty());
-        assert!(w.chunks[&(0, -GEN_RADIUS)].meshes.is_empty());
+        assert!(!w.chunks[&(render_radius(), render_radius())].meshes.is_empty());
+        assert!(w.chunks[&(gen_radius(), 0)].meshes.is_empty());
+        assert!(w.chunks[&(0, -gen_radius())].meshes.is_empty());
     }
 
     #[test]
@@ -873,8 +896,8 @@ mod tests {
         assert!(w.chunks[&(0, 0)].meshes.is_empty(), "old chunk should be unloaded");
         w.rebuild_dirty(far, usize::MAX);
         assert!(!w.chunks[&(10, 0)].meshes.is_empty());
-        assert!(!w.chunks[&(10 + RENDER_RADIUS, 0)].meshes.is_empty());
-        assert!(w.chunks[&(10 + GEN_RADIUS, 0)].meshes.is_empty());
+        assert!(!w.chunks[&(10 + render_radius(), 0)].meshes.is_empty());
+        assert!(w.chunks[&(10 + gen_radius(), 0)].meshes.is_empty());
     }
 
     #[test]
