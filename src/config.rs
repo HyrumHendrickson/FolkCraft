@@ -133,10 +133,10 @@ pub const RELIEF_PLACEMENT_TRIES: i32 = 8;
 // --- Landmarks: lakes, mountains and the rainbow -----------------------------------------
 
 /// A walk this many chunks long through a river, without leaving the water, ends at a lake.
-pub const LAKE_TREK_CHUNKS: i32 = 8;
+pub const LAKE_TREK_CHUNKS: i32 = 6;
 /// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter). The lake
 /// is large: about a hundred blocks from shore to shore each way.
-pub const LAKE_RADIUS: i32 = 130;
+pub const LAKE_RADIUS: i32 = 100;
 /// Gap in blocks between the player and the near shore of a new lake: `structure_distance()`, more than the
 /// generated ring, so the lake appears beyond the edge of the generated land instead of in front of the player.
 pub fn lake_distance() -> i32 {
@@ -172,7 +172,7 @@ pub fn mountain_distance() -> i32 {
 /// ledge for every `MOUNTAIN_LEDGE_SPACING_HEIGHT` blocks of height, at most `MOUNTAIN_MAX_LEDGES`.
 pub const MOUNTAIN_LEDGE_HEIGHT: i32 = 2;
 pub const MOUNTAIN_MAX_LEDGES: i32 = 12;
-pub const MOUNTAIN_LEDGE_SPACING_HEIGHT: i32 = 14;
+pub const MOUNTAIN_LEDGE_SPACING_HEIGHT: i32 = 6;
 /// Half the angle (radians) each gap in a ledge is wide, how far from the mountain's axis the gaps lie (alternately
 /// to one side and the other), and the angle over which a gap blends into the cliff.
 pub const MOUNTAIN_GAP_HALF_ANGLE: f32 = 0.20;
