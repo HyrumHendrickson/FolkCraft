@@ -2148,14 +2148,34 @@ impl Game {
     }
 
     /// Carry the player up through the cyclone into the Skylands, arriving in a fading white.
-    pub fn enter_skylands(&mut self) {
-        if !self.in_overworld() {
-            return;
-        }
-        self.travel_to(Dimension::Skylands);
-        self.whiteout = Some(Whiteout { elapsed: 0.0, kind: WhiteoutKind::Arrival });
-        self.toasts.push("The cyclone carries you up into a sky of floating islands.".to_string());
-    }
+   pub fn enter_skylands(&mut self) {
+   	    if !self.in_overworld() {
+   	    	        return;
+   	    	            }
+
+   	    	                self.travel_to(Dimension::Skylands);
+
+   	    	                    // Always return to the original Skylands spawn point.
+   	    	                        self.player.pos = skylands::spawn_point();
+   	    	                            self.player.vel = Vec3::ZERO;
+   	    	                                self.player.knock = Vec3::ZERO;
+
+   	    	                                    self.world.stream_chunks(self.player.pos);
+   	    	                                        self.world.rebuild_dirty(self.player.pos, usize::MAX);
+
+   	    	                                            self.whiteout = Some(Whiteout {
+   	    	                                            	        elapsed: 0.0,
+   	    	                                            	                kind: WhiteoutKind::Arrival,
+   	    	                                            	                    });
+
+   	    	                                            	                        self.toasts.push(
+   	    	                                            	                        	        "The cyclone carries you up into a sky of floating islands.".to_string()
+   	    	                                            	                        	            );
+   	    	                                            	                        	            }
+   	    	                                            	                        )
+   	    	                                            })
+   	    }
+   }
 
     /// Carry the player home through the cyclone of the first island, to the summit.
     pub fn leave_skylands(&mut self) {
