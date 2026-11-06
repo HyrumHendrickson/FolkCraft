@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::dropped::draw_box;
 use crate::landmarks::Rainbow;
 use crate::rng::hash3;
-use crate::tornado::FireTornado;
+use crate::tornado::{Cyclone, FireTornado};
 use crate::world::{in_render_range, World};
 
 
@@ -144,6 +144,31 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
         time * HORIZEN_TORNADO_CAP_SPIN_SPEED,
         Color::new(0.16, 0.10, 0.07, 0.42),
     );
+}
+
+/// Draw a cyclone: a wide funnel of pale, translucent layers spinning round a bright core, with flecks of snow and
+/// debris whirling up it. Call while the 3D camera is active.
+pub fn draw_cyclone(cyclone: &Cyclone, time: f32, player_chunk: (i32, i32)) {
+    if !in_render_range(player_chunk, World::chunk_of_pos(cyclone.pos)) {
+        return;
+    }
+    for layer in 0..12 {
+        let t = layer as f32 / 11.0;
+        let radius = CYCLONE_RADIUS * (0.35 + 0.65 * t);
+        let angle = time * CYCLONE_SPIN_SPEED * (1.0 - 0.3 * t) + layer as f32 * 1.1;
+        let centre = cyclone.pos + vec3(angle.cos() * radius * 0.25, t * CYCLONE_HEIGHT + 0.3, angle.sin() * radius * 0.25);
+        let shade = 0.80 + 0.18 * (layer % 2) as f32;
+        draw_box(centre, vec3(radius, CYCLONE_HEIGHT / 26.0, radius), angle, Color::new(shade * 0.92, shade, shade * 1.04, 0.62));
+    }
+    draw_box(cyclone.pos + vec3(0.0, CYCLONE_HEIGHT * 0.5, 0.0), vec3(0.28, CYCLONE_HEIGHT * 0.5, 0.28), time * 3.0, Color::new(1.0, 1.0, 1.0, 0.55));
+    for i in 0..18 {
+        let n = i as f32;
+        let t = (time * 0.35 + n * 0.173).rem_euclid(1.0);
+        let angle = time * CYCLONE_SPIN_SPEED * 1.3 + n * 2.4;
+        let radius = CYCLONE_RADIUS * (0.4 + 0.75 * t);
+        let at = cyclone.pos + vec3(angle.cos() * radius, t * CYCLONE_HEIGHT, angle.sin() * radius);
+        draw_box(at, Vec3::splat(0.07 + 0.05 * (i % 3) as f32), angle, if i % 4 == 0 { Color::new(0.50, 0.40, 0.30, 0.9) } else { Color::new(0.97, 0.98, 1.0, 0.85) });
+    }
 }
 
 /// Draw rain around the camera while a will-o-whisp storm is active. The drops are regenerated every frame from

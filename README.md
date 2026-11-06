@@ -233,7 +233,8 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
 | `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
 | `horizen.rs` | `Dimension` and the Horizen's land: empty flat ground with ponds and the arrival pool. |
-| `tornado.rs` | The Horizen's one daytime fire tornado: movement, target capture, collision and damage timing. |
+| `tornado.rs` | The Horizen's one daytime fire tornado (movement, target capture, collision and damage timing) and the `Cyclone` that carries the player between dimensions. |
+| `skylands.rs` | The third dimension: floating islands on a grid, wooden bridges between them, a few oaks (`generate_chunk`, `surface_top`, `spawn_point`, `home_cyclone`). Pure functions of the seed. |
 | `landmarks.rs` | `Lake`, `Mountain`, `GrandCastle`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
 | `river.rs` | `is_river`, `river_near`: rivers as zero contours of a smooth noise field. Pure functions of seed and column. |
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG. |
@@ -471,3 +472,36 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Rainbow**: `rainbow_blocks_on` drops cells buried in the ground and carries each band's ends down to it, so all seven colours reach the ground; the blocks are cached (`RAINBOW_CACHE`).
 - **Animals** (`animal_draw.rs`): the five animals are posed from two-jointed legs (`leg`), tilted boxes (`dropped::draw_box_tilted`), breathing, head bobs, grazing, pecking, hopping and ear/tail motion. Their eyes (`eyes`) stick out of the head and glow red at night with a halo.
 - Six tests (bear health, mallet damage, stick rate, well pool) already failed before these changes; they assert old balance numbers.
+
+## Update: the Yeti, the Loch Ness Monster, the cyclone and the Skylands
+
+- **Item art.** `hud::draw_item_icon` draws every item lit from the upper left (outline, shaded underside, highlight; helpers `ball`, `rod`,
+  `slab`, `quad`, `tri`). A **jar of water** is clear glass with blue water in it, as an icon and as a dropped item (`dropped::draw_jar`, translucent);
+  an empty clay jar is opaque terracotta.
+- **Bosses** are `AnimalKind::Yeti` and `AnimalKind::LochNessMonster` (`AnimalKind::is_boss`), so axes, arrows, the mallet, lightning and knockback
+  work on them like on any animal. They are never wildlife (`Game::spawn_bosses` brings them out; they are not saved, so a boss that is not dead comes back at
+  full health when the player returns). A boss is simulated within `BOSS_UPDATE_DISTANCE` and a **health bar** with its name is drawn at the top of the
+  screen while the nearest boss is within `BOSS_BAR_DISTANCE` (`Game::boss_bar`, `play::draw_boss_bar`).
+  - **Yeti** (`YETI_HEALTH` 300, `YETI_DAMAGE` 3 every `YETI_ATTACK_COOLDOWN`): lives on the summit, which is now a flat arena of
+    `SUMMIT_PLATEAU_RADIUS` (`Mountain::rise_at`). It appears when the player comes within `YETI_SPAWN_DISTANCE`, charges a player within
+    `YETI_NOTICE_DISTANCE` (slower than a walking player), never strays more than `YETI_LEASH` from the summit, and below half health is enraged (faster, quicker blows).
+    Drops bear pelts and gold. Killing it sets `Landmarks::yeti_slain` (saved as `yetislain`).
+  - **Loch Ness Monster** (`LOCH_NESS_HEALTH` 320): one for each lake with a castle, rising in the water between the island and the far shore when the
+    player is within the lake's radius plus `LOCH_NESS_SPAWN_MARGIN`. It swims only on wet columns (`World::is_wet_column`), turns aside from the shore, hunts a
+    player within `LOCH_NESS_NOTICE_DISTANCE` as near as the water lets it, and strikes with its neck at `LOCH_NESS_REACH`. Drops gold and iron.
+    The outer **gate of the castle is shut** (`Block::CastleDoor` in the gate's opening, `Lake::castle_cell(.., gate_shut)`, `Landmarks::gate_shut`) until that lake's monster dies;
+    `World::open_lake_gate` then records the lake in `Landmarks::monsters_slain` (saved as `nessie <x> <z>`) and generates the castle's chunks again.
+- **Cyclone** (`tornado::Cyclone`, `Game::cyclone`, `effects::draw_cyclone`): once the Yeti is dead one stands on the summit. Standing in it for `CYCLONE_SECONDS` (5)
+  carries the player to the Skylands; the screen fades to white over the last `CYCLONE_FADE_SECONDS` (`Game::cyclone_whiteness`) and clears again on arrival. A second
+  cyclone on the Skylands' first island carries the player home, setting them down beside the summit cyclone, not in it.
+- **Skylands** (`Dimension::Skylands`, `skylands.rs`): no ground, water, creatures or landmarks; own day and night, edits and items. Islands (grass on dirt over
+  tapering rock, `SKY_CELL` apart, tops within `SKY_HEIGHT_JITTER`) are joined by `SKY_BRIDGE_WIDTH`-wide decks of `Block::BridgePlank` with `Block::BridgePost` rails: every
+  island to its east neighbour, and to its south one (always in column 0, otherwise `SKY_SOUTH_BRIDGE_PERCENT`), so everything is reachable from the first island, where the
+  player arrives (`SKY_SPAWN_CENTRE`). Tests walk every bridge a step at a time. Dirt is grass-coloured on top whatever the height (`mesh.rs`).
+  - **Falling off** (`Game::update_travel`, `Whiteout`, `WhiteoutKind::Fall`): below `SKY_VOID_Y` the screen whites out over `SKY_FALL_FADE_IN`; once white the player leaves the Skylands and is put
+    `SKY_FALL_DROP` (50) blocks above the normal world's spawn point, and the white clears over `SKY_FALL_FADE_OUT` as they fall onto it. The Skylands never draw the overworld, except behind
+    that white screen (`Game::overworld_backdrop`, a second camera pass in `play::render_world` standing over the summit).
+  - Dying in the Skylands, like dying in the Horizen, returns the player to the start of the overworld.
+- **Dimensions** are parked in `Game::away` and `Game::shelf` (`Game::travel_to`, `parked`, `take_parked`), so all three can be held at once.
+- **Save format** gains `dimension skylands`, `yetislain`, `nessie <x> <z>` and `s <record>` lines (the Skylands' own `pos`, `time`, edits and `item`s, exactly like the `h` lines).
+- Tests: `game::boss_and_skylands_tests`, `skylands::tests`, `landmarks::boss_landmark_tests`, and the boss models in `animal_draw`.

@@ -165,6 +165,8 @@ impl World {
                 // (Dirt is never covered by anything but air, plants, items and water, so its exposed top is
                 // always the top of the ground.)
                 Block::Dirt if fi == 2 && self.block_at(wx, y + 1, wz).is_wet() => (r, g, b) = (0.40, 0.31, 0.22),
+                // The Skylands' islands are grass all the way up, whatever the height.
+                Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Skylands => (r, g, b) = (0.30, 0.62, 0.22),
                 // Above the tree line the mountain is bare rock, not grass.
                 Block::Dirt if fi == 2 && y > GROUND_TOP + TREE_LINE_RISE => (r, g, b) = (0.46, 0.43, 0.40),
                 Block::Dirt if fi == 2 => (r, g, b) = (0.28, 0.58, 0.20),

@@ -63,6 +63,10 @@ pub enum Block {
     Gravestone,
     /// A suit of armour on a pedestal in the throne room (there at night). Taking it by hand gives the royal armour.
     ArmorStand,
+    /// The weathered deck of a bridge between two floating islands: a solid cube that cannot be broken or made.
+    BridgePlank,
+    /// A rope-rail post at the edge of a bridge: thin and walk-through, and it cannot be broken or made.
+    BridgePost,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -180,6 +184,13 @@ const ARMOR_STAND_PARTS: &[Part] = &[
     part([0.70, 0.72, 0.34], [0.86, 0.88, 0.66], (0.66, 0.68, 0.74)),
     part([0.36, 0.82, 0.38], [0.64, 1.0, 0.62], (0.80, 0.82, 0.88)),
 ];
+/// A post at the edge of a bridge with a crosspiece and a loop of rope, drawn the same from every side.
+const BRIDGE_POST_PARTS: &[Part] = &[
+    part([0.42, 0.0, 0.42], [0.58, 0.90, 0.58], (0.33, 0.22, 0.12)),
+    part([0.34, 0.90, 0.34], [0.66, 1.0, 0.66], (0.42, 0.29, 0.15)),
+    part([0.20, 0.62, 0.46], [0.80, 0.68, 0.54], (0.74, 0.64, 0.42)),
+    part([0.46, 0.62, 0.20], [0.54, 0.68, 0.80], (0.74, 0.64, 0.42)),
+];
 const CHARCOAL_PARTS: &[Part] = &[
     part([0.15, 0.0, 0.20], [0.85, 0.25, 0.75], (0.12, 0.12, 0.13)),
     part([0.30, 0.25, 0.30], [0.65, 0.38, 0.62], (0.17, 0.17, 0.18)),
@@ -276,6 +287,8 @@ impl Block {
             | Block::CastleStone
             | Block::CastleDoor
             | Block::Gravestone
+            | Block::BridgePlank
+            | Block::BridgePost
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -308,7 +321,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -323,6 +336,7 @@ impl Block {
                 | Block::CastleDoor
                 | Block::Gravestone
                 | Block::ArmorStand
+                | Block::BridgePlank
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -371,6 +385,7 @@ impl Block {
             Block::GoldPile => GOLD_PILE_PARTS,
             Block::Gravestone => GRAVESTONE_PARTS,
             Block::ArmorStand => ARMOR_STAND_PARTS,
+            Block::BridgePost => BRIDGE_POST_PARTS,
             _ => &[],
         }
     }
@@ -438,6 +453,7 @@ impl Block {
             Block::Leaves => (0.16, 0.52, 0.17),
             Block::Needles => (0.09, 0.36, 0.22),
             Block::Planks => (0.72, 0.54, 0.31),
+            Block::BridgePlank => (0.50, 0.36, 0.20),
             _ => self.parts().first().map_or((0.0, 0.0, 0.0), |p| p.color),
         }
     }
@@ -447,7 +463,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 31] = [
+    const ALL: [Block; 33] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -479,6 +495,8 @@ mod tests {
         Block::CastleDoor,
         Block::Gravestone,
         Block::ArmorStand,
+        Block::BridgePlank,
+        Block::BridgePost,
     ];
 
     #[test]

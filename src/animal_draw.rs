@@ -290,6 +290,99 @@ fn bear_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     parts
 }
 
+/// The Yeti: a broad, shaggy white ape. Its arms hang to the knuckles and swing as it walks; when it charges they rise and
+/// pound, and below half health it glows red-eyed and heaves for breath.
+fn yeti_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let fur = col(0.92, 0.94, 0.97);
+    let shade = col(0.74, 0.78, 0.86);
+    let face = col(0.30, 0.34, 0.42);
+    let dark = col(0.10, 0.11, 0.14);
+    let ice = col(0.62, 0.84, 0.95);
+    let moving = is_moving(a);
+    let charging = a.mode == Mode::Charge;
+    let rage = if a.boss_enraged() { 1.0 } else { 0.0 };
+    let (rate, amp) = if charging { (2.4, 0.6) } else { (1.5, 0.3) };
+    let breath = (time * (1.6 + rage * 2.4) + a.phase).sin() * 0.03;
+    let roll = (a.phase * rate * 0.5).sin() * 0.05 * moving;
+    let lean = if charging { 0.22 } else { 0.08 };
+    let mut parts = vec![
+        // Hips, belly and a huge chest with shoulders.
+        tilted((0.0, 1.35, roll), (0.55, 0.45 + breath, 0.55), fur, lean),
+        tilted((0.12, 2.0 + breath, roll), (0.62, 0.50 + breath, 0.80), fur, lean),
+        tilted((0.14, 2.38, roll), (0.50, 0.14, 0.90), shade, lean),
+        tilted((-0.10, 1.55, 0.0), (0.40, 0.30, 0.50), shade, lean),
+    ];
+    // The head, low between the shoulders, with a dark face, a heavy brow, tusks and ice spikes along the back.
+    let head = (0.82 + lean, 2.55 + breath, roll * 2.0);
+    parts.push(tilted(head, (0.34, 0.32, 0.34), fur, -0.1));
+    parts.push(tilted((head.0 + 0.30, head.1 - 0.08, head.2), (0.12, 0.22, 0.26), face, -0.1));
+    parts.push(tilted((head.0 + 0.22, head.1 + 0.20, head.2), (0.16, 0.06, 0.34), shade, -0.1));
+    parts.push(tilted((head.0 + 0.44, head.1 - 0.30, head.2), (0.05, 0.05, 0.20), dark, 0.0));
+    for side in [-1.0, 1.0] {
+        parts.push(tilted((head.0 + 0.40, head.1 - 0.30, head.2 + 0.15 * side), (0.04, 0.13, 0.03), col(0.96, 0.94, 0.86), 0.0));
+    }
+    let eye_day = if rage > 0.0 { col(0.9, 0.1, 0.05) } else { dark };
+    eyes(&mut parts, (head.0 + 0.30, head.1 + 0.08, head.2), 0.26, 0.05, night || rage > 0.0, eye_day);
+    for i in 0..4 {
+        let t = i as f32;
+        parts.push(tilted((-0.45 - t * 0.02, 2.55 - t * 0.28, roll), (0.07, 0.22 - t * 0.03, 0.07), ice, 0.4));
+    }
+    // Arms: long, swinging in opposition, raised and pounding in a charge.
+    for (i, side) in [-1.0_f32, 1.0].into_iter().enumerate() {
+        let swing = (a.phase * rate + if i == 0 { 0.0 } else { std::f32::consts::PI }).sin() * amp * moving;
+        let pound = if charging { 0.9 + (time * 7.0 + i as f32 * 3.1).sin() * 0.35 } else { 0.0 };
+        let angle = swing + pound;
+        let shoulder = (0.12, 2.25, 0.98 * side + roll);
+        leg(&mut parts, shoulder, 0.85, 0.80, 0.22, angle, fur, shade);
+    }
+    // Legs: short and thick.
+    for (i, &(lx, lz)) in [(0.12, 0.34), (0.12, -0.34)].iter().enumerate() {
+        let swing = (a.phase * rate + if i == 0 { 0.0 } else { std::f32::consts::PI }).sin() * amp * moving;
+        leg(&mut parts, (lx, 1.0, lz + roll), 0.50, 0.48, 0.24, swing, fur, shade);
+    }
+    parts
+}
+
+/// The Loch Ness Monster: three dark-green humps along the water, a tail, and a long neck that sways and rears up to strike,
+/// ending in a small head with a pale throat. Most of the body is meant to be half in the water.
+fn loch_ness_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let skin = col(0.18, 0.36, 0.28);
+    let back = col(0.12, 0.27, 0.21);
+    let belly = col(0.62, 0.70, 0.52);
+    let dark = col(0.05, 0.08, 0.06);
+    let charging = a.mode == Mode::Charge;
+    let swim = (time * 1.4 + a.phase * 0.2).sin();
+    let rear = if charging { 0.35 + 0.25 * (time * 3.0).sin().abs() } else { 0.0 };
+    let mut parts = vec![
+        // The humps rise and sink in turn.
+        block((-0.9, 0.55 + 0.12 * (time * 1.2).sin(), 0.0), (0.85, 0.55, 0.95), back),
+        block((0.55, 0.60 + 0.12 * (time * 1.2 + 2.0).sin(), 0.0), (0.80, 0.60, 0.90), skin),
+        block((-2.2, 0.40 + 0.10 * (time * 1.2 + 4.0).sin(), 0.0), (0.70, 0.40, 0.70), back),
+        block((0.3, 0.22, 0.0), (1.0, 0.18, 0.80), belly),
+    ];
+    // The tail tapers away and sways.
+    for i in 1..=4 {
+        let t = i as f32;
+        parts.push(block((-2.9 - t * 0.55, 0.28, 0.35 * swim * t * 0.5), (0.35 - t * 0.05, 0.22 - t * 0.03, 0.30 - t * 0.05), back));
+    }
+    // The neck: a stack of segments curving up and forward, swaying side to side.
+    let segments = 7;
+    let mut top = (1.1, 1.0, 0.0);
+    for i in 0..segments {
+        let t = i as f32 / (segments - 1) as f32;
+        let reach = 0.25 + 0.65 * t + rear * t * 1.2;
+        let sway = swim * 0.28 * t + (time * 0.7 + t * 2.0).sin() * 0.1 * t;
+        let pos = (1.1 + reach * 1.2, 1.0 + t * (1.9 + rear), sway);
+        parts.push(block(pos, (0.30 - 0.06 * t, 0.26, 0.28 - 0.06 * t), if i % 2 == 0 { skin } else { back }));
+        top = pos;
+    }
+    let head = (top.0 + 0.35, top.1 + 0.12, top.2);
+    parts.push(tilted(head, (0.34, 0.2, 0.22), skin, -0.2));
+    parts.push(tilted((head.0 + 0.30, head.1 - 0.06, head.2), (0.16, 0.10, 0.14), belly, -0.2));
+    eyes(&mut parts, (head.0 + 0.1, head.1 + 0.1, head.2), 0.22, 0.04, night, dark);
+    parts
+}
+
 /// A colour with transparency, for the ghostly parts of a will-o-whisp.
 fn ghost(r: f32, g: f32, b: f32, alpha: f32) -> Color {
     Color::new(r, g, b, alpha)
@@ -336,6 +429,8 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
+            AnimalKind::Yeti => yeti_parts(a, time, night),
+            AnimalKind::LochNessMonster => loch_ness_parts(a, time, night),
         };
         let (s, c) = a.heading.sin_cos();
         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
@@ -405,7 +500,22 @@ mod tests {
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
+            AnimalKind::Yeti => yeti_parts(a, time, night),
+            AnimalKind::LochNessMonster => loch_ness_parts(a, time, night),
             AnimalKind::WillOWhisp => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn the_bosses_are_big_and_have_two_glowing_red_eyes_at_night() {
+        for kind in [AnimalKind::Yeti, AnimalKind::LochNessMonster] {
+            let a = creature(kind);
+            let pieces = models(&a, 0.0, true);
+            assert!(pieces.len() > 15, "{kind:?} is a detailed model");
+            let eyes = pieces.iter().filter(|((_, _, c), _)| c.a >= 1.0 && is_night_eye(*c)).count();
+            assert_eq!(eyes, 2, "{kind:?}");
+            let top = pieces.iter().map(|((off, half, _), _)| off.1 + half.1).fold(0.0_f32, f32::max);
+            assert!(top > 2.0, "{kind:?} stands tall: {top}");
         }
     }
 

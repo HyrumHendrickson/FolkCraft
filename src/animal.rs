@@ -37,6 +37,10 @@ pub enum AnimalKind {
     Rabbit,
     Moose,
     WillOWhisp,
+    /// The boss on the mountain's summit.
+    Yeti,
+    /// The boss of a lake with a castle.
+    LochNessMonster,
 }
 
 impl AnimalKind {
@@ -48,6 +52,32 @@ impl AnimalKind {
             AnimalKind::Rabbit => RABBIT_HEALTH,
             AnimalKind::Moose => MOOSE_HEALTH,
             AnimalKind::WillOWhisp => WILL_O_WHISP_HEALTH,
+            AnimalKind::Yeti => YETI_HEALTH,
+            AnimalKind::LochNessMonster => LOCH_NESS_HEALTH,
+        }
+    }
+
+    /// Whether this is one of the two bosses (they show a health bar, are never spawned as wildlife and are kept
+    /// within a leash of where they appeared).
+    pub fn is_boss(self) -> bool {
+        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster)
+    }
+
+    /// The name shown over a boss's health bar.
+    pub fn boss_name(self) -> &'static str {
+        match self {
+            AnimalKind::Yeti => "The Yeti",
+            AnimalKind::LochNessMonster => "The Loch Ness Monster",
+            _ => "",
+        }
+    }
+
+    /// How far past the two bodies a blow of this animal reaches.
+    fn strike_reach(self) -> f32 {
+        match self {
+            AnimalKind::Yeti => YETI_REACH,
+            AnimalKind::LochNessMonster => LOCH_NESS_REACH,
+            _ => BEAR_REACH,
         }
     }
 
@@ -60,6 +90,8 @@ impl AnimalKind {
             AnimalKind::Rabbit => 0.20,
             AnimalKind::Moose => 0.70,
             AnimalKind::WillOWhisp => WILL_O_WHISP_HALF_WIDTH,
+            AnimalKind::Yeti => 0.9,
+            AnimalKind::LochNessMonster => 1.1,
         }
     }
 
@@ -71,6 +103,9 @@ impl AnimalKind {
             AnimalKind::Rabbit => 0.5,
             AnimalKind::Moose => 2.1,
             AnimalKind::WillOWhisp => WILL_O_WHISP_HEIGHT,
+            // The summit has four blocks of air above it, so the Yeti is just under three and a half.
+            AnimalKind::Yeti => 3.2,
+            AnimalKind::LochNessMonster => 3.4,
         }
     }
 
@@ -82,6 +117,8 @@ impl AnimalKind {
             AnimalKind::Rabbit => RABBIT_WALK_SPEED,
             AnimalKind::Moose => MOOSE_WALK_SPEED,
             AnimalKind::WillOWhisp => 0.0,
+            AnimalKind::Yeti => YETI_WALK_SPEED,
+            AnimalKind::LochNessMonster => LOCH_NESS_WALK_SPEED,
         }
     }
 
@@ -94,6 +131,7 @@ impl AnimalKind {
             AnimalKind::Rabbit => (1.0, 3.5),
             AnimalKind::Moose => (3.0, 8.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster => (2.0, 5.0),
         }
     }
 
@@ -106,6 +144,7 @@ impl AnimalKind {
             AnimalKind::Rabbit => (0.8, 2.0),
             AnimalKind::Moose => (2.0, 5.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster => (3.0, 6.0),
         }
     }
 
@@ -128,6 +167,8 @@ impl AnimalKind {
         match self {
             AnimalKind::Moose => MOOSE_DAMAGE,
             AnimalKind::Bear => BEAR_DAMAGE,
+            AnimalKind::Yeti => YETI_DAMAGE,
+            AnimalKind::LochNessMonster => LOCH_NESS_DAMAGE,
             _ => 0,
         }
     }
@@ -137,6 +178,8 @@ impl AnimalKind {
         match self {
             AnimalKind::Moose => "A moose killed you",
             AnimalKind::Bear => "A bear killed you",
+            AnimalKind::Yeti => "The Yeti killed you",
+            AnimalKind::LochNessMonster => "The Loch Ness Monster killed you",
             _ => "An animal killed you",
         }
     }
@@ -175,6 +218,14 @@ impl AnimalKind {
                 add(ItemKind::Antlers, MOOSE_ANTLER_DROP);
             }
             AnimalKind::WillOWhisp => {}
+            AnimalKind::Yeti => {
+                add(ItemKind::BearPelt, YETI_PELT_DROP);
+                add(ItemKind::Gold, YETI_GOLD_DROP);
+            }
+            AnimalKind::LochNessMonster => {
+                add(ItemKind::Gold, LOCH_NESS_GOLD_DROP);
+                add(ItemKind::Iron, LOCH_NESS_IRON_DROP);
+            }
         }
         out
     }
@@ -236,6 +287,8 @@ pub struct Animal {
     pub bonded: bool,
     /// Where on its circle round the player a bonded whisp floats (radians), different for each.
     orbit: f32,
+    /// Where a boss appeared: it never strays further than its leash from here.
+    pub home: Vec3,
 }
 
 /// What a body bumped into during one step.
@@ -316,6 +369,7 @@ impl Animal {
             lure: None,
             bonded: false,
             orbit: 0.0,
+            home: pos,
         };
         // Taken from the random heading, so that each whisp has its own place on the circle.
         a.orbit = a.heading * 1.7;
@@ -378,11 +432,21 @@ impl Animal {
         self.timer = Self::random_time(self.kind.idle_time(), rng);
     }
 
+    /// Whether a boss is below half health (the Yeti then runs and strikes faster).
+    pub fn boss_enraged(&self) -> bool {
+        self.kind.is_boss() && self.health * 2 <= self.kind.max_health()
+    }
+
+    /// The heading from this animal to its home.
+    fn heading_home(&self) -> f32 {
+        (self.home.z - self.pos.z).atan2(self.home.x - self.pos.x)
+    }
+
     /// Whether this animal's body is within striking distance of the player standing at `player` (feet): a
     /// ring of `BEAR_REACH` around the two bodies, and the two heights overlapping.
     fn within_reach_of(&self, player: Vec3) -> bool {
         let flat = vec2(self.pos.x - player.x, self.pos.z - player.z).length();
-        let reach = self.kind.half_width() + PLAYER_HALF_WIDTH + BEAR_REACH;
+        let reach = self.kind.half_width() + PLAYER_HALF_WIDTH + self.kind.strike_reach();
         flat <= reach && player.y < self.pos.y + self.kind.height() && player.y + PLAYER_HEIGHT > self.pos.y
     }
 
@@ -394,6 +458,9 @@ impl Animal {
             AnimalKind::Bear if self.pacified => return false,
             AnimalKind::Bear => BEAR_ATTACK_COOLDOWN,
             AnimalKind::Moose if self.enraged => MOOSE_ATTACK_COOLDOWN,
+            AnimalKind::Yeti if self.boss_enraged() => YETI_ATTACK_COOLDOWN * YETI_ENRAGED_COOLDOWN_FACTOR,
+            AnimalKind::Yeti => YETI_ATTACK_COOLDOWN,
+            AnimalKind::LochNessMonster => LOCH_NESS_ATTACK_COOLDOWN,
             _ => return false,
         };
         if self.attack_cooldown > 0.0 || !self.within_reach_of(player) {
@@ -514,6 +581,24 @@ impl Animal {
                     self.heading = towards + detour;
                 }
             }
+            AnimalKind::Yeti | AnimalKind::LochNessMonster => {
+                let (notice, leash) = if self.kind == AnimalKind::Yeti { (YETI_NOTICE_DISTANCE, YETI_LEASH) } else { (LOCH_NESS_NOTICE_DISTANCE, LOCH_NESS_LEASH) };
+                let home_gap = vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length();
+                if home_gap > leash {
+                    // Too far from home: give up the chase and go back.
+                    self.alarm = 0.0;
+                    self.mode = Mode::Wander;
+                    self.heading = self.heading_home();
+                    self.timer = 1.0;
+                } else if flat_gap < notice || self.alarm > 0.0 {
+                    self.mode = Mode::Charge;
+                } else if self.mode == Mode::Charge {
+                    self.rest(rng);
+                }
+                if self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    self.heading = towards + detour;
+                }
+            }
             AnimalKind::WillOWhisp => {
                 if self.lure.is_none() {
                     self.bonded = false;
@@ -535,7 +620,10 @@ impl Animal {
         if self.kind != AnimalKind::WillOWhisp && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
             if self.mode == Mode::Idle {
                 self.mode = Mode::Wander;
-                self.heading = if self.kind == AnimalKind::Bear && !self.pacified && dist < BEAR_NOTICE_DISTANCE {
+                let straying = self.kind.is_boss() && vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length() > 12.0;
+                self.heading = if straying {
+                    self.heading_home()
+                } else if self.kind == AnimalKind::Bear && !self.pacified && dist < BEAR_NOTICE_DISTANCE {
                     // A bear that has noticed the player strays from the straight line to them, but only so far.
                     towards + (rng.unit() * 2.0 - 1.0) * BEAR_WANDER_SPREAD
                 } else {
@@ -562,7 +650,7 @@ impl Animal {
             return dropped;
         }
 
-        let speed = match self.mode {
+        let mut speed = match self.mode {
             Mode::Idle => 0.0,
             Mode::Wander => self.kind.walk_speed(),
             Mode::Flee => self.kind.run_speed(),
@@ -570,8 +658,25 @@ impl Animal {
             // A charging bear stops once it stands against the player, instead of running through them.
             Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH => 0.0,
             Mode::Charge if self.kind == AnimalKind::Moose => MOOSE_RUN_SPEED,
+            Mode::Charge if self.kind == AnimalKind::Yeti => YETI_RUN_SPEED * if self.boss_enraged() { YETI_ENRAGED_SPEED_FACTOR } else { 1.0 },
+            Mode::Charge if self.kind == AnimalKind::LochNessMonster => LOCH_NESS_RUN_SPEED,
             Mode::Charge => BEAR_RUN_SPEED,
         };
+        if self.kind == AnimalKind::LochNessMonster {
+            // The monster stays in the water: it turns aside from the shore, and stops against it.
+            self.knock = Vec3::ZERO;
+            if speed > 0.0 {
+                let reach = speed * dt + self.kind.half_width() + 0.5;
+                let open = [0.0_f32, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6].into_iter().map(|t| self.heading + t).find(|&h| {
+                    let (x, z) = (self.pos.x + h.cos() * reach, self.pos.z + h.sin() * reach);
+                    world.is_wet_column(x.floor() as i32, z.floor() as i32)
+                });
+                match open {
+                    Some(h) => self.heading = h,
+                    None => speed = 0.0,
+                }
+            }
+        }
         self.vel.x = self.heading.cos() * speed;
         self.vel.z = self.heading.sin() * speed;
         self.vel.x += self.knock.x;

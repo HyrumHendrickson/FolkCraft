@@ -15,7 +15,7 @@ use crate::chunk::idx;
 use crate::config::*;
 use crate::rng::hash3;
 
-/// Which of the two worlds a `World` is.
+/// Which of the three worlds a `World` is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Dimension {
     /// The ordinary world: forest, hills, rivers and the landmarks the player brings into it.
@@ -23,6 +23,8 @@ pub enum Dimension {
     Overworld,
     /// The empty flat land with ponds, behind the well.
     Horizen,
+    /// The floating islands and their wooden bridges, reached by the cyclone on the mountain's summit (`skylands.rs`).
+    Skylands,
 }
 
 /// A pond: an oval of water, `rx` blocks across east to west and `rz` north to south (radii), round a centre.

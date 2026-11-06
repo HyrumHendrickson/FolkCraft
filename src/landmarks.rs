@@ -169,8 +169,9 @@ impl Lake {
 
     /// What the castle is made of in the cell `dy` blocks above the island's ground at the column (wx, wz):
     /// `Some(Block::CastleStone)` for a wall, `Some(Block::Air)` for a cell the castle keeps empty, `None` outside the
-    /// castle's square or on a lake with no castle.
-    pub fn castle_block(&self, wx: i32, wz: i32, dy: i32) -> Option<Block> {
+    /// castle's square or on a lake with no castle. With `gate_shut` the opening of the outer wall's gate is `Block::CastleDoor`
+    /// instead, as it is while the monster of the lake still lives (see `Landmarks::gate_shut`).
+    pub fn castle_cell(&self, wx: i32, wz: i32, dy: i32, gate_shut: bool) -> Option<Block> {
         if !self.has_castle() || !(0..CASTLE_HEIGHT).contains(&dy) {
             return None;
         }
@@ -178,13 +179,24 @@ impl Lake {
         if dx.abs() > CASTLE_REACH || dz.abs() > CASTLE_REACH {
             return None;
         }
-        Some(if castle_is_solid(dx, dz, dy) { Block::CastleStone } else { Block::Air })
+        Some(if castle_is_solid(dx, dz, dy) {
+            Block::CastleStone
+        } else if gate_shut && is_outer_gate(dx, dz, dy) {
+            Block::CastleDoor
+        } else {
+            Block::Air
+        })
     }
 
     /// Whether the column (wx, wz) is within `margin` blocks of the castle's square.
     pub fn near_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
         self.has_castle() && (wx - self.x).abs() <= CASTLE_REACH + margin && (wz - self.z).abs() <= CASTLE_REACH + margin
     }
+}
+
+/// Whether the cell is part of the opening of the outer wall's gate (in the south side, three blocks wide).
+fn is_outer_gate(dx: i32, dz: i32, dy: i32) -> bool {
+    dz == CASTLE_WALL_HALF && dx.abs() <= 1 && (0..=3).contains(&dy)
 }
 
 /// The shape of the castle, in blocks from its centre (`dx`, `dz`) and above the ground (`dy`, 0 is the first layer of
@@ -295,6 +307,10 @@ impl Mountain {
         if dist >= foot {
             return 0;
         }
+        // The summit is a flat arena for the Yeti (the slope there is already within a block of the top).
+        if dist <= SUMMIT_PLATEAU_RADIUS {
+            return self.height;
+        }
         let ledges = self.ledge_count();
         let mut rise = (self.height - ledges * MOUNTAIN_LEDGE_HEIGHT) as f32 * smoothstep(1.0 - dist / foot);
         let ramp = (foot / (ledges + 1) as f32 * 0.45).clamp(2.0, MOUNTAIN_RAMP_WIDTH);
@@ -338,7 +354,7 @@ impl GrandCastle {
     }
 
     /// What the castle is made of in the cell `dy` blocks above the ground at the column (wx, wz), by night or by day:
-    /// see `grand_castle_cell` and `Lake::castle_block`. `None` outside the castle's square or above its tallest tower.
+    /// see `grand_castle_cell` and `Lake::castle_cell`. `None` outside the castle's square or above its tallest tower.
     pub fn castle_block(&self, wx: i32, wz: i32, dy: i32, night: bool) -> Option<Block> {
         if !(0..GRAND_HEIGHT).contains(&dy) || !self.near(wx, wz, 0) {
             return None;
@@ -732,6 +748,10 @@ pub struct Landmarks {
     pub well: Option<Well>,
     /// The world's one graveyard, once a bone totem has been held at night.
     pub graveyard: Option<Graveyard>,
+    /// Whether the Yeti on the mountain's summit has been killed (a cyclone then stands there).
+    pub yeti_slain: bool,
+    /// The lakes (by their centre) whose Loch Ness Monster has been killed: the gate of their castle is open.
+    pub monsters_slain: Vec<(i32, i32)>,
 }
 
 impl Landmarks {
@@ -777,6 +797,23 @@ impl Landmarks {
     /// The same for a graveyard.
     pub fn has_room_for_graveyard(&self, graveyard: &Graveyard) -> bool {
         self.has_room(graveyard.bounds(LANDMARK_BLEND + 4), false)
+    }
+
+    /// The column at the middle of the mountain's summit, where the Yeti lives and, once it is dead, the cyclone stands.
+    pub fn summit(&self) -> Option<(i32, i32)> {
+        self.mountain().map(|m| (m.x, m.z))
+    }
+
+    /// Whether the gate of the lake's castle is shut: it is, until the lake's monster has been killed.
+    pub fn gate_shut(&self, lake: &Lake) -> bool {
+        lake.has_castle() && !self.monsters_slain.contains(&(lake.x, lake.z))
+    }
+
+    /// Whether the castle of `lake` can touch the chunk (cx, cz).
+    pub fn lake_castle_touches_chunk(lake: &Lake, cx: i32, cz: i32) -> bool {
+        let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+        let (x1, z1) = (x0 + CHUNK_SIZE - 1, z0 + CHUNK_SIZE - 1);
+        lake.has_castle() && lake.x - CASTLE_REACH <= x1 && lake.x + CASTLE_REACH >= x0 && lake.z - CASTLE_REACH <= z1 && lake.z + CASTLE_REACH >= z0
     }
 
     /// The world's one mountain, if it has come out yet. (A save made when mountains could be many holds more than
@@ -1065,7 +1102,7 @@ mod tests {
                 assert!(!l.contains(l.x + dx, l.z + dz), "water at the castle's foot: {dx},{dz}");
             }
         }
-        let at = |dx: i32, dz: i32, dy: i32| l.castle_block(l.x + dx, l.z + dz, dy);
+        let at = |dx: i32, dz: i32, dy: i32| l.castle_cell(l.x + dx, l.z + dz, dy, false);
         let wall = Some(Block::CastleStone);
         assert_eq!(at(8, 0, 0), wall, "the east wall");
         assert_eq!(at(-8, 3, 5), wall);
@@ -1084,7 +1121,7 @@ mod tests {
         assert_eq!(at(0, 0, 8), wall, "with a roof");
         assert_eq!(at(0, 5, 0), Some(Block::Air), "the courtyard is open");
         assert_eq!(at(0, 0, 11), None, "nothing above the castle");
-        assert_eq!(l.castle_block(l.x + CASTLE_REACH + 1, l.z, 0), None, "nothing outside its square");
+        assert_eq!(l.castle_cell(l.x + CASTLE_REACH + 1, l.z, 0, false), None, "nothing outside its square");
         // Walls and floor leave a way in: from the gate to the keep door the cells are all open, a man's height.
         for dz in 3..=8 {
             for dy in 0..2 {
@@ -1096,7 +1133,7 @@ mod tests {
     #[test]
     fn a_small_lake_has_an_island_but_no_castle() {
         let l = Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) };
-        assert!(!l.has_castle() && l.castle_block(0, 0, 0).is_none());
+        assert!(!l.has_castle() && l.castle_cell(0, 0, 0, false).is_none());
         assert!(!l.near_castle(0, 0, 100));
     }
 
@@ -1620,5 +1657,60 @@ mod tests {
     #[test]
     fn the_rainbow_starts_unseen() {
         assert_eq!(Landmarks::default().rainbow, RainbowState::Unseen);
+    }
+}
+
+#[cfg(test)]
+mod boss_landmark_tests {
+    use super::*;
+
+    fn lake() -> Lake {
+        Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 3, from: (5, 5) }
+    }
+
+    #[test]
+    fn the_gate_is_a_shut_door_exactly_where_it_would_be_open() {
+        let l = lake();
+        let mut shut = 0;
+        for dx in -CASTLE_REACH..=CASTLE_REACH {
+            for dz in -CASTLE_REACH..=CASTLE_REACH {
+                for dy in 0..CASTLE_HEIGHT {
+                    let (open, closed) = (l.castle_cell(dx, dz, dy, false), l.castle_cell(dx, dz, dy, true));
+                    if open == closed {
+                        continue;
+                    }
+                    shut += 1;
+                    assert_eq!((open, closed), (Some(Block::Air), Some(Block::CastleDoor)));
+                    assert!(dz == CASTLE_WALL_HALF && dx.abs() <= 1 && dy <= 3, "only the outer gate: {dx},{dz},{dy}");
+                }
+            }
+        }
+        assert_eq!(shut, 3 * 4, "three wide and four high");
+    }
+
+    #[test]
+    fn a_lakes_gate_stays_shut_until_its_own_monster_is_slain() {
+        let mut marks = Landmarks::default();
+        let other = Lake { x: 500, ..lake() };
+        assert!(marks.gate_shut(&lake()) && marks.gate_shut(&other));
+        marks.monsters_slain.push((0, 0));
+        assert!(!marks.gate_shut(&lake()) && marks.gate_shut(&other));
+        let small = Lake { radius: 20, ..lake() };
+        assert!(!marks.gate_shut(&small), "a lake with no castle has no gate");
+    }
+
+    #[test]
+    fn the_summit_is_a_flat_arena_that_can_still_be_climbed_to() {
+        let m = Mountain { x: 0, z: 0, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT), phase: 5 };
+        let r = SUMMIT_PLATEAU_RADIUS as i32;
+        for (dx, dz) in [(0, 0), (r, 0), (0, -r), (-9, 9)] {
+            assert_eq!(m.rise_at(dx, dz), m.height);
+        }
+        for angle in 0..72 {
+            let a = angle as f32 * std::f32::consts::TAU / 72.0;
+            let at = |d: f32| m.rise_at((a.cos() * d).round() as i32, (a.sin() * d).round() as i32);
+            assert!((at(SUMMIT_PLATEAU_RADIUS + 1.0) - m.height).abs() <= 1, "the edge of the arena is within a block of its floor");
+        }
+        assert_eq!(Landmarks { mountains: vec![m], ..Default::default() }.summit(), Some((0, 0)));
     }
 }

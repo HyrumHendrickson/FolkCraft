@@ -22,6 +22,7 @@
 //!   game      - a running session (mining, placing, fire, held item, pickup)
 //!   save      - persistence                 tornado   - the Horizen's moving fire tornado
 //!   sky       - the sun and the clouds        settings  - the Settings screen (render distance)
+//!   skylands  - the third dimension: floating islands and wooden bridges
 //!   ui        - menu widgets                menu      - world list / create
 //!   play      - in-game loop and rendering
 
@@ -53,6 +54,7 @@ mod rng;
 mod save;
 mod settings;
 mod sky;
+mod skylands;
 mod terrain;
 mod tornado;
 mod ui;

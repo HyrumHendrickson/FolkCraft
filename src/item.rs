@@ -652,6 +652,8 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::CastleStone
         | Block::CastleDoor
         | Block::Gravestone
+        | Block::BridgePlank
+        | Block::BridgePost
         | Block::Water
         | Block::Flower
         | Block::Fire

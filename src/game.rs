@@ -13,11 +13,12 @@ use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
 use crate::horizen::Dimension;
+use crate::skylands;
 use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
-use crate::tornado::FireTornado;
+use crate::tornado::{Cyclone, FireTornado};
 use crate::world::{Pot, ray_box, Hit, Pos, World};
 
 /// A block being broken. Progress resets when the target, the block or the held tool changes,
@@ -58,11 +59,66 @@ impl Blackout {
     }
 }
 
+/// What kind of white screen is up.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WhiteoutKind {
+    /// Arriving by cyclone: the screen starts white and clears.
+    Arrival,
+    /// Falling off an island of the Skylands: the screen whites out, the player is taken to the normal world and put `SKY_FALL_DROP`
+    /// blocks above its spawn point (`moved`), and it clears as they fall. The overworld shows through the white meanwhile.
+    Fall { moved: bool },
+}
+
+/// A white screen in the Skylands (see `WhiteoutKind`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Whiteout {
+    pub elapsed: f32,
+    pub kind: WhiteoutKind,
+}
+
+impl Whiteout {
+    /// How white the screen is, from 0 (clear) to 1.
+    pub fn alpha(&self) -> f32 {
+        match self.kind {
+            WhiteoutKind::Arrival => (1.0 - self.elapsed / SKY_ARRIVAL_FADE_SECONDS).clamp(0.0, 1.0),
+            WhiteoutKind::Fall { .. } if self.elapsed < SKY_FALL_FADE_IN => self.elapsed / SKY_FALL_FADE_IN,
+            WhiteoutKind::Fall { .. } => (1.0 - (self.elapsed - SKY_FALL_FADE_IN) / SKY_FALL_FADE_OUT).clamp(0.0, 1.0),
+        }
+    }
+
+    fn duration(&self) -> f32 {
+        match self.kind {
+            WhiteoutKind::Arrival => SKY_ARRIVAL_FADE_SECONDS,
+            WhiteoutKind::Fall { .. } => SKY_FALL_FADE_IN + SKY_FALL_FADE_OUT,
+        }
+    }
+
+    /// Whether the normal world is drawn behind the white: only while falling out of the Skylands.
+    pub fn shows_overworld(&self) -> bool {
+        matches!(self.kind, WhiteoutKind::Fall { .. })
+    }
+}
+
 /// The dimension the player is not in, as they left it: its world, its items on the ground and where the player stood.
 pub struct Away {
     pub world: World,
     pub items: Vec<DroppedItem>,
     pub player: Player,
+}
+
+impl Away {
+    /// A dimension nobody has been to yet, with the player at its arrival point.
+    fn fresh(dimension: Dimension, seed: i64) -> Away {
+        let (world, mut player) = match dimension {
+            Dimension::Skylands => (World::new_skylands(seed), Player::new()),
+            Dimension::Horizen => (World::new_horizen(seed), Player::new()),
+            Dimension::Overworld => (World::new(seed, std::collections::HashSet::new()), Player::new()),
+        };
+        if dimension == Dimension::Skylands {
+            player.pos = skylands::spawn_point();
+        }
+        Away { world, items: Vec::new(), player }
+    }
 }
 
 pub struct Game {
@@ -106,8 +162,14 @@ pub struct Game {
     /// The one thing the player wears: a pelt cloak (bears leave them alone unless hit first) or the royal armour (all
     /// damage halved).
     pub worn: Option<ItemKind>,
-    /// The other dimension, once the player has been to the Horizen (see `Away`).
+    /// A dimension the player is not in, once they have been somewhere else (see `Away`).
     pub away: Option<Away>,
+    /// A second parked dimension, when the player has been to all three.
+    pub shelf: Option<Away>,
+    /// Seconds the player has stood in a cyclone.
+    pub cyclone_timer: f32,
+    /// The white screen of the Skylands, if one is up.
+    pub whiteout: Option<Whiteout>,
     /// The one fire tornado currently active in the Horizen, if it is daytime there.
     pub tornado: Option<FireTornado>,
     /// Seconds since the previous Horizen tornado spawned.
@@ -144,28 +206,23 @@ impl Game {
         let worn = data.worn;
         let mut player = data.player;
         player.lift_out_of_blocks(&world);
-        let mut items = data.items;
-        let mut away = data.horizen.map(|h| {
-            let h = *h;
-            let mut hw = World::with_edits(info.seed, h.removed, h.placed, h.fires)
-                .with_cooking(h.cooking)
-                .with_glow(h.glow)
-                .with_pots(h.pots)
-                .with_night(h.night);
-            hw.dimension = Dimension::Horizen;
-            Away { world: hw, items: h.items, player: h.player }
-        });
-        if data.in_horizen {
-            let mut a = away.take().unwrap_or_else(|| Away { world: World::new_horizen(info.seed), items: Vec::new(), player: Player::new() });
-            std::mem::swap(&mut world, &mut a.world);
-            std::mem::swap(&mut player, &mut a.player);
-            std::mem::swap(&mut items, &mut a.items);
-            world.stream_chunks(player.pos);
-            world.rebuild_dirty(player.pos, usize::MAX);
-            player.lift_out_of_blocks(&world);
-            away = Some(a);
-        }
-        Game {
+        let items = data.items;
+        let parked = |saved: Option<Box<SaveData>>, dimension: Dimension| {
+            saved.map(|h| {
+                let h = *h;
+                let mut w = World::with_edits(info.seed, h.removed, h.placed, h.fires)
+                    .with_cooking(h.cooking)
+                    .with_glow(h.glow)
+                    .with_pots(h.pots)
+                    .with_night(h.night);
+                w.dimension = dimension;
+                Away { world: w, items: h.items, player: h.player }
+            })
+        };
+        let away = parked(data.horizen, Dimension::Horizen);
+        let shelf = parked(data.skylands, Dimension::Skylands);
+        let (in_horizen, in_skylands) = (data.in_horizen, data.in_skylands);
+        let mut game = Game {
             info,
             dev_mode,
             world,
@@ -190,6 +247,9 @@ impl Game {
             blackout: None,
             worn,
             away,
+            shelf,
+            cyclone_timer: 0.0,
+            whiteout: None,
             tornado: None,
             tornado_timer: 0.0,
             storm_active: false,
@@ -199,24 +259,38 @@ impl Game {
             storm_lightning_flash: 0.0,
             storm_lightning_pos: Vec3::ZERO,
             horizen_transition: None,
+        };
+        // A world saved away from the overworld picks up the dimension it was saved in.
+        if in_horizen {
+            game.travel_to(Dimension::Horizen);
+        } else if in_skylands {
+            game.travel_to(Dimension::Skylands);
         }
+        game.horizen_transition = None;
+        game.whiteout = None;
+        game
     }
 
     /// The save text for this session (see `serialize_save_full`): the overworld always as the main part, the Horizen
     /// as records starting with `h`.
     pub fn save_text(&self) -> String {
-        let in_horizen = self.world.dimension == Dimension::Horizen;
-        let (over, over_player, over_items, hor) = if in_horizen {
-            match &self.away {
-                Some(a) => (&a.world, &a.player, &a.items[..], Some((&self.world, &self.player, &self.items[..]))),
-                None => (&self.world, &self.player, &self.items[..], None),
+        let current = (&self.world, &self.player, &self.items[..]);
+        let find = |d: Dimension| {
+            if self.world.dimension == d {
+                Some(current)
+            } else {
+                self.parked(d).map(|a| (&a.world, &a.player, &a.items[..]))
             }
-        } else {
-            let hor = self.away.as_ref().map(|a| (&a.world, &a.player, &a.items[..]));
-            (&self.world, &self.player, &self.items[..], hor)
         };
-        let extras = SaveExtras { worn: self.worn, in_horizen: in_horizen && hor.is_some(), horizen: hor };
-        serialize_save_full(&self.info.name, self.info.seed, over, over_player, &self.inventory, over_items, self.health, self.dev_mode, &extras)
+        let over = find(Dimension::Overworld).unwrap_or(current);
+        let extras = SaveExtras {
+            worn: self.worn,
+            in_horizen: self.in_horizen(),
+            horizen: find(Dimension::Horizen),
+            in_skylands: self.in_skylands(),
+            skylands: find(Dimension::Skylands),
+        };
+        serialize_save_full(&self.info.name, self.info.seed, over.0, over.1, &self.inventory, over.2, self.health, self.dev_mode, &extras)
     }
 
     pub fn save(&self) {
@@ -228,6 +302,38 @@ impl Game {
 
     pub fn in_horizen(&self) -> bool {
         self.world.dimension == Dimension::Horizen
+    }
+
+    pub fn in_skylands(&self) -> bool {
+        self.world.dimension == Dimension::Skylands
+    }
+
+    /// Whether the player is in the ordinary world (the landmarks, wildlife, weather and trails belong to it alone).
+    pub fn in_overworld(&self) -> bool {
+        self.world.dimension == Dimension::Overworld
+    }
+
+    /// The parked dimension of that kind, if the player has been there and is not there now.
+    pub fn parked(&self, dimension: Dimension) -> Option<&Away> {
+        [&self.away, &self.shelf].into_iter().flatten().find(|a| a.world.dimension == dimension)
+    }
+
+    fn take_parked(&mut self, dimension: Dimension) -> Option<Away> {
+        if self.away.as_ref().map_or(false, |a| a.world.dimension == dimension) {
+            self.away.take()
+        } else if self.shelf.as_ref().map_or(false, |a| a.world.dimension == dimension) {
+            self.shelf.take()
+        } else {
+            None
+        }
+    }
+
+    fn park(&mut self, other: Away) {
+        if self.away.is_none() {
+            self.away = Some(other);
+        } else {
+            self.shelf = Some(other);
+        }
     }
 
     /// The item in the selected hotbar slot, if any.
@@ -389,9 +495,10 @@ impl Game {
         let amount = if self.worn == Some(ItemKind::RoyalArmor) && amount > 0 { (amount + ARMOR_DAMAGE_DIVISOR - 1) / ARMOR_DAMAGE_DIVISOR } else { amount };
         self.health = self.health.saturating_sub(amount);
         if self.health == 0 {
-            // Dying in the Horizen takes the player back to where the overworld begins.
-            if self.in_horizen() {
-                self.leave_horizen();
+            // Dying in another dimension takes the player back to where the overworld begins.
+            if !self.in_overworld() {
+                self.travel_to(Dimension::Overworld);
+                self.whiteout = None;
             }
             self.player = Player::new();
             self.health = MAX_HEALTH;
@@ -895,6 +1002,7 @@ impl Game {
                 let spot = animal.pos + vec3(0.0, 0.5, 0.0);
                 self.items.push(DroppedItem::spawn_at(kind, spot, &mut self.rng));
             }
+            self.boss_slain(&animal);
         }
     }
 
@@ -1000,9 +1108,8 @@ impl Game {
     /// `COMPASS_TREK_CHUNKS` chunks brings a mountain; holding a peep stone shows the rainbow (once).
     /// Call once a frame, after the player has moved.
     pub fn update_landmarks(&mut self) {
-        // The Horizen has no landmarks, and the compass, peep stone and totem do nothing there.
-        if self.in_horizen() {
-            self.update_dimension();
+        // The other dimensions have no landmarks, and the compass, peep stone and totem do nothing there.
+        if !self.in_overworld() {
             return;
         }
         self.treks.mountain_found = self.world.landmarks.mountain().is_some();
@@ -1100,7 +1207,7 @@ impl Game {
     /// to the end of the rainbow, even once the gold has been taken. A bone totem leads by day to the well and by night to
     /// the graveyard. `None` when neither is in hand, nothing is out there to lead to, or the player is in the Horizen.
     pub fn trail_path(&self) -> Option<Vec<(f32, f32)>> {
-        if self.in_horizen() {
+        if !self.in_overworld() {
             return None;
         }
         let start = (self.player.pos.x, self.player.pos.z);
@@ -1136,7 +1243,7 @@ impl Game {
     /// With a bone totem in hand by day, and only if the world has no well yet, bring the well into the world beyond the
     /// edge of the land; by night, in the same way, the graveyard. The totem's trail then leads to it for ever.
     pub fn try_show_well_or_graveyard(&mut self) -> bool {
-        if self.in_horizen() || self.held_item() != Some(ItemKind::BoneTotem) {
+        if !self.in_overworld() || self.held_item() != Some(ItemKind::BoneTotem) {
             return false;
         }
         let p = self.player.pos;
@@ -1197,11 +1304,180 @@ impl Game {
         }
     }
 
+    // --- Bosses, the cyclone and the Skylands ----------------------------------------------
+
+    /// Bring the bosses out when the player comes near: the Yeti on the summit of the mountain, and the monster of every
+    /// lake with a castle whose gate is still shut. Called with the wildlife spawns.
+    fn spawn_bosses(&mut self) {
+        let p = self.player.pos;
+        if !self.world.landmarks.yeti_slain && !self.animals.iter().any(|a| a.kind == AnimalKind::Yeti) {
+            if let Some((sx, sz)) = self.world.landmarks.summit() {
+                let gap = vec2(p.x - (sx as f32 + 0.5), p.z - (sz as f32 + 0.5)).length();
+                if gap <= YETI_SPAWN_DISTANCE && self.world.chunks.contains_key(&World::chunk_of(sx, sz)) {
+                    let at = vec3(sx as f32 + 0.5, self.world.ground_top(sx, sz) as f32 + 1.01, sz as f32 + 0.5);
+                    self.animals.push(Animal::new(AnimalKind::Yeti, at, &mut self.rng));
+                }
+            }
+        }
+        let lakes: Vec<Lake> = self.world.landmarks.lakes.iter().copied().filter(|l| self.world.landmarks.gate_shut(l)).collect();
+        for lake in lakes {
+            let centre = vec3(lake.x as f32 + 0.5, 0.0, lake.z as f32 + 0.5);
+            let has_monster = self.animals.iter().any(|a| a.kind == AnimalKind::LochNessMonster && vec2(a.home.x - centre.x, a.home.z - centre.z).length() <= lake.radius as f32);
+            if has_monster || vec2(p.x - centre.x, p.z - centre.z).length() > lake.radius as f32 + LOCH_NESS_SPAWN_MARGIN {
+                continue;
+            }
+            // Somewhere in the water between the island and the far shore, in a chunk that is loaded.
+            let inner = lake.island_radius() * 1.25 + 12.0;
+            for _ in 0..32 {
+                let angle = self.rng.unit() * std::f32::consts::TAU;
+                let dist = inner + self.rng.unit() * (lake.radius as f32 * 0.8 - inner).max(1.0);
+                let (x, z) = ((centre.x + angle.cos() * dist).floor() as i32, (centre.z + angle.sin() * dist).floor() as i32);
+                if lake.contains(x, z) && self.world.chunks.contains_key(&World::chunk_of(x, z)) {
+                    let at = vec3(x as f32 + 0.5, self.world.ground_top(x, z) as f32 + 1.01, z as f32 + 0.5);
+                    self.animals.push(Animal::new(AnimalKind::LochNessMonster, at, &mut self.rng));
+                    break;
+                }
+            }
+        }
+    }
+
+    /// What a boss's death does: the Yeti's raises the cyclone on the summit, the monster's opens its castle's gate.
+    fn boss_slain(&mut self, boss: &Animal) {
+        match boss.kind {
+            AnimalKind::Yeti => {
+                self.world.landmarks.yeti_slain = true;
+                self.toasts.push("The Yeti is slain. A cyclone rises on the summit.".to_string());
+            }
+            AnimalKind::LochNessMonster => {
+                let nearest = self.world.landmarks.lakes.iter().copied().filter(|l| l.has_castle()).min_by(|a, b| {
+                    let d = |l: &Lake| (l.x as f32 - boss.home.x).powi(2) + (l.z as f32 - boss.home.z).powi(2);
+                    d(a).partial_cmp(&d(b)).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                if let Some(lake) = nearest {
+                    self.world.open_lake_gate(&lake);
+                    self.toasts.push("The Loch Ness Monster is slain. The castle gate swings open.".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The nearest living boss within `BOSS_BAR_DISTANCE`, as its name and the share of its health left (for the bar at
+    /// the top of the screen).
+    pub fn boss_bar(&self) -> Option<(&'static str, f32)> {
+        let p = self.player.pos;
+        self.animals
+            .iter()
+            .filter(|a| a.kind.is_boss() && (a.pos - p).length() <= BOSS_BAR_DISTANCE)
+            .min_by(|a, b| (a.pos - p).length().partial_cmp(&(b.pos - p).length()).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|a| (a.kind.boss_name(), (a.health as f32 / a.kind.max_health() as f32).clamp(0.0, 1.0)))
+    }
+
+    /// The cyclone in the world the player is in: on the summit once the Yeti is dead, and in the Skylands the one that
+    /// leads home.
+    pub fn cyclone(&self) -> Option<Cyclone> {
+        match self.world.dimension {
+            Dimension::Overworld if self.world.landmarks.yeti_slain => {
+                let (sx, sz) = self.world.landmarks.summit()?;
+                Some(Cyclone { pos: vec3(sx as f32 + 0.5, (self.world.ground_top(sx, sz) + 1) as f32, sz as f32 + 0.5) })
+            }
+            Dimension::Skylands => Some(Cyclone { pos: skylands::home_cyclone() }),
+            _ => None,
+        }
+    }
+
+    /// How white the screen is from standing in a cyclone: it fades in over the last `CYCLONE_FADE_SECONDS`.
+    pub fn cyclone_whiteness(&self) -> f32 {
+        ((self.cyclone_timer - (CYCLONE_SECONDS - CYCLONE_FADE_SECONDS)) / CYCLONE_FADE_SECONDS).clamp(0.0, 1.0)
+    }
+
+    /// How white the whole screen is: a cyclone taking hold, or a white-out of the Skylands.
+    pub fn white_alpha(&self) -> f32 {
+        self.cyclone_whiteness().max(self.whiteout.map_or(0.0, |w| w.alpha()))
+    }
+
+    /// While the screen is white from a fall out of the Skylands: the overworld, to be drawn behind it, and where its camera
+    /// stands (the player's eye carried from the first island to the summit, so the fall is a fall onto the mountain).
+    pub fn overworld_backdrop(&self, eye: Vec3) -> Option<(&World, Vec3)> {
+        if !self.in_skylands() || !self.whiteout.map_or(false, |w| w.shows_overworld()) {
+            return None;
+        }
+        let over = &self.parked(Dimension::Overworld)?.world;
+        let (sx, sz) = over.landmarks.summit()?;
+        let summit = vec3(sx as f32 + 0.5, (over.ground_top(sx, sz) + 1) as f32, sz as f32 + 0.5);
+        Some((over, eye - skylands::spawn_point() + summit))
+    }
+
+    /// Carry the player up through the cyclone into the Skylands, arriving in a fading white.
+    pub fn enter_skylands(&mut self) {
+        if !self.in_overworld() {
+            return;
+        }
+        self.travel_to(Dimension::Skylands);
+        self.whiteout = Some(Whiteout { elapsed: 0.0, kind: WhiteoutKind::Arrival });
+        self.toasts.push("The cyclone carries you up into a sky of floating islands.".to_string());
+    }
+
+    /// Carry the player home through the cyclone of the first island, to the summit.
+    pub fn leave_skylands(&mut self) {
+        if !self.in_skylands() {
+            return;
+        }
+        self.travel_to(Dimension::Overworld);
+        // Set down beside the cyclone, not in it, or it would carry the player straight back.
+        if let Some(c) = self.cyclone() {
+            self.player.pos = c.pos + vec3(CYCLONE_RADIUS + 2.5, 0.01, 0.0);
+            self.player.lift_out_of_blocks(&self.world);
+        }
+        self.whiteout = Some(Whiteout { elapsed: 0.0, kind: WhiteoutKind::Arrival });
+        self.toasts.push("The cyclone sets you down on the summit.".to_string());
+    }
+
+    /// Advance the cyclone (five seconds inside it carries the player through), a fall off an island, and the white screen.
+    /// Call once a frame.
+    pub fn update_travel(&mut self, dt: f32) {
+        if let Some(mut w) = self.whiteout.take() {
+            w.elapsed += dt;
+            if let WhiteoutKind::Fall { moved: false } = w.kind {
+                if w.elapsed >= SKY_FALL_FADE_IN {
+                    // Wholly white now: the player leaves the Skylands and is put high above the normal world's spawn point,
+                    // to fall back on to it.
+                    self.travel_to(Dimension::Overworld);
+                    self.player.pos = Player::new().pos + vec3(0.0, SKY_FALL_DROP, 0.0);
+                    self.player.vel = Vec3::ZERO;
+                    self.player.knock = Vec3::ZERO;
+                    self.world.stream_chunks(self.player.pos);
+                    self.world.rebuild_dirty(self.player.pos, usize::MAX);
+                    w.kind = WhiteoutKind::Fall { moved: true };
+                }
+            }
+            self.whiteout = (w.elapsed < w.duration()).then_some(w);
+        }
+        if self.in_skylands() && self.whiteout.is_none() && self.player.pos.y < SKY_VOID_Y {
+            self.whiteout = Some(Whiteout { elapsed: 0.0, kind: WhiteoutKind::Fall { moved: false } });
+            self.toasts.push("You fall from the island.".to_string());
+        }
+        let inside = self.cyclone().map_or(false, |c| c.contains(self.player.pos));
+        if !inside {
+            self.cyclone_timer = 0.0;
+            return;
+        }
+        self.cyclone_timer += dt;
+        if self.cyclone_timer >= CYCLONE_SECONDS {
+            self.cyclone_timer = 0.0;
+            if self.in_overworld() {
+                self.enter_skylands();
+            } else {
+                self.leave_skylands();
+            }
+        }
+    }
+
     // --- The Horizen ---------------------------------------------------------------------
 
     /// Finish a well fall only when the player is standing on its stone floor.
     pub fn update_dimension(&mut self) {
-        if self.in_horizen() {
+        if !self.in_overworld() {
             return;
         }
         let p = self.player.pos;
@@ -1215,11 +1491,14 @@ impl Game {
         }
     }
 
-    /// Trade places with the other dimension: the world, the items on the ground and the player's place in it.
-    /// Creatures, arrows and the work in progress do not cross.
-    fn swap_dimension(&mut self) {
+    /// Go to `target`: the world, the items on the ground and the player's place in it trade with the ones parked there
+    /// (a dimension nobody has been to is made new). Creatures, arrows and the work in progress do not cross.
+    fn travel_to(&mut self, target: Dimension) {
+        if self.world.dimension == target {
+            return;
+        }
         let seed = self.info.seed;
-        let mut other = self.away.take().unwrap_or_else(|| Away { world: World::new_horizen(seed), items: Vec::new(), player: Player::new() });
+        let mut other = self.take_parked(target).unwrap_or_else(|| Away::fresh(target, seed));
         let (yaw, pitch) = (self.player.yaw, self.player.pitch);
         std::mem::swap(&mut self.world, &mut other.world);
         std::mem::swap(&mut self.items, &mut other.items);
@@ -1229,13 +1508,14 @@ impl Game {
         self.player.pitch = pitch;
         self.player.vel = Vec3::ZERO;
         self.player.knock = Vec3::ZERO;
-        self.away = Some(other);
+        self.park(other);
         self.animals.clear();
         self.arrows.clear();
         self.mining = None;
         self.blackout = None;
         self.tornado = None;
         self.tornado_timer = 0.0;
+        self.cyclone_timer = 0.0;
         self.reset_storm();
         self.treks = Treks::new();
         self.world.stream_chunks(self.player.pos);
@@ -1248,18 +1528,9 @@ impl Game {
         if self.in_horizen() {
             return;
         }
-        self.swap_dimension();
+        self.travel_to(Dimension::Horizen);
         self.horizen_transition = Some(0.0);
         self.toasts.push("You fall through the water into the Horizen.".to_string());
-    }
-
-    /// Return to the overworld, to where the player left it.
-    pub fn leave_horizen(&mut self) {
-        if !self.in_horizen() {
-            return;
-        }
-        self.swap_dimension();
-        self.horizen_transition = None;
     }
 
     /// Advance the black screen after a well fall. The player has already appeared in the arrival pool underneath it.
@@ -1306,7 +1577,7 @@ impl Game {
     /// Every `ANIMAL_SPAWN_INTERVAL` seconds, bring wildlife into the world a good way from the player, unless
     /// that kind is already at its limit. Will-o-whisps are included only while the world is night.
     fn spawn_wildlife(&mut self) {
-        if self.in_horizen() {
+        if !self.in_overworld() {
             return;
         }
         let count = |k: AnimalKind| self.animals.iter().filter(|a| a.kind == k).count();
@@ -1317,6 +1588,8 @@ impl Game {
             AnimalKind::Rabbit => MAX_RABBIT,
             AnimalKind::Moose => MAX_MOOSE,
             AnimalKind::WillOWhisp => MAX_WILL_O_WHISP,
+            // The bosses are never wildlife.
+            AnimalKind::Yeti | AnimalKind::LochNessMonster => 0,
         }
         .saturating_sub(count(kind));
         let mut open: Vec<(AnimalKind, u64)> = [
@@ -1363,9 +1636,14 @@ impl Game {
     /// of the player and any bear; a bear only ever reacts to the player.
     pub fn update_animals(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
-        if self.in_horizen() {
-            self.update_horizen_tornado(dt);
-            return;
+        match self.world.dimension {
+            Dimension::Horizen => {
+                self.update_horizen_tornado(dt);
+                return;
+            }
+            // Nothing lives in the Skylands.
+            Dimension::Skylands => return,
+            Dimension::Overworld => {}
         }
         let player = self.player.pos;
         // Will-o-whisps are drawn to a player with a holly rod in the hotbar. One that is bonded and has been left
@@ -1383,7 +1661,7 @@ impl Game {
         let flat = |a: &Animal| vec2(a.pos.x - player.x, a.pos.z - player.z).length();
         // Whisps go with the night, except the ones that follow the player.
         self.animals.retain(|a| {
-            flat(a) < ANIMAL_DESPAWN_DISTANCE && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
+            flat(a) < if a.kind.is_boss() { BOSS_DESPAWN_DISTANCE } else { ANIMAL_DESPAWN_DISTANCE } && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
         });
         let cloaked = self.worn == Some(ItemKind::PeltCloak);
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Bear) {
@@ -1392,7 +1670,7 @@ impl Game {
         let bears: Vec<Vec3> = self.animals.iter().filter(|a| a.kind == AnimalKind::Bear).map(|a| a.pos).collect();
         let mut strikes: Vec<(Vec3, u32, &'static str)> = Vec::new();
         for a in &mut self.animals {
-            let near = vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= ANIMAL_UPDATE_DISTANCE;
+            let near = vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
             if !near || !self.world.chunks.contains_key(&World::chunk_of_pos(a.pos)) {
                 continue;
             }
@@ -1418,6 +1696,7 @@ impl Game {
         if self.spawn_timer >= ANIMAL_SPAWN_INTERVAL {
             self.spawn_timer = 0.0;
             self.spawn_wildlife();
+            self.spawn_bosses();
         }
     }
 
@@ -1485,7 +1764,7 @@ impl Game {
     /// Advance the daytime storm caused by bonded will-o-whisps. It gathers after twenty seconds with a follower,
     /// lingers for twenty seconds after the last follower leaves, and occasionally flashes lightning in the distance.
     pub fn update_storm(&mut self, dt: f32) {
-        if self.in_horizen() || self.world.night {
+        if !self.in_overworld() || self.world.night {
             self.reset_storm();
             return;
         }
@@ -4726,7 +5005,7 @@ mod totem_horizen_and_wear_tests {
         assert_eq!(again.world.block_at(x, GROUND_TOP + 1, z), Block::PlacedStone, "the edit in the Horizen is kept");
         assert_eq!(again.items.len(), 1);
         assert!(again.away.as_ref().unwrap().world.landmarks.well.is_some(), "and the overworld with it");
-        again.leave_horizen();
+        again.travel_to(Dimension::Overworld);
         assert_eq!(again.world.dimension, Dimension::Overworld);
         assert!(again.items.is_empty() && again.world.landmarks.well.is_some());
     }
@@ -4891,5 +5170,329 @@ mod totem_horizen_and_wear_tests {
             g.update_landmarks();
         }
         assert_eq!(g.world.landmarks.mountains.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod boss_and_skylands_tests {
+    use super::*;
+    use crate::landmarks::MOUNTAIN_MAX_HEIGHT;
+    use crate::player::MoveInput;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        Game::from_save(info, SaveData::new(), 5)
+    }
+
+    fn mountain() -> Mountain {
+        Mountain { x: 30, z: -500, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT), phase: 7 }
+    }
+
+    /// A game with a mountain and the player standing on its summit, a little way from the middle.
+    fn on_the_summit() -> Game {
+        let mut g = game();
+        g.world.add_mountain(mountain());
+        let (sx, sz) = g.world.landmarks.summit().unwrap();
+        let y = g.world.ground_top(sx, sz) as f32 + 1.01;
+        g.player.pos = vec3(sx as f32 + 0.5 + 12.0, y, sz as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.world.rebuild_dirty(g.player.pos, usize::MAX);
+        g
+    }
+
+    fn yetis(g: &Game) -> Vec<&Animal> {
+        g.animals.iter().filter(|a| a.kind == AnimalKind::Yeti).collect()
+    }
+
+    fn lake() -> Lake {
+        Lake { x: 60, z: 60, radius: LAKE_RADIUS, phase: 3, from: (10, 10) }
+    }
+
+    fn gate_cell(g: &Game, lake: &Lake) -> Block {
+        let (x, z) = (lake.x, lake.z + CASTLE_WALL_HALF);
+        g.world.block_at(x, g.world.ground_top(x, z) + 1, z)
+    }
+
+    /// A game with a lake whose castle gate is near the player.
+    fn at_the_castle() -> (Game, Lake) {
+        let mut g = game();
+        let lake = lake();
+        g.world.add_lake(lake);
+        let (x, z) = (lake.x, lake.z + CASTLE_WALL_HALF + 4);
+        g.player.pos = vec3(x as f32 + 0.5, g.world.ground_top(x, z) as f32 + 1.01, z as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.world.rebuild_dirty(g.player.pos, usize::MAX);
+        (g, lake)
+    }
+
+    #[test]
+    fn the_yeti_appears_once_on_the_flat_summit_when_the_player_comes_near() {
+        let mut g = on_the_summit();
+        let (sx, sz) = g.world.landmarks.summit().unwrap();
+        let top = g.world.ground_top(sx, sz);
+        for (dx, dz) in [(0, 0), (6, -4), (-10, 9), (13, 0)] {
+            assert_eq!(g.world.ground_top(sx + dx, sz + dz), top, "the arena is level");
+        }
+        assert!(yetis(&g).is_empty());
+        g.spawn_bosses();
+        g.spawn_bosses();
+        let found = yetis(&g);
+        assert_eq!(found.len(), 1, "never a second one");
+        assert_eq!((found[0].pos.x, found[0].pos.z), (sx as f32 + 0.5, sz as f32 + 0.5));
+        assert_eq!(found[0].health, YETI_HEALTH);
+        assert!(found[0].pos.y + found[0].kind.height() < WORLD_HEIGHT as f32, "it fits under the top of the world");
+    }
+
+    #[test]
+    fn the_yeti_stays_away_from_a_distant_player_and_after_its_death() {
+        let mut g = game();
+        g.world.add_mountain(mountain());
+        g.spawn_bosses();
+        assert!(yetis(&g).is_empty(), "the summit is far away");
+        let mut g = on_the_summit();
+        g.world.landmarks.yeti_slain = true;
+        g.spawn_bosses();
+        assert!(yetis(&g).is_empty(), "a slain Yeti does not return");
+    }
+
+    #[test]
+    fn the_yeti_charges_a_nearby_player_hits_hard_and_never_leaves_its_leash() {
+        let mut g = on_the_summit();
+        g.spawn_bosses();
+        let (home, start) = (g.animals[0].home, g.player.pos);
+        g.player.pos = home + vec3(YETI_NOTICE_DISTANCE - 4.0, 0.0, 0.0);
+        g.player.pos.y = start.y;
+        let before = g.health;
+        for _ in 0..(8.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            if g.health < before {
+                break;
+            }
+        }
+        assert_eq!(g.health, before - YETI_DAMAGE, "the Yeti reached the player and struck once");
+        // A player who runs off is followed only as far as the leash.
+        let yeti = g.animals.iter().find(|a| a.kind == AnimalKind::Yeti).map(|a| a.pos).unwrap_or(home);
+        assert!(vec2(yeti.x - home.x, yeti.z - home.z).length() <= YETI_LEASH + 2.0);
+    }
+
+    #[test]
+    fn killing_the_yeti_sets_the_flag_drops_loot_and_raises_the_cyclone() {
+        let mut g = on_the_summit();
+        g.spawn_bosses();
+        assert!(g.cyclone().is_none() && g.boss_bar().is_some(), "a live Yeti has a bar and there is no cyclone yet");
+        g.hurt_animals(&[(0, 10_000)]);
+        assert!(g.world.landmarks.yeti_slain && yetis(&g).is_empty());
+        assert!(g.boss_bar().is_none());
+        let count = |k: ItemKind| g.items.iter().filter(|i| i.kind == k).count() as u32;
+        assert_eq!((count(ItemKind::Gold), count(ItemKind::BearPelt)), (YETI_GOLD_DROP, YETI_PELT_DROP));
+        let cyclone = g.cyclone().expect("a cyclone now stands on the summit");
+        let (sx, sz) = g.world.landmarks.summit().unwrap();
+        assert_eq!((cyclone.pos.x, cyclone.pos.z), (sx as f32 + 0.5, sz as f32 + 0.5));
+    }
+
+    #[test]
+    fn the_health_bar_follows_the_nearest_boss_and_its_health() {
+        let mut g = on_the_summit();
+        g.spawn_bosses();
+        assert_eq!(g.boss_bar(), Some(("The Yeti", 1.0)));
+        g.animals[0].health = YETI_HEALTH / 4;
+        assert_eq!(g.boss_bar().map(|b| (b.1 * 100.0).round() as i32), Some(25));
+        g.player.pos += vec3(BOSS_BAR_DISTANCE + 20.0, 0.0, 0.0);
+        assert_eq!(g.boss_bar(), None, "out of range");
+    }
+
+    /// Stand the player in the summit's cyclone.
+    fn in_the_cyclone(g: &mut Game) {
+        g.world.landmarks.yeti_slain = true;
+        g.animals.clear();
+        g.player.pos = g.cyclone().unwrap().pos + vec3(0.5, 0.01, 0.0);
+    }
+
+    #[test]
+    fn five_seconds_in_the_cyclone_carry_the_player_to_the_skylands_and_stepping_out_resets_it() {
+        let mut g = on_the_summit();
+        in_the_cyclone(&mut g);
+        let dt = 0.1;
+        for _ in 0..45 {
+            g.update_travel(dt);
+        }
+        assert!(g.in_overworld(), "4.5 seconds is not enough");
+        assert!(g.cyclone_whiteness() > 0.0 && g.cyclone_whiteness() < 1.0, "the screen is going white");
+        let inside = g.player.pos;
+        g.player.pos += vec3(CYCLONE_RADIUS + 3.0, 0.0, 0.0);
+        g.update_travel(dt);
+        assert_eq!(g.cyclone_timer, 0.0, "stepping out starts the count again");
+        g.player.pos = inside;
+        for _ in 0..49 {
+            g.update_travel(dt);
+        }
+        assert!(g.in_overworld(), "4.9 seconds");
+        g.update_travel(dt);
+        g.update_travel(dt);
+        assert!(g.in_skylands(), "five seconds");
+        assert!((g.player.pos - skylands::spawn_point()).length() < 1.0, "arrives on the first island");
+        assert!(g.whiteout.map_or(false, |w| w.kind == WhiteoutKind::Arrival && w.alpha() > 0.9), "the white clears gradually");
+        assert!(g.parked(Dimension::Overworld).is_some());
+    }
+
+    #[test]
+    fn the_skylands_have_their_own_day_and_night_and_nothing_lives_there() {
+        let mut g = on_the_summit();
+        g.enter_skylands();
+        assert!(!g.world.night && !g.parked(Dimension::Overworld).unwrap().world.night);
+        g.set_night(true);
+        for _ in 0..200 {
+            g.update_blackout(0.05);
+        }
+        assert!(g.world.night, "night falls in the Skylands");
+        assert!(!g.parked(Dimension::Overworld).unwrap().world.night, "and not in the overworld");
+        for _ in 0..200 {
+            g.update_animals(0.1);
+        }
+        assert!(g.animals.is_empty());
+        assert!(g.trail_path().is_none());
+    }
+
+    #[test]
+    fn falling_off_an_island_whites_out_the_screen_and_drops_the_player_from_fifty_blocks_above_the_normal_worlds_spawn() {
+        let mut g = on_the_summit();
+        g.enter_skylands();
+        g.whiteout = None;
+        // No normal world behind the Skylands while standing on them.
+        assert!(g.overworld_backdrop(g.player.eye()).is_none());
+        g.player.pos = vec3(200.5, SKY_VOID_Y - 5.0, 200.5);
+        g.update_travel(0.05);
+        let w = g.whiteout.expect("the white-out begins");
+        assert!(matches!(w.kind, WhiteoutKind::Fall { moved: false }));
+        assert!(g.overworld_backdrop(g.player.eye()).is_some(), "the normal world shows during the white-out");
+        let mut t = 0.05;
+        while t < SKY_FALL_FADE_IN + 0.1 {
+            g.update_travel(0.05);
+            t += 0.05;
+        }
+        let spawn = Player::new().pos;
+        assert!(g.in_overworld(), "the fall ends in the normal world");
+        assert!((g.player.pos.x - spawn.x).abs() < 0.01 && (g.player.pos.z - spawn.z).abs() < 0.01);
+        assert!((g.player.pos.y - (spawn.y + SKY_FALL_DROP)).abs() < 1.0, "50 blocks above: {}", g.player.pos.y);
+        assert!(g.white_alpha() > 0.8, "still white as the fall begins");
+        // Let them fall back onto the ground at the spawn point; the white clears.
+        for _ in 0..((SKY_FALL_FADE_OUT + 1.0) * 60.0) as i32 {
+            g.world.stream_chunks(g.player.pos);
+            g.player.update(&g.world, 1.0 / 60.0, &MoveInput::default());
+            g.update_travel(1.0 / 60.0);
+        }
+        assert!(g.whiteout.is_none() && g.white_alpha() == 0.0);
+        assert!(g.in_overworld() && g.overworld_backdrop(g.player.eye()).is_none());
+        assert!((g.player.pos.y - spawn.y).abs() < 1.5, "landed at the normal world's spawn at {}", g.player.pos.y);
+    }
+
+    #[test]
+    fn the_home_cyclone_carries_the_player_back_to_the_summit_and_does_not_take_them_again() {
+        let mut g = on_the_summit();
+        in_the_cyclone(&mut g);
+        g.enter_skylands();
+        g.whiteout = None;
+        g.player.pos = skylands::home_cyclone() + vec3(0.3, 0.01, 0.0);
+        for _ in 0..52 {
+            g.update_travel(0.1);
+        }
+        assert!(g.in_overworld(), "back in the overworld");
+        let c = g.cyclone().unwrap();
+        assert!(!c.contains(g.player.pos), "set down beside the cyclone, not in it");
+        for _ in 0..80 {
+            g.update_travel(0.1);
+        }
+        assert!(g.in_overworld(), "and it does not take them again");
+    }
+
+    #[test]
+    fn dying_in_the_skylands_returns_to_the_start_of_the_overworld() {
+        let mut g = on_the_summit();
+        g.enter_skylands();
+        assert!(g.hurt_player(MAX_HEALTH, "dead"));
+        assert!(g.in_overworld() && g.whiteout.is_none());
+        assert_eq!(g.player.pos, Player::new().pos);
+    }
+
+    #[test]
+    fn the_skylands_and_the_bosses_survive_a_save_and_load() {
+        let mut g = on_the_summit();
+        in_the_cyclone(&mut g);
+        g.world.landmarks.monsters_slain.push((60, 60));
+        g.enter_skylands();
+        g.player.pos = vec3(skylands::spawn_point().x + 3.0, skylands::spawn_point().y, skylands::spawn_point().z);
+        let text = g.save_text();
+        assert!(text.contains("dimension skylands") && text.contains("yetislain") && text.contains("nessie 60 60"));
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&text), 9);
+        assert!(again.in_skylands(), "loaded into the Skylands");
+        assert!((again.player.pos.x - (skylands::spawn_point().x + 3.0)).abs() < 0.01);
+        assert!(again.parked(Dimension::Overworld).map_or(false, |a| a.world.landmarks.yeti_slain && a.world.landmarks.monsters_slain == vec![(60, 60)]));
+        assert!(again.parked(Dimension::Horizen).is_none());
+    }
+
+    #[test]
+    fn all_three_dimensions_can_be_parked_and_saved_together() {
+        let mut g = on_the_summit();
+        g.enter_horizen();
+        g.travel_to(Dimension::Overworld);
+        g.travel_to(Dimension::Skylands);
+        assert!(g.parked(Dimension::Overworld).is_some() && g.parked(Dimension::Horizen).is_some());
+        let text = g.save_text();
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&text), 9);
+        assert!(again.in_skylands() && again.parked(Dimension::Horizen).is_some() && again.parked(Dimension::Overworld).is_some());
+    }
+
+    #[test]
+    fn the_castle_gate_is_shut_until_the_monster_is_dead() {
+        let (mut g, lake) = at_the_castle();
+        assert_eq!(gate_cell(&g, &lake), Block::CastleDoor, "shut");
+        let (x, z) = (lake.x + 1, lake.z + CASTLE_WALL_HALF);
+        for dy in 1..=4 {
+            assert_eq!(g.world.block_at(x, g.world.ground_top(x, z) + dy, z), if dy <= 4 { Block::CastleDoor } else { Block::Air }, "the whole opening is shut");
+        }
+        assert_eq!(g.world.block_at(lake.x, g.world.ground_top(lake.x, lake.z + CASTLE_WALL_HALF) + 5, lake.z + CASTLE_WALL_HALF), Block::CastleStone, "the wall above it is as before");
+        // Kill its monster.
+        g.spawn_bosses();
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::LochNessMonster).expect("the monster rises");
+        g.hurt_animals(&[(i, 10_000)]);
+        assert_eq!(gate_cell(&g, &lake), Block::Air, "open");
+        assert!(g.world.landmarks.monsters_slain.contains(&(lake.x, lake.z)));
+        g.spawn_bosses();
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::LochNessMonster), "it does not come back");
+        // The gate stays open after a reload.
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        again.world.stream_chunks(g.player.pos);
+        assert_eq!(gate_cell(&again, &lake), Block::Air);
+    }
+
+    #[test]
+    fn the_monster_rises_in_the_lake_and_never_leaves_the_water() {
+        let (mut g, lake) = at_the_castle();
+        // Stand at the water's edge, as the player would to fight it.
+        let shore = (0..40).map(|i| lake.z + 60 + i).find(|&z| !g.world.is_wet_column(lake.x, z) && g.world.is_wet_column(lake.x, z - 1)).unwrap_or(lake.z + 90);
+        g.player.pos = vec3(lake.x as f32 + 0.5, g.world.ground_top(lake.x, shore) as f32 + 1.01, shore as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.world.rebuild_dirty(g.player.pos, usize::MAX);
+        for _ in 0..200 {
+            g.spawn_bosses();
+            if g.animals.iter().any(|a| a.kind == AnimalKind::LochNessMonster) {
+                break;
+            }
+        }
+        assert!(g.animals.iter().any(|a| a.kind == AnimalKind::LochNessMonster), "the monster rises");
+        let start_gap = g.animals.iter().find(|a| a.kind == AnimalKind::LochNessMonster).map(|a| (a.pos - g.player.pos).length()).unwrap();
+        let mut closest = start_gap;
+        for frame in 0..(60.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            let m = g.animals.iter().find(|a| a.kind == AnimalKind::LochNessMonster).expect("alive");
+            assert!(g.world.is_wet_column(m.pos.x.floor() as i32, m.pos.z.floor() as i32), "frame {frame}: on dry land at {:?}", m.pos);
+            closest = closest.min((m.pos - g.player.pos).length());
+            g.player.pos.y = g.world.ground_top(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32) as f32 + 1.01;
+        }
+        assert!(closest < start_gap, "it swims towards the player on the shore ({start_gap} -> {closest})");
     }
 }

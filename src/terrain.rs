@@ -457,6 +457,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
     // The castles of the lakes that reach this chunk. The square each stands in is cleared first (plants, rocks), then
     // the walls are put up. The top of the island's hill is flat, so the castle stands level, on the top of it.
     for lake in landmarks.lakes.iter().filter(|l| l.has_castle()) {
+        let gate_shut = landmarks.gate_shut(lake);
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
@@ -464,7 +465,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
                     continue;
                 }
                 for dy in 0..CASTLE_HEIGHT {
-                    if let Some(block) = lake.castle_block(wx, wz, dy) {
+                    if let Some(block) = lake.castle_cell(wx, wz, dy, gate_shut) {
                         blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
                     }
                 }
@@ -1298,7 +1299,7 @@ mod tests {
         let y0 = GROUND_TOP + ISLAND_HILL_HEIGHT + 1;
         let b = generate_chunk_with(11, 0, 0, &marks);
         assert_eq!(b[idx(CASTLE_WALL_HALF, y0, 0)], Block::CastleStone, "the east wall");
-        assert_eq!(b[idx(0, y0, CASTLE_WALL_HALF)], Block::Air, "the gate");
+        assert_eq!(b[idx(0, y0, CASTLE_WALL_HALF)], Block::CastleDoor, "the gate, shut while the lake's monster lives");
         assert_eq!(b[idx(0, y0 + 4, CASTLE_WALL_HALF)], Block::CastleStone, "and the lintel over it");
         assert_eq!(b[idx(0, y0, 3)], Block::Air, "the keep's door");
         assert_eq!(b[idx(3, y0, 0)], Block::CastleStone, "the keep");

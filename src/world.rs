@@ -8,6 +8,7 @@ use crate::chunk::{idx, Chunk};
 use crate::config::*;
 use crate::item::{Hearth, ItemKind};
 use crate::horizen::{self, Dimension};
+use crate::skylands;
 use crate::landmarks::{GrandCastle, Graveyard, Landmarks, Lake, Mountain, Rainbow, RainbowState, Well};
 use crate::terrain::{berry_bush_is_purple, generate_chunk_for, ground_top_with, is_wet_column};
 
@@ -175,6 +176,13 @@ impl World {
         w
     }
 
+    /// An untouched Skylands with the given seed.
+    pub fn new_skylands(seed: i64) -> Self {
+        let mut w = Self::new(seed, HashSet::new());
+        w.dimension = Dimension::Skylands;
+        w
+    }
+
     /// Restore the saved lakes, mountains and rainbow. Call before any chunk is generated.
     pub fn with_landmarks(mut self, landmarks: Landmarks) -> Self {
         self.landmarks = landmarks;
@@ -184,8 +192,11 @@ impl World {
     /// y of the highest block of the ground in the column (wx, wz), as the land and its landmarks make it
     /// (trees, plants and the player's blocks stand on top of it).
     pub fn ground_top(&self, wx: i32, wz: i32) -> i32 {
-        if self.dimension == Dimension::Horizen {
-            return horizen::ground_top(self.seed, wx, wz);
+        match self.dimension {
+            Dimension::Horizen => return horizen::ground_top(self.seed, wx, wz),
+            // Over the void there is no ground: 0, the world's floor.
+            Dimension::Skylands => return skylands::surface_top(self.seed, wx, wz).unwrap_or(0),
+            Dimension::Overworld => {}
         }
         ground_top_with(self.seed, &self.landmarks, wx, wz)
     }
@@ -215,8 +226,10 @@ impl World {
 
     /// Whether water (a river or a lake) covers the column (wx, wz).
     pub fn is_wet_column(&self, wx: i32, wz: i32) -> bool {
-        if self.dimension == Dimension::Horizen {
-            return horizen::is_pond(self.seed, wx, wz);
+        match self.dimension {
+            Dimension::Horizen => return horizen::is_pond(self.seed, wx, wz),
+            Dimension::Skylands => return false,
+            Dimension::Overworld => {}
         }
         is_wet_column(self.seed, &self.landmarks, wx, wz)
     }
@@ -258,6 +271,20 @@ impl World {
     pub fn add_grand_castle(&mut self, castle: GrandCastle) {
         self.landmarks.grand_castle = Some(castle);
         self.regenerate_landmark_chunks();
+    }
+
+    /// Open the gate of `lake`'s castle for good, once its monster is dead: the chunks of the castle are made again.
+    pub fn open_lake_gate(&mut self, lake: &Lake) {
+        if !self.landmarks.monsters_slain.contains(&(lake.x, lake.z)) {
+            self.landmarks.monsters_slain.push((lake.x, lake.z));
+        }
+        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| Landmarks::lake_castle_touches_chunk(lake, cx, cz)).collect();
+        for key in &stale {
+            self.chunks.remove(key);
+        }
+        for &(cx, cz) in &stale {
+            self.ensure_chunk(cx, cz);
+        }
     }
 
     /// Show the rainbow, or retire it for good once its gold has been taken (the place where the gold lay is kept,
@@ -415,10 +442,10 @@ impl World {
         if self.chunks.contains_key(&(cx, cz)) {
             return;
         }
-        let mut blocks = if self.dimension == Dimension::Horizen {
-            horizen::generate_chunk(self.seed, cx, cz)
-        } else {
-            generate_chunk_for(self.seed, cx, cz, &self.landmarks, self.night)
+        let mut blocks = match self.dimension {
+            Dimension::Horizen => horizen::generate_chunk(self.seed, cx, cz),
+            Dimension::Skylands => skylands::generate_chunk(self.seed, cx, cz),
+            Dimension::Overworld => generate_chunk_for(self.seed, cx, cz, &self.landmarks, self.night),
         };
         for &(x, y, z) in &self.removed {
             if Self::chunk_of(x, z) == (cx, cz) {

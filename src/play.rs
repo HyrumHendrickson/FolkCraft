@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
+use crate::effects::{draw_cyclone, draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
 use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
@@ -80,6 +80,7 @@ pub fn play_screen(app: &mut App) {
     game.update_items(dt);
     game.burn_fires(dt);
     game.update_animals(dt);
+    game.update_travel(dt);
     game.update_storm(dt);
     game.update_arrows(dt);
     game.update_health(dt);
@@ -218,13 +219,14 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     } else {
         Color::new(0.53, 0.81, 0.92, 1.0)
     });
-    set_camera(&Camera3D {
-        position: eye,
-        target: eye + dir,
+    let camera = |position: Vec3| Camera3D {
+        position,
+        target: position + dir,
         up: vec3(0.0, 1.0, 0.0),
         fovy: 70.0_f32.to_radians(),
         ..Default::default()
-    });
+    };
+    set_camera(&camera(eye));
     // The sun and the clouds go first, so the land is drawn over them.
     if game.in_horizen() {
         draw_horizen_sky(game.world.seed, eye, get_time() as f32, game.world.night);
@@ -234,6 +236,17 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     // Only chunks within the render radius (and inside the view cone) are drawn.
     let aspect = screen_width() / screen_height();
     let half_fov = ((35.0_f32).to_radians().tan() * (1.0 + aspect * aspect).sqrt()).atan();
+    // The Skylands show no ground. Only while the screen is white from a fall off an island does the normal world appear
+    // far below, seen from above the summit: its camera is the player's, carried over there.
+    if let Some((over, from)) = game.overworld_backdrop(eye) {
+        set_camera(&camera(from));
+        for key in &chunks_to_draw(over, from, dir, half_fov) {
+            for mesh in &over.chunks[key].meshes {
+                draw_mesh(mesh);
+            }
+        }
+        set_camera(&camera(eye));
+    }
     let drawn = chunks_to_draw(&game.world, eye, dir, half_fov);
     for key in &drawn {
         for mesh in &game.world.chunks[key].meshes {
@@ -246,6 +259,9 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     draw_pots(&game.world, World::chunk_of_pos(eye));
     if let Some(tornado) = game.tornado.as_ref() {
         draw_fire_tornado(tornado, get_time() as f32, World::chunk_of_pos(eye));
+    }
+    if let Some(cyclone) = game.cyclone() {
+        draw_cyclone(&cyclone, get_time() as f32, World::chunk_of_pos(eye));
     }
     draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye), game.world.night);
     draw_arrows(&game.arrows);
@@ -318,7 +334,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
             draw_break_bar(progress);
         }
         draw_health(game.health);
-        if game.held_item() == Some(ItemKind::Compass) && !game.in_horizen() {
+        if game.held_item() == Some(ItemKind::Compass) && game.in_overworld() {
             draw_compass(game.player.yaw, game.compass_bearing(), game.treks.compass_progress(), game.world.landmarks.mountain().is_some());
         }
     }
@@ -333,11 +349,33 @@ fn render_hud(game: &mut Game, drawn: usize) {
         "WASD move | Mouse look | Space jump | Shift sprint | Left break/attack/shoot | Right place/eat/cook | 1-9/wheel hotbar | E inventory | F1 help | F2 settings | Esc save & exit",
         10.0, h - 12.0, 18.0, WHITE,
     );
+    if let Some((name, share)) = game.boss_bar() {
+        draw_boss_bar(name, share);
+    }
     // Between day and night, or while passing through the well, the whole screen goes black for a moment.
     let darkness = game.blackout.map_or(0.0, |b| b.darkness()).max(game.horizen_transition_darkness());
     if darkness > 0.0 {
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, darkness));
     }
+    // A cyclone taking hold, arriving by one, or falling from an island of the Skylands: the whole screen goes white.
+    let white = game.white_alpha();
+    if white > 0.0 {
+        draw_rectangle(0.0, 0.0, w, h, Color::new(1.0, 1.0, 1.0, white));
+    }
+}
+
+/// A boss's name and health bar across the top of the screen.
+fn draw_boss_bar(name: &str, share: f32) {
+    let w = screen_width();
+    let (bar_w, bar_h) = ((w * 0.5).min(640.0), 18.0);
+    let (x, y) = (w / 2.0 - bar_w / 2.0, 66.0);
+    let size = measure_text(name, None, 26, 1.0);
+    draw_text(name, w / 2.0 - size.width / 2.0 + 1.0, y - 7.0, 26.0, BLACK);
+    draw_text(name, w / 2.0 - size.width / 2.0, y - 8.0, 26.0, Color::new(0.97, 0.94, 0.88, 1.0));
+    draw_rectangle(x - 3.0, y - 3.0, bar_w + 6.0, bar_h + 6.0, Color::new(0.0, 0.0, 0.0, 0.75));
+    draw_rectangle(x, y, bar_w, bar_h, Color::new(0.22, 0.05, 0.06, 1.0));
+    draw_rectangle(x, y, bar_w * share, bar_h, Color::new(0.78, 0.12, 0.14, 1.0));
+    draw_rectangle(x, y, bar_w * share, bar_h * 0.35, Color::new(0.95, 0.40, 0.38, 0.55));
 }
 
 /// A small progress bar under the crosshair while a block is being broken.

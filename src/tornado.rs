@@ -47,6 +47,25 @@ impl FireTornado {
     }
 }
 
+/// A cyclone that carries the player between dimensions: it stands still and does no harm. Standing in it for
+/// `CYCLONE_SECONDS` takes the player through (see `Game::update_cyclone`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Cyclone {
+    /// Feet-level centre of the cyclone.
+    pub pos: Vec3,
+}
+
+impl Cyclone {
+    /// Whether a player standing at `player` (feet) is inside the cyclone.
+    pub fn contains(&self, player: Vec3) -> bool {
+        let dx = player.x - self.pos.x;
+        let dz = player.z - self.pos.z;
+        dx * dx + dz * dz <= (CYCLONE_RADIUS + PLAYER_HALF_WIDTH).powi(2)
+            && player.y < self.pos.y + CYCLONE_HEIGHT
+            && player.y + PLAYER_HEIGHT > self.pos.y
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +79,14 @@ mod tests {
         let position = tornado.pos;
         tornado.update(10.0);
         assert_eq!(tornado.pos, position);
+    }
+
+    #[test]
+    fn a_cyclone_holds_a_player_standing_in_it_and_nobody_beside_it() {
+        let c = Cyclone { pos: vec3(10.0, 100.0, 10.0) };
+        assert!(c.contains(vec3(10.5, 100.0, 10.0)));
+        assert!(!c.contains(vec3(10.0 + CYCLONE_RADIUS + PLAYER_HALF_WIDTH + 0.2, 100.0, 10.0)));
+        assert!(!c.contains(vec3(10.0, 100.0 + CYCLONE_HEIGHT + 0.1, 10.0)), "not above it");
     }
 
     #[test]

@@ -25,438 +25,580 @@ fn lighten(c: Color, amount: f32) -> Color {
     Color::new((c.r + amount).min(1.0), (c.g + amount).min(1.0), (c.b + amount).min(1.0), c.a)
 }
 
-/// Draw a flat icon for an item inside `r`.
+/// `c` scaled towards black by `factor` (below 1 darkens).
+fn darken(c: Color, factor: f32) -> Color {
+    Color::new(c.r * factor, c.g * factor, c.b * factor, c.a)
+}
+
+const OUTLINE: Color = Color::new(0.05, 0.05, 0.05, 0.85);
+
+/// A round, shaded blob lit from the upper left: dark outline, a darker underside, the body, and a small highlight.
+fn ball(x: f32, y: f32, r: f32, color: Color) {
+    draw_circle(x, y, r + 1.2, OUTLINE);
+    draw_circle(x, y, r, darken(color, 0.72));
+    draw_circle(x - r * 0.12, y - r * 0.14, r * 0.86, color);
+    draw_circle(x - r * 0.34, y - r * 0.38, r * 0.30, lighten(color, 0.20));
+}
+
+/// A line with an outline, a body and a thin highlight along its upper side.
+fn rod(a: Vec2, b: Vec2, width: f32, color: Color) {
+    draw_line(a.x, a.y, b.x, b.y, width + 2.2, OUTLINE);
+    draw_line(a.x, a.y, b.x, b.y, width, darken(color, 0.82));
+    draw_line(a.x - 0.6, a.y - 0.6, b.x - 0.6, b.y - 0.6, width * 0.55, color);
+    draw_line(a.x - width * 0.18, a.y - width * 0.25, b.x - width * 0.18, b.y - width * 0.25, (width * 0.18).max(1.0), lighten(color, 0.20));
+}
+
+/// An outlined box: a lighter top edge, a darker bottom edge, and the body between.
+fn slab(x: f32, y: f32, w: f32, h: f32, color: Color) {
+    draw_rectangle(x - 1.5, y - 1.5, w + 3.0, h + 3.0, OUTLINE);
+    draw_rectangle(x, y, w, h, color);
+    draw_rectangle(x, y + h - (h * 0.22).max(2.0), w, (h * 0.22).max(2.0), darken(color, 0.80));
+    draw_rectangle(x, y, w, (h * 0.16).max(1.5), lighten(color, 0.16));
+    draw_rectangle(x, y, (w * 0.10).max(1.5), h, lighten(color, 0.07));
+}
+
+/// A filled quadrilateral with an outline.
+fn quad(p: [Vec2; 4], color: Color) {
+    draw_triangle(p[0], p[1], p[2], color);
+    draw_triangle(p[0], p[2], p[3], color);
+    for i in 0..4 {
+        let (u, v) = (p[i], p[(i + 1) % 4]);
+        draw_line(u.x, u.y, v.x, v.y, 1.6, OUTLINE);
+    }
+}
+
+/// A filled triangle with an outline.
+fn tri(a: Vec2, b: Vec2, c: Vec2, color: Color) {
+    draw_triangle(a, b, c, color);
+    for (u, v) in [(a, b), (b, c), (c, a)] {
+        draw_line(u.x, u.y, v.x, v.y, 1.4, OUTLINE);
+    }
+}
+
+/// Draw an icon for an item inside `r`, lit from the upper left.
 pub fn draw_item_icon(kind: ItemKind, r: Rect) {
     let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
     let color = kind.color();
-    let outline = Color::new(0.05, 0.05, 0.05, 0.8);
+    let outline = OUTLINE;
+    let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
+    let u = r.w / 48.0;
     match kind {
         ItemKind::Stick => {
-            draw_line(r.x + r.w * 0.26, r.y + r.h * 0.76, r.x + r.w * 0.74, r.y + r.h * 0.24, 6.0, outline);
-            draw_line(r.x + r.w * 0.26, r.y + r.h * 0.76, r.x + r.w * 0.74, r.y + r.h * 0.24, 4.0, color);
-            draw_line(r.x + r.w * 0.30, r.y + r.h * 0.70, r.x + r.w * 0.70, r.y + r.h * 0.30, 1.5, lighten(color, 0.15));
+            rod(p(0.24, 0.78), p(0.76, 0.22), 5.0 * u, color);
+            let twig = p(0.52, 0.50);
+            rod(twig, p(0.66, 0.60), 2.6 * u, color);
+            draw_circle(twig.x - 3.0 * u, twig.y + 3.0 * u, 1.6 * u, darken(color, 0.55));
+            draw_line(p(0.30, 0.70).x, p(0.30, 0.70).y, p(0.34, 0.66).x, p(0.34, 0.66).y, 1.2, darken(color, 0.6));
         }
         ItemKind::Pebble => {
-            for (dx, dy, rad) in [(-0.10, 0.08, 0.12), (0.12, 0.10, 0.09), (0.02, -0.10, 0.10)] {
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w + 1.0, outline);
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w, color);
+            for (dx, dy, rad, shade) in [(-0.12, 0.10, 0.12, 0.0), (0.12, 0.12, 0.09, -0.05), (0.01, -0.10, 0.10, 0.05)] {
+                ball(cx + dx * r.w, cy + dy * r.h, rad * r.w, Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0));
             }
+            draw_circle(cx - 0.10 * r.w, cy + 0.13 * r.h, 0.9 * u, darken(color, 0.55));
         }
         ItemKind::PeepStone => {
-            draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
-            draw_circle(cx, cy + 1.0, r.w * 0.25, color);
-            draw_circle(cx - r.w * 0.07, cy - r.h * 0.07, r.w * 0.09, lighten(color, 0.18));
+            let rad = r.w * 0.27;
+            ball(cx, cy + 1.0, rad, color);
+            draw_circle_lines(cx, cy + 1.0, rad * 0.62, 1.4, Color::new(0.70, 0.94, 1.0, 0.75));
+            draw_circle(cx + rad * 0.20, cy + rad * 0.25, rad * 0.22, Color::new(0.80, 0.98, 1.0, 0.45));
+            // A glint of light, as on a gem.
+            let g = p(0.40, 0.36);
+            draw_line(g.x - 3.0 * u, g.y, g.x + 3.0 * u, g.y, 1.2, WHITE);
+            draw_line(g.x, g.y - 3.0 * u, g.x, g.y + 3.0 * u, 1.2, WHITE);
         }
         ItemKind::HollyRod => {
-            draw_line(r.x + r.w * 0.25, r.y + r.h * 0.76, r.x + r.w * 0.75, r.y + r.h * 0.24, 6.0, outline);
-            draw_line(r.x + r.w * 0.25, r.y + r.h * 0.76, r.x + r.w * 0.75, r.y + r.h * 0.24, 4.0, color);
-            for (dx, dy) in [(0.38, 0.60), (0.60, 0.38)] {
-                draw_circle(r.x + r.w * dx, r.y + r.h * dy, 3.0, Color::new(0.78, 0.10, 0.16, 1.0));
+            rod(p(0.25, 0.78), p(0.75, 0.22), 4.5 * u, color);
+            let leaf = Color::new(0.10, 0.42, 0.16, 1.0);
+            for (fx, fy, dir) in [(0.40, 0.58, -1.0_f32), (0.56, 0.42, 1.0), (0.64, 0.32, -1.0)] {
+                let at = p(fx, fy);
+                let tip = at + vec2(dir * 8.0 * u, -dir * 3.0 * u + 1.0);
+                let side = vec2(4.0 * u, 4.0 * u);
+                tri(at - side * 0.5, at + side * 0.5, tip, leaf);
+                draw_line(at.x, at.y, tip.x, tip.y, 1.0, lighten(leaf, 0.25));
+            }
+            for (dx, dy) in [(0.37, 0.64), (0.47, 0.50), (0.60, 0.37)] {
+                let b = p(dx, dy);
+                ball(b.x, b.y, 2.8 * u, Color::new(0.82, 0.10, 0.16, 1.0));
             }
         }
         ItemKind::Stone => {
-            draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
-            draw_circle(cx, cy + 1.0, r.w * 0.25, color);
-            draw_circle(cx - r.w * 0.07, cy - r.h * 0.07, r.w * 0.09, lighten(color, 0.14));
+            let rad = r.w * 0.27;
+            ball(cx, cy + 1.0, rad, color);
+            draw_line(cx - rad * 0.2, cy - rad * 0.2, cx + rad * 0.1, cy + rad * 0.35, 1.2, darken(color, 0.55));
+            draw_line(cx + rad * 0.1, cy + rad * 0.35, cx + rad * 0.45, cy + rad * 0.30, 1.2, darken(color, 0.55));
+            draw_circle(cx + rad * 0.40, cy - rad * 0.10, 1.1 * u, darken(color, 0.62));
         }
         ItemKind::Log => {
-            let (x0, y0, x1, y1) = (r.x + r.w * 0.22, r.y + r.h * 0.74, r.x + r.w * 0.74, r.y + r.h * 0.30);
-            draw_line(x0, y0, x1, y1, 15.0, outline);
-            draw_line(x0, y0, x1, y1, 12.0, color);
-            draw_line(x0 + 3.0, y0 - 3.0, x1 + 3.0, y1 - 3.0, 2.0, lighten(color, 0.12));
-            // The cut end, with a growth ring.
-            draw_circle(x1, y1, 7.5, outline);
-            draw_circle(x1, y1, 6.5, Color::new(0.74, 0.58, 0.34, 1.0));
-            draw_circle_lines(x1, y1, 3.0, 1.0, Color::new(0.50, 0.36, 0.18, 1.0));
+            let (a, b) = (p(0.22, 0.74), p(0.72, 0.30));
+            rod(a, b, 13.0 * u, color);
+            // Furrows of bark running along the log.
+            for off in [-3.5_f32, 0.5, 4.0] {
+                draw_line(a.x + off * u + 4.0, a.y - off * u - 4.0, b.x + off * u - 4.0, b.y - off * u + 4.0, 1.0, darken(color, 0.58));
+            }
+            // The cut end, with growth rings and a crack.
+            draw_circle(b.x, b.y, 8.4 * u, outline);
+            draw_circle(b.x, b.y, 7.4 * u, Color::new(0.76, 0.60, 0.36, 1.0));
+            draw_circle_lines(b.x, b.y, 5.0 * u, 1.0, Color::new(0.52, 0.38, 0.20, 1.0));
+            draw_circle_lines(b.x, b.y, 2.6 * u, 1.0, Color::new(0.52, 0.38, 0.20, 1.0));
+            draw_line(b.x, b.y, b.x + 5.0 * u, b.y - 2.0 * u, 1.0, Color::new(0.46, 0.32, 0.16, 1.0));
         }
         ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (h0, h1) = (p(0.24, 0.80), p(0.66, 0.32));
-            draw_line(h0.x, h0.y, h1.x, h1.y, 6.5, outline);
-            draw_line(h0.x, h0.y, h1.x, h1.y, 4.5, ItemKind::Stick.color());
-            // Axe head: a quad drawn as two triangles, with an outline.
-            let (a, b, c, d) = (p(0.46, 0.24), p(0.70, 0.12), p(0.88, 0.40), p(0.62, 0.50));
-            draw_triangle(a, b, c, color);
-            draw_triangle(a, c, d, color);
-            for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
-                draw_line(u.x, u.y, v.x, v.y, 1.5, outline);
-            }
-            draw_line(a.x + 2.0, a.y + 1.0, b.x - 1.0, b.y + 2.0, 1.5, lighten(color, 0.16));
+            let (h0, h1) = (p(0.24, 0.82), p(0.66, 0.32));
+            rod(h0, h1, 4.6 * u, ItemKind::Stick.color());
+            let (a, b, c, d) = (p(0.44, 0.22), p(0.72, 0.10), p(0.90, 0.42), p(0.62, 0.52));
+            quad([a, b, c, d], color);
+            // A bevelled face: a lighter upper half, and a bright cutting edge along the outer side.
+            draw_triangle(a, b, (a + c) / 2.0, lighten(color, 0.12));
+            draw_line(b.x, b.y, c.x, c.y, 2.4, lighten(color, 0.30));
+            draw_line(a.x, a.y, d.x, d.y, 1.4, darken(color, 0.65));
+            // The head is lashed to the handle with twine.
+            let bind = p(0.54, 0.44);
+            draw_line(bind.x - 4.0 * u, bind.y - 2.5 * u, bind.x + 4.0 * u, bind.y + 3.0 * u, 2.4, ItemKind::Twine.color());
         }
         ItemKind::Grass => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            for (bx, tx, ty, shade) in [(0.36, 0.24, 0.20, -0.06), (0.50, 0.52, 0.12, 0.04), (0.64, 0.78, 0.26, 0.0)] {
-                let (b, t) = (p(bx, 0.80), p(tx, ty));
-                let c = Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0);
-                draw_line(b.x, b.y, t.x, t.y, 5.0, outline);
-                draw_line(b.x, b.y, t.x, t.y, 3.0, c);
-            }
+            let blade = |bx: f32, tx: f32, ty: f32, shade: f32| {
+                let c = Color::new((color.r + shade).clamp(0.0, 1.0), (color.g + shade).clamp(0.0, 1.0), (color.b + shade).clamp(0.0, 1.0), 1.0);
+                let (base, tip) = (p(bx, 0.82), p(tx, ty));
+                let w = 3.4 * u;
+                tri(base - vec2(w, 0.0), base + vec2(w, 0.0), tip, c);
+                draw_line(base.x, base.y, tip.x, tip.y, 1.0, lighten(c, 0.20));
+            };
+            blade(0.34, 0.22, 0.20, -0.08);
+            blade(0.66, 0.80, 0.24, -0.04);
+            blade(0.50, 0.50, 0.10, 0.05);
+            blade(0.42, 0.40, 0.34, 0.0);
         }
         ItemKind::Berries | ItemKind::PurpleBerries => {
-            for (dx, dy, rad) in [(-0.14, 0.10, 0.13), (0.14, 0.08, 0.12), (0.00, -0.12, 0.13)] {
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w + 1.0, outline);
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w, color);
-                draw_circle(cx + (dx - 0.04) * r.w, cy + (dy - 0.04) * r.h, rad * r.w * 0.3, lighten(color, 0.35));
+            draw_line(cx, cy - 0.30 * r.h, cx + 0.07 * r.w, cy - 0.40 * r.h, 2.5, Color::new(0.30, 0.20, 0.10, 1.0));
+            let leaf = Color::new(0.22, 0.58, 0.20, 1.0);
+            tri(p(0.55, 0.14), p(0.76, 0.12), p(0.64, 0.26), leaf);
+            for (dx, dy, rad) in [(-0.14, 0.10, 0.13), (0.14, 0.08, 0.12), (0.0, -0.12, 0.13)] {
+                ball(cx + dx * r.w, cy + dy * r.h, rad * r.w, color);
+                draw_circle(cx + dx * r.w + rad * r.w * 0.45, cy + dy * r.h - rad * r.w * 0.55, 0.9 * u, darken(color, 0.4));
             }
-            draw_line(cx, cy - 0.30 * r.h, cx + 0.07 * r.w, cy - 0.38 * r.h, 2.5, Color::new(0.25, 0.55, 0.20, 1.0));
         }
         ItemKind::Twine => {
-            draw_circle_lines(cx, cy, r.w * 0.26, 7.0, outline);
-            draw_circle_lines(cx, cy, r.w * 0.26, 5.0, color);
-            draw_circle_lines(cx, cy, r.w * 0.26, 1.0, lighten(color, 0.15));
-            // A loose end trailing off the coil.
-            draw_line(cx + r.w * 0.24, cy + r.h * 0.08, cx + r.w * 0.40, cy + r.h * 0.30, 3.0, color);
+            // A coil: rings of twisted strands, with a loose end trailing off.
+            for (rad, w) in [(0.26, 7.0), (0.17, 5.0)] {
+                draw_circle_lines(cx, cy, r.w * rad, w * u + 2.0, outline);
+            }
+            for (rad, w) in [(0.26, 7.0), (0.17, 5.0)] {
+                draw_circle_lines(cx, cy, r.w * rad, w * u, darken(color, 0.85));
+                draw_circle_lines(cx - 0.6, cy - 0.6, r.w * rad, w * u * 0.5, lighten(color, 0.08));
+            }
+            for i in 0..14 {
+                let a = i as f32 * std::f32::consts::TAU / 14.0;
+                let (x0, y0) = (cx + a.cos() * r.w * 0.20, cy + a.sin() * r.w * 0.20);
+                let (x1, y1) = (cx + (a + 0.35).cos() * r.w * 0.29, cy + (a + 0.35).sin() * r.w * 0.29);
+                draw_line(x0, y0, x1, y1, 1.0, darken(color, 0.62));
+            }
+            draw_circle(cx, cy, 3.0 * u, darken(color, 0.6));
+            rod(p(0.72, 0.58), p(0.88, 0.80), 3.0 * u, color);
         }
         ItemKind::BowDrill => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let bow = [p(0.72, 0.16), p(0.84, 0.50), p(0.72, 0.84)];
+            let bow = [p(0.72, 0.16), p(0.85, 0.50), p(0.72, 0.84)];
             for w in bow.windows(2) {
-                draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 5.5, outline);
-                draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 3.5, color);
+                rod(w[0], w[1], 3.6 * u, color);
             }
             draw_line(bow[0].x, bow[0].y, bow[2].x, bow[2].y, 1.5, ItemKind::Twine.color());
-            // The spindle, looped in the string and pointing at a fireboard.
+            // The spindle, looped in the string, with a charred tip on the fireboard.
             let (s0, s1) = (p(0.22, 0.30), p(0.72, 0.52));
-            draw_line(s0.x, s0.y, s1.x, s1.y, 5.0, outline);
-            draw_line(s0.x, s0.y, s1.x, s1.y, 3.0, lighten(color, 0.12));
-            draw_rectangle(r.x + r.w * 0.12, r.y + r.h * 0.66, r.w * 0.42, r.h * 0.12, outline);
-            draw_rectangle(r.x + r.w * 0.13, r.y + r.h * 0.67, r.w * 0.40, r.h * 0.10, Color::new(0.40, 0.27, 0.13, 1.0));
+            rod(s0, s1, 3.4 * u, lighten(color, 0.10));
+            slab(r.x + r.w * 0.10, r.y + r.h * 0.68, r.w * 0.44, r.h * 0.13, Color::new(0.46, 0.31, 0.15, 1.0));
+            draw_circle(r.x + r.w * 0.28, r.y + r.h * 0.69, 2.0 * u, Color::new(0.10, 0.07, 0.05, 1.0));
         }
         ItemKind::Plank => {
-            let (x, y, w, h) = (r.x + r.w * 0.14, r.y + r.h * 0.34, r.w * 0.72, r.h * 0.32);
-            draw_rectangle(x - 1.5, y - 1.5, w + 3.0, h + 3.0, outline);
-            draw_rectangle(x, y, w, h, color);
-            for fy in [0.30, 0.62] {
-                draw_line(x + 3.0, y + h * fy, x + w - 3.0, y + h * fy, 1.2, Color::new(color.r * 0.78, color.g * 0.78, color.b * 0.78, 1.0));
+            let (x, y, w, h) = (r.x + r.w * 0.12, r.y + r.h * 0.33, r.w * 0.76, r.h * 0.34);
+            slab(x, y, w, h, color);
+            for fy in [0.32, 0.50, 0.70] {
+                draw_line(x + 4.0, y + h * fy, x + w - 4.0, y + h * fy, 1.0, darken(color, 0.76));
             }
-            draw_line(x + 2.0, y + 2.0, x + w - 2.0, y + 2.0, 1.5, lighten(color, 0.14));
-            for nx in [x + 4.0, x + w - 4.0] {
-                draw_circle(nx, y + h / 2.0, 1.6, Color::new(0.25, 0.25, 0.27, 1.0));
+            draw_circle_lines(x + w * 0.62, y + h * 0.52, 2.6 * u, 1.0, darken(color, 0.70));
+            for nx in [x + 4.5 * u, x + w - 4.5 * u] {
+                draw_circle(nx, y + h / 2.0, 1.7 * u, Color::new(0.22, 0.22, 0.25, 1.0));
+                draw_circle(nx - 0.5, y + h / 2.0 - 0.5, 0.7 * u, Color::new(0.65, 0.65, 0.70, 1.0));
             }
         }
         ItemKind::Feather => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (tip, base) = (p(0.80, 0.16), p(0.24, 0.82));
-            let (a, b, c, d) = (p(0.46, 0.20), tip, p(0.62, 0.58), p(0.30, 0.64));
-            draw_triangle(a, b, c, color);
-            draw_triangle(a, c, d, color);
-            for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
-                draw_line(u.x, u.y, v.x, v.y, 1.5, outline);
+            let (tip, base) = (p(0.82, 0.14), p(0.20, 0.86));
+            // The vane: a leaf shape either side of the quill, drawn as a fan of barbs.
+            let n = (tip - base).normalize();
+            let perp = vec2(-n.y, n.x);
+            for i in 0..14 {
+                let t = 0.12 + i as f32 / 14.0 * 0.84;
+                let on = base + (tip - base) * t;
+                let width = (t * (1.0 - t)).sqrt() * 0.55 * r.w * 0.30 * 2.0;
+                let shade = if i % 2 == 0 { 0.0 } else { -0.05 };
+                let c = Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0);
+                draw_line(on.x - perp.x * width * 0.6, on.y - perp.y * width * 0.6 - 1.5 * u, on.x + perp.x * width, on.y + perp.y * width, 3.2 * u, c);
             }
-            draw_line(base.x, base.y, tip.x, tip.y, 2.5, outline);
-            draw_line(base.x, base.y, tip.x, tip.y, 1.2, lighten(color, 0.10));
-            draw_line(p(0.40, 0.36).x, p(0.40, 0.36).y, p(0.54, 0.46).x, p(0.54, 0.46).y, 1.0, Color::new(0.62, 0.58, 0.50, 1.0));
+            draw_line(base.x, base.y, tip.x, tip.y, 2.6 * u, outline);
+            draw_line(base.x, base.y, tip.x, tip.y, 1.3 * u, Color::new(0.80, 0.76, 0.66, 1.0));
         }
         ItemKind::Bow => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let arc = [p(0.30, 0.12), p(0.50, 0.28), p(0.58, 0.50), p(0.50, 0.72), p(0.30, 0.88)];
+            let arc = [p(0.30, 0.10), p(0.50, 0.28), p(0.58, 0.50), p(0.50, 0.72), p(0.30, 0.90)];
             for w in arc.windows(2) {
-                draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 6.5, outline);
-                draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 4.5, color);
+                rod(w[0], w[1], 5.0 * u, color);
             }
-            let (s0, s1) = (arc[0], arc[4]);
-            draw_line(s0.x, s0.y, s1.x, s1.y, 1.6, ItemKind::Twine.color());
+            // A leather-wrapped grip, and the string.
+            let (g0, g1) = (p(0.57, 0.43), p(0.57, 0.57));
+            draw_line(g0.x, g0.y, g1.x, g1.y, 6.0 * u, ItemKind::Leather.color());
+            draw_line(arc[0].x, arc[0].y, arc[4].x, arc[4].y, 1.6, lighten(ItemKind::Twine.color(), 0.15));
+            for e in [arc[0], arc[4]] {
+                draw_circle(e.x, e.y, 2.0 * u, darken(color, 0.55));
+            }
         }
         ItemKind::Arrow => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (tail, tip) = (p(0.22, 0.78), p(0.76, 0.24));
-            draw_line(tail.x, tail.y, tip.x, tip.y, 4.5, outline);
-            draw_line(tail.x, tail.y, tip.x, tip.y, 2.5, color);
-            // Stone head and feather fletching.
-            let (h0, h1, h2) = (p(0.66, 0.18), p(0.88, 0.12), p(0.82, 0.34));
-            draw_triangle(h0, h1, h2, ItemKind::Stone.color());
-            for (a, b, c) in [(p(0.22, 0.78), p(0.14, 0.62), p(0.34, 0.68)), (p(0.22, 0.78), p(0.38, 0.86), p(0.30, 0.66))] {
-                draw_triangle(a, b, c, ItemKind::Feather.color());
+            let (tail, tip) = (p(0.20, 0.80), p(0.76, 0.24));
+            rod(tail, tip, 3.0 * u, color);
+            let dir = (tip - tail).normalize();
+            let perp = vec2(-dir.y, dir.x);
+            let head = ItemKind::Stone.color();
+            tri(tip + dir * 9.0 * u, tip + perp * 5.0 * u - dir * 3.0 * u, tip - perp * 5.0 * u - dir * 3.0 * u, head);
+            draw_line(tip.x + dir.x * 8.0 * u, tip.y + dir.y * 8.0 * u, tip.x - perp.x * 3.0 * u, tip.y - perp.y * 3.0 * u, 1.0, lighten(head, 0.25));
+            for k in 0..3 {
+                let at = tail + dir * (k as f32 * 4.5 * u);
+                for s in [-1.0_f32, 1.0] {
+                    tri(at, at + perp * s * 6.0 * u - dir * 2.0 * u, at + dir * 6.0 * u + perp * s * 1.0, ItemKind::Feather.color());
+                }
             }
         }
         ItemKind::Venison | ItemKind::CookedVenison | ItemKind::RabbitMeat | ItemKind::CookedRabbit | ItemKind::MooseMeat | ItemKind::CookedMoose => {
-            let cooked = kind == ItemKind::CookedVenison;
-            draw_circle(cx - r.w * 0.04, cy, r.w * 0.30, outline);
-            draw_circle(cx - r.w * 0.04, cy, r.w * 0.28, color);
-            draw_circle(cx + r.w * 0.12, cy - r.h * 0.10, r.w * 0.14, if cooked { lighten(color, 0.10) } else { lighten(color, 0.12) });
+            let cooked = matches!(kind, ItemKind::CookedVenison | ItemKind::CookedRabbit | ItemKind::CookedMoose);
+            // A steak: a thick lobe with a pale rim of fat and marbling (raw), or a seared crust with grill marks (cooked).
+            let rim = if cooked { darken(color, 0.62) } else { Color::new(0.93, 0.82, 0.78, 1.0) };
+            draw_circle(cx - r.w * 0.05, cy + 1.0, r.w * 0.32, outline);
+            draw_circle(cx - r.w * 0.05, cy + 1.0, r.w * 0.30, rim);
+            draw_circle(cx - r.w * 0.03, cy + 0.5, r.w * 0.255, color);
+            draw_circle(cx - r.w * 0.12, cy - r.h * 0.08, r.w * 0.09, lighten(color, 0.14));
+            draw_circle(cx + r.w * 0.20, cy + r.h * 0.10, r.w * 0.07, darken(color, 0.85));
             if cooked {
-                draw_line(cx - r.w * 0.20, cy + r.h * 0.10, cx + r.w * 0.04, cy + r.h * 0.14, 2.0, Color::new(0.25, 0.13, 0.07, 1.0));
+                for k in 0..3 {
+                    let o = (k as f32 - 1.0) * 5.5 * u;
+                    draw_line(cx - 8.0 * u + o, cy - 6.0 * u, cx + 3.0 * u + o, cy + 8.0 * u, 2.0, Color::new(0.20, 0.10, 0.05, 1.0));
+                }
             } else {
-                draw_line(cx - r.w * 0.20, cy + r.h * 0.06, cx + r.w * 0.02, cy + r.h * 0.12, 2.0, Color::new(0.92, 0.80, 0.78, 1.0));
+                draw_line(cx - 8.0 * u, cy + 3.0 * u, cx + 4.0 * u, cy + 6.0 * u, 1.6, Color::new(0.94, 0.86, 0.84, 1.0));
+                draw_line(cx - 3.0 * u, cy - 5.0 * u, cx + 8.0 * u, cy - 2.0 * u, 1.4, Color::new(0.94, 0.86, 0.84, 1.0));
             }
         }
         ItemKind::Poultry | ItemKind::CookedPoultry => {
             let cooked = kind == ItemKind::CookedPoultry;
-            let (b0, b1) = (vec2(cx + r.w * 0.04, cy + r.h * 0.04), vec2(cx + r.w * 0.30, cy + r.h * 0.30));
-            draw_line(b0.x, b0.y, b1.x, b1.y, 6.5, outline);
-            draw_line(b0.x, b0.y, b1.x, b1.y, 4.0, Color::new(0.93, 0.90, 0.82, 1.0));
-            draw_circle(b1.x + 1.5, b1.y + 1.5, 4.5, Color::new(0.93, 0.90, 0.82, 1.0));
-            draw_circle(cx - r.w * 0.08, cy - r.h * 0.08, r.w * 0.26, outline);
-            draw_circle(cx - r.w * 0.08, cy - r.h * 0.08, r.w * 0.24, color);
-            draw_circle(cx - r.w * 0.15, cy - r.h * 0.15, r.w * 0.08, lighten(color, if cooked { 0.12 } else { 0.08 }));
+            let bone = Color::new(0.94, 0.91, 0.84, 1.0);
+            let (b0, b1) = (vec2(cx + r.w * 0.02, cy + r.h * 0.02), vec2(cx + r.w * 0.30, cy + r.h * 0.30));
+            rod(b0, b1, 4.5 * u, bone);
+            ball(b1.x + 2.5 * u, b1.y + 1.0, 3.8 * u, bone);
+            ball(b1.x - 1.0 * u, b1.y + 4.0 * u, 3.4 * u, bone);
+            ball(cx - r.w * 0.08, cy - r.h * 0.06, r.w * 0.25, color);
+            if cooked {
+                draw_circle(cx - r.w * 0.02, cy - r.h * 0.02, r.w * 0.06, darken(color, 0.72));
+                draw_line(cx - r.w * 0.20, cy, cx - r.w * 0.04, cy + r.h * 0.12, 1.6, darken(color, 0.55));
+            } else {
+                draw_circle(cx - r.w * 0.04, cy - r.h * 0.04, r.w * 0.05, lighten(color, 0.10));
+            }
         }
         ItemKind::Leather => {
-            let (x, y, w, h) = (r.x + r.w * 0.18, r.y + r.h * 0.26, r.w * 0.64, r.h * 0.48);
-            draw_rectangle(x - 1.5, y - 1.5, w + 3.0, h + 3.0, outline);
-            draw_rectangle(x, y, w, h, color);
-            for i in 0..5 {
-                let sx = x + 5.0 + i as f32 * (w - 10.0) / 4.0;
-                draw_line(sx, y + 4.0, sx + 2.5, y + 4.0, 1.5, lighten(color, 0.25));
-                draw_line(sx, y + h - 4.0, sx + 2.5, y + h - 4.0, 1.5, lighten(color, 0.25));
+            let (x, y, w, h) = (r.x + r.w * 0.16, r.y + r.h * 0.26, r.w * 0.68, r.h * 0.48);
+            slab(x, y, w, h, color);
+            draw_rectangle(x + w * 0.55, y + h * 0.20, w * 0.28, h * 0.30, darken(color, 0.88));
+            draw_rectangle(x + w * 0.10, y + h * 0.52, w * 0.30, h * 0.28, darken(color, 0.90));
+            for i in 0..6 {
+                let sx = x + 4.0 + i as f32 * (w - 8.0) / 5.0;
+                draw_line(sx, y + 3.5, sx + 2.5, y + 3.5, 1.4, lighten(color, 0.30));
+                draw_line(sx, y + h - 3.5, sx + 2.5, y + h - 3.5, 1.4, lighten(color, 0.30));
             }
         }
         ItemKind::BearMeat | ItemKind::CookedBearMeat => {
             let cooked = kind == ItemKind::CookedBearMeat;
-            // A thick slab with a band of fat across it and the knob of a bone at one end.
-            let (x, y, w, h) = (r.x + r.w * 0.14, r.y + r.h * 0.30, r.w * 0.62, r.h * 0.44);
-            let bone = Color::new(0.93, 0.90, 0.82, 1.0);
-            draw_circle(x + w + 1.0, y + h * 0.35, 6.0, outline);
-            draw_rectangle(x - 1.5, y - 1.5, w + 3.0, h + 3.0, outline);
-            draw_circle(x + w + 1.0, y + h * 0.35, 4.5, bone);
-            draw_rectangle(x, y, w, h, color);
-            let fat = if cooked { lighten(color, 0.12) } else { Color::new(0.93, 0.82, 0.78, 1.0) };
-            draw_rectangle(x, y + h * 0.60, w, h * 0.14, fat);
-            draw_line(x + 4.0, y + 4.0, x + w * 0.55, y + 5.0, 1.5, lighten(color, 0.14));
+            let (x, y, w, h) = (r.x + r.w * 0.12, r.y + r.h * 0.30, r.w * 0.62, r.h * 0.44);
+            let bone = Color::new(0.94, 0.91, 0.84, 1.0);
+            rod(vec2(x + w - 2.0, y + h * 0.40), vec2(x + w + 6.0 * u, y + h * 0.40), 4.0 * u, bone);
+            ball(x + w + 8.0 * u, y + h * 0.40, 4.2 * u, bone);
+            slab(x, y, w, h, color);
+            let fat = if cooked { lighten(color, 0.14) } else { Color::new(0.94, 0.84, 0.80, 1.0) };
+            draw_rectangle(x + 1.0, y + h * 0.58, w - 2.0, h * 0.16, fat);
+            if cooked {
+                for k in 0..3 {
+                    draw_line(x + 6.0 * u + k as f32 * 8.0 * u, y + 3.0, x + 12.0 * u + k as f32 * 8.0 * u, y + h * 0.5, 1.8, Color::new(0.18, 0.09, 0.05, 1.0));
+                }
+            }
         }
         ItemKind::BearPelt => {
-            // A flat hide with a shaggy lower edge and streaks of fur.
-            let (x, y, w, h) = (r.x + r.w * 0.16, r.y + r.h * 0.22, r.w * 0.68, r.h * 0.52);
-            draw_rectangle(x - 1.5, y - 1.5, w + 3.0, h + 3.0, outline);
-            draw_rectangle(x, y, w, h, color);
-            for i in 0..6 {
-                let fx = x + 3.0 + i as f32 * (w - 6.0) / 5.0;
-                let drop = 4.0 + (i % 2) as f32 * 3.0;
-                draw_line(fx, y + h - 1.0, fx, y + h + drop, 4.0, outline);
-                draw_line(fx, y + h - 1.0, fx, y + h + drop - 1.0, 2.5, color);
+            let (x, y, w, h) = (r.x + r.w * 0.14, r.y + r.h * 0.20, r.w * 0.72, r.h * 0.52);
+            // Paws sticking out at the corners, a shaggy lower edge, and streaks of fur.
+            for (px, py) in [(x - 2.0, y + 1.0), (x + w - 5.0, y + 1.0)] {
+                draw_circle(px + 3.0, py + 3.0, 5.0 * u, outline);
+                draw_circle(px + 3.0, py + 3.0, 4.0 * u, darken(color, 0.8));
             }
-            for i in 0..4 {
-                let fx = x + 7.0 + i as f32 * (w - 14.0) / 3.0;
-                draw_line(fx, y + 5.0, fx + 2.0, y + h - 7.0, 1.5, lighten(color, 0.12));
+            slab(x, y, w, h, color);
+            for i in 0..7 {
+                let fx = x + 3.0 + i as f32 * (w - 6.0) / 6.0;
+                let drop = 4.0 + (i % 2) as f32 * 3.5;
+                draw_line(fx, y + h - 1.0, fx - 0.5, y + h + drop, 4.2, outline);
+                draw_line(fx, y + h - 1.0, fx - 0.5, y + h + drop - 1.0, 2.8, darken(color, 0.9));
+            }
+            for i in 0..5 {
+                let fx = x + 6.0 + i as f32 * (w - 12.0) / 4.0;
+                draw_line(fx, y + 5.0, fx + 2.0, y + h - 7.0, 1.4, lighten(color, 0.14));
+                draw_line(fx + 3.0, y + 8.0, fx + 4.0, y + h - 4.0, 1.0, darken(color, 0.70));
             }
         }
         ItemKind::Bellows => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            // Two boards joined by a folded leather skin, and a nozzle at the narrow end.
-            let (a0, a1, b0, b1) = (p(0.14, 0.62), p(0.52, 0.24), p(0.30, 0.82), p(0.68, 0.44));
-            draw_triangle(a0, a1, b1, Color::new(0.58, 0.38, 0.22, 1.0));
-            draw_triangle(a0, b1, b0, Color::new(0.58, 0.38, 0.22, 1.0));
-            for t in [0.25, 0.5, 0.75] {
-                let (u, v) = (a0 + (a1 - a0) * t, b0 + (b1 - b0) * t);
-                draw_line(u.x, u.y, v.x, v.y, 1.5, outline);
+            let (a0, a1, b0, b1) = (p(0.14, 0.62), p(0.52, 0.24), p(0.30, 0.84), p(0.68, 0.46));
+            let skin = Color::new(0.62, 0.40, 0.22, 1.0);
+            draw_triangle(a0, a1, b1, skin);
+            draw_triangle(a0, b1, b0, darken(skin, 0.88));
+            for t in [0.2, 0.4, 0.6, 0.8] {
+                let (u0, v0) = (a0 + (a1 - a0) * t, b0 + (b1 - b0) * t);
+                draw_line(u0.x, u0.y, v0.x, v0.y, 1.6, darken(skin, 0.55));
             }
-            for (u, v) in [(a0, a1), (b0, b1)] {
-                draw_line(u.x, u.y, v.x, v.y, 6.0, outline);
-                draw_line(u.x, u.y, v.x, v.y, 4.0, color);
+            for (s, e) in [(a0, a1), (b0, b1)] {
+                rod(s, e, 4.4 * u, color);
             }
-            let (n0, n1) = (p(0.60, 0.34), p(0.88, 0.14));
-            draw_line(n0.x, n0.y, n1.x, n1.y, 5.0, outline);
-            draw_line(n0.x, n0.y, n1.x, n1.y, 3.0, Color::new(0.35, 0.35, 0.38, 1.0));
+            // A handle on the upper board and an iron nozzle.
+            rod(p(0.20, 0.52), p(0.12, 0.42), 2.6 * u, color);
+            rod(p(0.62, 0.36), p(0.90, 0.14), 4.4 * u, Color::new(0.42, 0.43, 0.48, 1.0));
         }
         ItemKind::Ash => {
             for (dx, dy, rad, shade) in [(-0.16, 0.14, 0.15, 0.0), (0.14, 0.12, 0.13, 0.05), (0.0, 0.0, 0.17, 0.08), (-0.04, 0.20, 0.10, -0.04)] {
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w + 1.0, outline);
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w, Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0));
+                ball(cx + dx * r.w, cy + dy * r.h, rad * r.w, Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0));
+            }
+            for (dx, dy) in [(-0.10, 0.02), (0.08, 0.14), (0.14, -0.04)] {
+                draw_circle(cx + dx * r.w, cy + dy * r.h, 1.1 * u, darken(color, 0.55));
             }
         }
         ItemKind::Clay => {
-            // A damp lump with a darker underside and a pale highlight.
-            draw_circle(cx, cy + 3.0, r.w * 0.29, outline);
-            draw_circle(cx, cy + 3.0, r.w * 0.27, Color::new(color.r * 0.82, color.g * 0.82, color.b * 0.82, 1.0));
-            draw_circle(cx, cy - 1.0, r.w * 0.25, color);
-            draw_circle(cx - r.w * 0.08, cy - r.h * 0.08, r.w * 0.08, lighten(color, 0.16));
+            draw_circle(cx, cy + 3.0, r.w * 0.30, outline);
+            draw_circle(cx, cy + 3.0, r.w * 0.28, darken(color, 0.78));
+            draw_circle(cx, cy - 0.5, r.w * 0.26, color);
+            draw_circle(cx - r.w * 0.09, cy - r.h * 0.10, r.w * 0.09, lighten(color, 0.16));
+            // Thumb prints in the damp surface, and a glisten.
+            draw_circle_lines(cx + r.w * 0.08, cy + r.h * 0.04, 2.6 * u, 1.0, darken(color, 0.78));
+            draw_circle_lines(cx - r.w * 0.04, cy + r.h * 0.12, 2.0 * u, 1.0, darken(color, 0.80));
         }
         ItemKind::IronOre | ItemKind::GoldOre => {
-            // The stone icon with three rust-coloured veins.
             let stone = ItemKind::Stone.color();
-            draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
-            draw_circle(cx, cy + 1.0, r.w * 0.25, stone);
-            draw_circle(cx - r.w * 0.07, cy - r.h * 0.07, r.w * 0.09, lighten(stone, 0.14));
+            let rad = r.w * 0.27;
+            ball(cx, cy + 1.0, rad, stone);
             for (x0, y0, x1, y1) in [(-0.16, 0.02, 0.06, -0.12), (-0.06, 0.16, 0.16, 0.04), (0.04, -0.14, 0.18, -0.02)] {
-                draw_line(cx + x0 * r.w, cy + y0 * r.h, cx + x1 * r.w, cy + y1 * r.h, 3.0, color);
+                draw_line(cx + x0 * r.w, cy + y0 * r.h, cx + x1 * r.w, cy + y1 * r.h, 3.4 * u, darken(color, 0.78));
+                draw_line(cx + x0 * r.w, cy + y0 * r.h - 0.8, cx + x1 * r.w, cy + y1 * r.h - 0.8, 1.6 * u, lighten(color, 0.15));
+            }
+            if kind == ItemKind::GoldOre {
+                draw_circle(cx + 0.10 * r.w, cy - 0.16 * r.h, 1.2 * u, Color::new(1.0, 0.95, 0.55, 1.0));
             }
         }
         ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew
         | ItemKind::RedBerryStew | ItemKind::PurpleBerryStew => {
-            // A tin bowl of stew with a few lumps in it.
+            // A tin bowl brimming with stew: a rim, the surface with lumps, a few bubbles and steam.
             let bowl = ItemKind::TinPot.color();
-            draw_circle(cx, cy + 4.0, r.w * 0.31, outline);
-            draw_circle(cx, cy + 4.0, r.w * 0.29, Color::new(bowl.r * 0.8, bowl.g * 0.8, bowl.b * 0.8, 1.0));
-            draw_circle(cx, cy + 1.0, r.w * 0.25, color);
-            for (dx, dy) in [(-0.10, 0.0), (0.08, -0.04), (0.02, 0.08)] {
+            draw_circle(cx, cy + 5.0 * u, r.w * 0.32, outline);
+            draw_circle(cx, cy + 5.0 * u, r.w * 0.30, darken(bowl, 0.74));
+            draw_circle(cx - 1.0, cy + 3.5 * u, r.w * 0.27, bowl);
+            draw_circle(cx, cy + 1.0, r.w * 0.25, darken(color, 0.82));
+            draw_circle(cx - 1.5, cy - 0.5, r.w * 0.22, color);
+            for (dx, dy) in [(-0.10, 0.0), (0.08, -0.04), (0.02, 0.08), (-0.02, -0.08)] {
                 draw_circle(cx + dx * r.w, cy + dy * r.h, r.w * 0.04, lighten(color, 0.18));
+                draw_circle(cx + dx * r.w - 1.0, cy + dy * r.h - 1.0, r.w * 0.015, lighten(color, 0.40));
+            }
+            for sx in [-0.10, 0.06] {
+                draw_line(cx + sx * r.w, cy - 0.22 * r.h, cx + (sx + 0.03) * r.w, cy - 0.34 * r.h, 1.4, Color::new(1.0, 1.0, 1.0, 0.55));
             }
         }
         ItemKind::Sling => {
-            // A leather pouch on two cords that meet in a loop.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (pouch, loop_a, loop_b) = (p(0.50, 0.30), p(0.22, 0.80), p(0.78, 0.80));
+            let (pouch, loop_a, loop_b) = (p(0.50, 0.30), p(0.22, 0.82), p(0.78, 0.82));
+            let cord = ItemKind::LeatherCord.color();
             for end in [loop_a, loop_b] {
-                draw_line(pouch.x, pouch.y, end.x, end.y, 4.0, outline);
-                draw_line(pouch.x, pouch.y, end.x, end.y, 2.0, ItemKind::LeatherCord.color());
+                rod(pouch, end, 2.2 * u, cord);
+                draw_circle_lines(end.x, end.y, 4.0 * u, 2.0, outline);
+                draw_circle_lines(end.x, end.y, 4.0 * u, 1.0, cord);
             }
-            draw_circle(loop_a.x, loop_a.y, 4.0, outline);
-            draw_circle(loop_a.x, loop_a.y, 2.5, ItemKind::LeatherCord.color());
-            draw_circle(loop_b.x, loop_b.y, 4.0, outline);
-            draw_circle(loop_b.x, loop_b.y, 2.5, ItemKind::LeatherCord.color());
-            draw_circle(pouch.x, pouch.y, r.w * 0.17, outline);
-            draw_circle(pouch.x, pouch.y, r.w * 0.15, color);
-            draw_circle(pouch.x - r.w * 0.04, pouch.y - r.h * 0.04, r.w * 0.05, lighten(color, 0.14));
+            ball(pouch.x, pouch.y, r.w * 0.16, color);
+            draw_line(pouch.x - 5.0 * u, pouch.y + 1.0, pouch.x + 5.0 * u, pouch.y + 1.0, 1.0, darken(color, 0.6));
+            ball(pouch.x, pouch.y - 3.0 * u, 3.4 * u, ItemKind::Stone.color());
         }
         ItemKind::Loadstone => {
-            // A dark, slightly bluish rock with a metallic glint.
-            draw_circle(cx, cy + 1.0, r.w * 0.27, outline);
-            draw_circle(cx, cy + 1.0, r.w * 0.25, color);
-            draw_circle(cx - r.w * 0.06, cy - r.h * 0.06, r.w * 0.09, Color::new(0.46, 0.48, 0.58, 1.0));
-            draw_circle(cx - r.w * 0.08, cy - r.h * 0.08, r.w * 0.03, Color::new(0.80, 0.82, 0.90, 1.0));
+            let rad = r.w * 0.27;
+            ball(cx, cy + 1.0, rad, color);
+            // Metallic sheen and a spark.
+            draw_circle(cx - rad * 0.30, cy - rad * 0.30, rad * 0.28, Color::new(0.46, 0.48, 0.60, 1.0));
+            draw_circle(cx - rad * 0.38, cy - rad * 0.40, rad * 0.10, Color::new(0.88, 0.90, 0.98, 1.0));
+            draw_line(cx + rad * 0.30, cy + rad * 0.10, cx + rad * 0.50, cy - rad * 0.05, 1.3, Color::new(0.60, 0.66, 0.86, 1.0));
         }
         ItemKind::Compass => {
-            // A brass case with a glass face and a red and white needle.
-            draw_circle(cx, cy, r.w * 0.31, outline);
-            draw_circle(cx, cy, r.w * 0.29, color);
-            draw_circle(cx, cy, r.w * 0.23, Color::new(0.90, 0.88, 0.80, 1.0));
-            let (n, sth) = (vec2(cx + r.w * 0.09, cy - r.h * 0.16), vec2(cx - r.w * 0.09, cy + r.h * 0.16));
-            draw_line(cx, cy, n.x, n.y, 3.0, Color::new(0.80, 0.14, 0.14, 1.0));
-            draw_line(cx, cy, sth.x, sth.y, 3.0, Color::new(0.96, 0.96, 0.96, 1.0));
-            draw_circle(cx, cy, 2.0, outline);
+            let rad = r.w * 0.30;
+            ball(cx, cy, rad, color);
+            draw_circle(cx, cy, rad * 0.78, Color::new(0.92, 0.90, 0.82, 1.0));
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::TAU / 8.0;
+                let len = if i % 2 == 0 { 0.16 } else { 0.10 };
+                draw_line(cx + a.cos() * rad * 0.62, cy + a.sin() * rad * 0.62, cx + a.cos() * rad * (0.62 + len), cy + a.sin() * rad * (0.62 + len), 1.2, Color::new(0.30, 0.26, 0.20, 1.0));
+            }
+            let (n, s) = (vec2(cx + r.w * 0.09, cy - r.h * 0.17), vec2(cx - r.w * 0.09, cy + r.h * 0.17));
+            let perp = vec2(0.14, 0.08) * 0.5 * r.w * 0.30;
+            tri(n, vec2(cx, cy) + perp, vec2(cx, cy) - perp, Color::new(0.82, 0.14, 0.14, 1.0));
+            tri(s, vec2(cx, cy) + perp, vec2(cx, cy) - perp, Color::new(0.96, 0.96, 0.96, 1.0));
+            draw_circle(cx, cy, 2.0 * u, outline);
+            draw_circle(cx - 0.4, cy - 0.4, 0.8 * u, lighten(color, 0.4));
+            draw_circle(cx, cy - rad - 3.0 * u, 2.6 * u, darken(color, 0.8));
         }
         ItemKind::RabbitFoot => {
-            // A small furry foot with three toes.
-            draw_circle(cx, cy + 3.0, r.w * 0.20, outline);
-            draw_circle(cx, cy + 3.0, r.w * 0.18, color);
+            let fur = color;
+            ball(cx, cy + 4.0 * u, r.w * 0.19, fur);
             for dx in [-0.12, 0.0, 0.12] {
-                draw_circle(cx + dx * r.w, cy - 0.12 * r.h, r.w * 0.065, outline);
-                draw_circle(cx + dx * r.w, cy - 0.12 * r.h, r.w * 0.05, lighten(color, 0.10));
+                ball(cx + dx * r.w, cy - 0.10 * r.h, r.w * 0.06, lighten(fur, 0.08));
             }
+            // The clasp and a chain at the top.
+            draw_circle_lines(cx, cy + 14.0 * u, 3.0 * u, 1.6, Color::new(0.80, 0.66, 0.30, 1.0));
+            draw_circle_lines(cx, cy + 14.0 * u, 3.0 * u, 3.0, outline);
+            draw_circle_lines(cx, cy + 14.0 * u, 3.0 * u, 1.6, Color::new(0.80, 0.66, 0.30, 1.0));
         }
         ItemKind::TinPot => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (tl, br) = (p(0.22, 0.36), p(0.78, 0.78));
-            draw_rectangle(tl.x - 1.5, tl.y - 1.5, br.x - tl.x + 3.0, br.y - tl.y + 3.0, outline);
-            draw_rectangle(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
-            draw_rectangle(tl.x, tl.y, br.x - tl.x, 4.0, lighten(color, 0.16));
-            draw_line(tl.x, p(0.0, 0.46).y, tl.x - 5.0, p(0.0, 0.40).y, 3.0, outline);
-            draw_line(br.x, p(0.0, 0.46).y, br.x + 5.0, p(0.0, 0.40).y, 3.0, outline);
-        }
-        ItemKind::ClayJar | ItemKind::WaterJar => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (bl, br) = (p(0.24, 0.40), p(0.76, 0.82));
-            draw_rectangle(bl.x - 1.5, bl.y - 1.5, br.x - bl.x + 3.0, br.y - bl.y + 3.0, outline);
-            draw_rectangle(bl.x, bl.y, br.x - bl.x, br.y - bl.y, color);
-            let (nl, nr) = (p(0.36, 0.22), p(0.64, 0.42));
-            draw_rectangle(nl.x - 1.5, nl.y - 1.5, nr.x - nl.x + 3.0, nr.y - nl.y + 3.0, outline);
-            draw_rectangle(nl.x, nl.y, nr.x - nl.x, nr.y - nl.y, color);
-            if kind == ItemKind::WaterJar {
-                draw_rectangle(bl.x + 3.0, bl.y + 4.0, br.x - bl.x - 6.0, br.y - bl.y - 8.0, Color::new(0.25, 0.48, 0.85, 1.0));
-            } else {
-                draw_rectangle(bl.x + 3.0, bl.y + 3.0, 4.0, br.y - bl.y - 6.0, lighten(color, 0.14));
+            let (tl, br) = (p(0.22, 0.36), p(0.78, 0.80));
+            slab(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            // The dark mouth, a bright rim, rivets and the handles.
+            draw_rectangle(tl.x + 2.0, tl.y - 1.0, br.x - tl.x - 4.0, 4.0, darken(color, 0.35));
+            draw_rectangle(tl.x, tl.y, br.x - tl.x, 2.0, lighten(color, 0.22));
+            draw_line(tl.x + 5.0, tl.y + 8.0, tl.x + 5.0, br.y - 5.0, 2.0, lighten(color, 0.20));
+            for rx in [tl.x + 6.0, br.x - 6.0] {
+                draw_circle(rx, tl.y + 8.0, 1.3 * u, darken(color, 0.65));
             }
+            for (a, b) in [(vec2(tl.x, p(0.0, 0.46).y), vec2(tl.x - 6.0 * u, p(0.0, 0.40).y)), (vec2(br.x, p(0.0, 0.46).y), vec2(br.x + 6.0 * u, p(0.0, 0.40).y))] {
+                draw_line(a.x, a.y, b.x, b.y, 3.6, outline);
+                draw_line(a.x, a.y, b.x, b.y, 1.8, lighten(color, 0.1));
+            }
+        }
+        ItemKind::ClayJar => {
+            // A terracotta jar: a round belly, a narrow neck with a flared lip, a painted band.
+            ball(cx, cy + 5.0 * u, r.w * 0.27, color);
+            let neck = Color::new(color.r * 0.96, color.g * 0.94, color.b * 0.94, 1.0);
+            slab(cx - r.w * 0.11, cy - r.h * 0.26, r.w * 0.22, r.h * 0.20, neck);
+            slab(cx - r.w * 0.16, cy - r.h * 0.31, r.w * 0.32, r.h * 0.08, lighten(color, 0.04));
+            draw_line(cx - r.w * 0.22, cy + 2.0 * u, cx + r.w * 0.22, cy + 2.0 * u, 2.0, Color::new(0.50, 0.28, 0.20, 1.0));
+            draw_line(cx - r.w * 0.21, cy + 6.0 * u, cx + r.w * 0.21, cy + 6.0 * u, 1.2, Color::new(0.50, 0.28, 0.20, 1.0));
+        }
+        ItemKind::WaterJar => {
+            // The jar has turned clear: glass you can see through, with blue water inside it, a bright surface, and the
+            // clay rim and cork still on.
+            let glass = Color::new(0.82, 0.93, 1.0, 0.30);
+            let water = Color::new(0.20, 0.50, 0.92, 0.80);
+            draw_circle(cx, cy + 5.0 * u, r.w * 0.285, Color::new(0.35, 0.50, 0.65, 0.75));
+            draw_circle(cx, cy + 5.0 * u, r.w * 0.27, glass);
+            // Water fills the belly to the neck: a disc cut off flat at the top.
+            let belly = r.w * 0.25;
+            for i in 0..=20 {
+                let t = i as f32 / 20.0;
+                let dy = -belly * 0.55 + t * belly * 1.55;
+                let half = (belly * belly - dy * dy).max(0.0).sqrt();
+                draw_line(cx - half, cy + 5.0 * u + dy, cx + half, cy + 5.0 * u + dy, 1.6, water);
+            }
+            draw_line(cx - belly * 0.82, cy + 5.0 * u - belly * 0.55, cx + belly * 0.82, cy + 5.0 * u - belly * 0.55, 1.6, Color::new(0.70, 0.90, 1.0, 0.95));
+            slab(cx - r.w * 0.10, cy - r.h * 0.27, r.w * 0.20, r.h * 0.20, Color::new(0.80, 0.92, 1.0, 0.45));
+            slab(cx - r.w * 0.14, cy - r.h * 0.34, r.w * 0.28, r.h * 0.09, ItemKind::ClayJar.color());
+            // Glints on the glass.
+            draw_line(cx - belly * 0.70, cy + 5.0 * u - belly * 0.30, cx - belly * 0.70, cy + 5.0 * u + belly * 0.35, 2.4 * u, Color::new(1.0, 1.0, 1.0, 0.85));
+            draw_circle(cx - belly * 0.40, cy + 5.0 * u - belly * 0.72, 1.4 * u, Color::new(1.0, 1.0, 1.0, 0.9));
+            draw_circle(cx + belly * 0.35, cy + 5.0 * u + belly * 0.30, 1.8 * u, Color::new(0.75, 0.92, 1.0, 0.7));
         }
         ItemKind::LeatherCord => {
-            // Two short strips of leather lying crossed.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
             for (a, b) in [(p(0.22, 0.30), p(0.78, 0.66)), (p(0.24, 0.70), p(0.76, 0.28))] {
-                draw_line(a.x, a.y, b.x, b.y, 6.0, outline);
-                draw_line(a.x, a.y, b.x, b.y, 4.0, color);
+                rod(a, b, 4.0 * u, color);
             }
+            draw_circle(cx, cy, 2.0 * u, darken(color, 0.65));
         }
         ItemKind::BronzeMallet => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (h0, h1) = (p(0.22, 0.84), p(0.62, 0.38));
-            draw_line(h0.x, h0.y, h1.x, h1.y, 6.5, outline);
-            draw_line(h0.x, h0.y, h1.x, h1.y, 4.5, ItemKind::Stick.color());
-            // A blocky head set across the top of the handle, bound with a leather cord.
-            let (a, b, c, d) = (p(0.44, 0.22), p(0.62, 0.10), p(0.88, 0.34), p(0.70, 0.52));
-            draw_triangle(a, b, c, color);
-            draw_triangle(a, c, d, color);
-            for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
-                draw_line(u.x, u.y, v.x, v.y, 1.5, outline);
-            }
-            draw_line(a.x + 2.0, a.y + 1.0, b.x - 1.0, b.y + 2.0, 1.5, lighten(color, 0.16));
-            let bind = p(0.54, 0.46);
-            draw_line(bind.x - 4.0, bind.y - 3.0, bind.x + 4.0, bind.y + 3.0, 2.5, ItemKind::LeatherCord.color());
+            let (h0, h1) = (p(0.22, 0.86), p(0.62, 0.40));
+            rod(h0, h1, 4.6 * u, ItemKind::Stick.color());
+            let (a, b, c, d) = (p(0.42, 0.24), p(0.62, 0.08), p(0.90, 0.34), p(0.70, 0.54));
+            quad([a, b, c, d], color);
+            draw_triangle(a, b, (a + c) / 2.0, lighten(color, 0.14));
+            draw_line(a.x, a.y, d.x, d.y, 2.0, darken(color, 0.70));
+            draw_line(b.x, b.y, c.x, c.y, 1.4, lighten(color, 0.28));
+            let bind = p(0.54, 0.48);
+            draw_line(bind.x - 4.0 * u, bind.y - 3.0 * u, bind.x + 4.0 * u, bind.y + 3.0 * u, 2.6, ItemKind::LeatherCord.color());
         }
         ItemKind::ClayForge => {
-            // A squat clay block with a dark opening on top.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (tl, br) = (p(0.16, 0.42), p(0.84, 0.82));
-            draw_rectangle(tl.x - 1.5, tl.y - 1.5, br.x - tl.x + 3.0, br.y - tl.y + 3.0, outline);
-            draw_rectangle(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
-            draw_rectangle(tl.x, br.y - 5.0, br.x - tl.x, 5.0, Color::new(color.r * 0.78, color.g * 0.78, color.b * 0.78, 1.0));
-            let (ol, or) = (p(0.28, 0.30), p(0.72, 0.46));
-            draw_rectangle(ol.x - 1.5, ol.y - 1.5, or.x - ol.x + 3.0, or.y - ol.y + 3.0, outline);
-            draw_rectangle(ol.x, ol.y, or.x - ol.x, or.y - ol.y, Color::new(0.40, 0.31, 0.26, 1.0));
+            let (tl, br) = (p(0.14, 0.42), p(0.86, 0.84));
+            slab(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            let (ol, or) = (p(0.28, 0.28), p(0.72, 0.46));
+            slab(ol.x, ol.y, or.x - ol.x, or.y - ol.y, Color::new(0.38, 0.29, 0.24, 1.0));
+            draw_rectangle(ol.x + 3.0, ol.y + 3.0, or.x - ol.x - 6.0, 3.0, Color::new(0.10, 0.08, 0.08, 1.0));
+            // A tuyère hole in the front and cracks in the clay.
+            draw_circle(cx, br.y - 8.0 * u, 3.4 * u, Color::new(0.14, 0.10, 0.09, 1.0));
+            draw_line(tl.x + 6.0, tl.y + 6.0, tl.x + 10.0, tl.y + 12.0, 1.0, darken(color, 0.62));
         }
         ItemKind::Copper | ItemKind::Tin | ItemKind::Iron | ItemKind::Gold | ItemKind::Bronze => {
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            // An ingot: a wide trapezoid with a bright top face.
-            let (a, b, c, d) = (p(0.26, 0.46), p(0.74, 0.46), p(0.84, 0.72), p(0.16, 0.72));
-            for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
-                draw_line(u.x, u.y, v.x, v.y, 3.5, outline);
-            }
-            draw_triangle(a, b, c, color);
-            draw_triangle(a, c, d, color);
-            let (e, f) = (p(0.32, 0.50), p(0.68, 0.50));
-            draw_line(e.x, e.y, f.x, f.y, 3.0, lighten(color, 0.18));
-            draw_line(p(0.22, 0.68).x, p(0.22, 0.68).y, p(0.78, 0.68).x, p(0.78, 0.68).y, 2.0, Color::new(color.r * 0.7, color.g * 0.7, color.b * 0.7, 1.0));
+            // An ingot: a bright top face with a stamp, and a darker front face.
+            let (a, b, c, d) = (p(0.28, 0.44), p(0.76, 0.44), p(0.88, 0.62), p(0.16, 0.62));
+            let front = [p(0.16, 0.62), p(0.88, 0.62), p(0.84, 0.78), p(0.20, 0.78)];
+            quad(front, darken(color, 0.72));
+            quad([a, b, c, d], lighten(color, 0.08));
+            draw_line(p(0.30, 0.48).x, p(0.30, 0.48).y, p(0.70, 0.48).x, p(0.70, 0.48).y, 2.4, lighten(color, 0.30));
+            draw_rectangle(cx - 5.0 * u, cy - 0.5, 10.0 * u, 3.0 * u, darken(color, 0.85));
+            draw_line(p(0.20, 0.64).x, p(0.20, 0.64).y, p(0.20, 0.76).x, p(0.20, 0.76).y, 1.4, lighten(color, 0.12));
         }
         ItemKind::Charcoal => {
             for (dx, dy, rad, shade) in [(-0.10, 0.08, 0.17, 0.0), (0.13, 0.04, 0.13, 0.03), (0.0, -0.12, 0.13, 0.06)] {
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w + 1.0, outline);
-                draw_circle(cx + dx * r.w, cy + dy * r.h, rad * r.w, Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0));
+                ball(cx + dx * r.w, cy + dy * r.h, rad * r.w, Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0));
             }
-            draw_circle(cx - 0.12 * r.w, cy + 0.02 * r.h, r.w * 0.04, lighten(color, 0.30));
+            draw_line(cx - 0.14 * r.w, cy + 0.02 * r.h, cx - 0.04 * r.w, cy + 0.10 * r.h, 1.0, Color::new(0.45, 0.45, 0.50, 1.0));
+            draw_circle(cx - 0.12 * r.w, cy - 0.02 * r.h, 1.6 * u, Color::new(0.50, 0.50, 0.58, 1.0));
         }
         ItemKind::Antlers => {
-            // Two curved beams, each with three tines.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
             for side in [-1.0_f32, 1.0] {
                 let base = p(0.5, 0.86);
                 let beam = [base, p(0.5 + side * 0.10, 0.60), p(0.5 + side * 0.20, 0.36), p(0.5 + side * 0.18, 0.14)];
                 for w in beam.windows(2) {
-                    draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 6.0, outline);
-                    draw_line(w[0].x, w[0].y, w[1].x, w[1].y, 4.0, color);
+                    rod(w[0], w[1], 5.0 * u, color);
                 }
                 for (from, to) in [(beam[1], p(0.5 + side * 0.34, 0.50)), (beam[2], p(0.5 + side * 0.38, 0.26)), (beam[2], p(0.5 + side * 0.04, 0.30))] {
-                    draw_line(from.x, from.y, to.x, to.y, 4.5, outline);
-                    draw_line(from.x, from.y, to.x, to.y, 3.0, color);
+                    rod(from, to, 3.4 * u, lighten(color, 0.04));
                 }
             }
+            draw_rectangle(cx - 6.0 * u, p(0.0, 0.84).y, 12.0 * u, 4.0 * u, darken(color, 0.7));
         }
         ItemKind::BoneTotem => {
-            // A tall post of bone with a skull-like head and two dark eyes.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (tl, br) = (p(0.40, 0.40), p(0.60, 0.88));
-            draw_rectangle(tl.x - 1.5, tl.y - 1.5, br.x - tl.x + 3.0, br.y - tl.y + 3.0, outline);
-            draw_rectangle(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
-            let (hl, hr) = (p(0.28, 0.12), p(0.72, 0.44));
-            draw_rectangle(hl.x - 1.5, hl.y - 1.5, hr.x - hl.x + 3.0, hr.y - hl.y + 3.0, outline);
-            draw_rectangle(hl.x, hl.y, hr.x - hl.x, hr.y - hl.y, lighten(color, 0.05));
+            let (tl, br) = (p(0.40, 0.42), p(0.60, 0.90));
+            slab(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            let (hl, hr) = (p(0.28, 0.10), p(0.72, 0.44));
+            slab(hl.x, hl.y, hr.x - hl.x, hr.y - hl.y, lighten(color, 0.04));
             for ex in [0.40, 0.60] {
-                draw_circle(r.x + r.w * ex, r.y + r.h * 0.27, 3.2, Color::new(0.10, 0.09, 0.08, 1.0));
+                ball(r.x + r.w * ex, r.y + r.h * 0.26, 3.6 * u, Color::new(0.10, 0.09, 0.08, 1.0));
             }
-            draw_line(p(0.30, 0.60).x, p(0.30, 0.60).y, p(0.70, 0.60).x, p(0.70, 0.60).y, 4.0, outline);
-            draw_line(p(0.30, 0.60).x, p(0.30, 0.60).y, p(0.70, 0.60).x, p(0.70, 0.60).y, 2.5, color);
+            draw_triangle(p(0.47, 0.34), p(0.53, 0.34), p(0.50, 0.28), Color::new(0.20, 0.17, 0.15, 1.0));
+            for tx in [0.38, 0.46, 0.54, 0.62] {
+                draw_line(r.x + r.w * tx, hr.y - 1.0, r.x + r.w * tx, hr.y - 5.0 * u, 2.0, Color::new(0.96, 0.94, 0.88, 1.0));
+            }
+            rod(p(0.28, 0.60), p(0.72, 0.60), 4.0 * u, color);
+            rod(p(0.30, 0.74), p(0.70, 0.74), 3.0 * u, color);
         }
         ItemKind::PeltCloak => {
-            // A cape hanging from the shoulders, with a clasp at the neck.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (a, b, c, d) = (p(0.30, 0.18), p(0.70, 0.18), p(0.86, 0.84), p(0.14, 0.84));
-            for (u, v) in [(a, b), (b, c), (c, d), (d, a)] {
-                draw_line(u.x, u.y, v.x, v.y, 3.5, outline);
+            let (a, b, c, d) = (p(0.28, 0.16), p(0.72, 0.16), p(0.88, 0.86), p(0.12, 0.86));
+            quad([a, b, c, d], color);
+            draw_triangle(a, (a + b) / 2.0 + vec2(0.0, 8.0 * u), p(0.20, 0.86), darken(color, 0.86));
+            for i in 0..7 {
+                let fx = d.x + 4.0 + i as f32 * (c.x - d.x - 8.0) / 6.0;
+                draw_line(fx, d.y - 1.0, fx, d.y + 3.0 + (i % 2) as f32 * 3.0, 3.6, color);
             }
-            draw_triangle(a, b, c, color);
-            draw_triangle(a, c, d, color);
-            draw_line(p(0.20, 0.78).x, p(0.20, 0.78).y, p(0.80, 0.78).x, p(0.80, 0.78).y, 4.0, lighten(color, 0.12));
-            draw_circle(r.x + r.w * 0.50, r.y + r.h * 0.20, 3.5, ItemKind::Gold.color());
+            draw_line(p(0.22, 0.74).x, p(0.22, 0.74).y, p(0.78, 0.74).x, p(0.78, 0.74).y, 4.0, lighten(color, 0.14));
+            for fx in [0.36, 0.50, 0.64] {
+                draw_line(r.x + r.w * fx, r.y + r.h * 0.28, r.x + r.w * (fx + 0.03), r.y + r.h * 0.64, 1.2, lighten(color, 0.12));
+            }
+            ball(r.x + r.w * 0.50, r.y + r.h * 0.18, 3.8 * u, ItemKind::Gold.color());
         }
         ItemKind::RoyalArmor => {
-            // A breastplate with two pauldrons and a studded belt.
-            let p = |fx: f32, fy: f32| vec2(r.x + r.w * fx, r.y + r.h * fy);
-            let (tl, br) = (p(0.28, 0.24), p(0.72, 0.84));
-            draw_rectangle(tl.x - 1.5, tl.y - 1.5, br.x - tl.x + 3.0, br.y - tl.y + 3.0, outline);
-            draw_rectangle(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
-            for sx in [0.14, 0.64] {
-                let (sl, sr) = (p(sx, 0.16), p(sx + 0.22, 0.38));
-                draw_rectangle(sl.x - 1.5, sl.y - 1.5, sr.x - sl.x + 3.0, sr.y - sl.y + 3.0, outline);
-                draw_rectangle(sl.x, sl.y, sr.x - sl.x, sr.y - sl.y, lighten(color, 0.08));
+            let (tl, br) = (p(0.28, 0.24), p(0.72, 0.86));
+            slab(tl.x, tl.y, br.x - tl.x, br.y - tl.y, color);
+            for sx in [0.12, 0.64] {
+                let (sl, sr) = (p(sx, 0.14), p(sx + 0.24, 0.40));
+                slab(sl.x, sl.y, sr.x - sl.x, sr.y - sl.y, lighten(color, 0.08));
             }
-            draw_rectangle(tl.x, p(0.0, 0.58).y, br.x - tl.x, 5.0, ItemKind::Gold.color());
-            draw_line(cx, tl.y + 3.0, cx, p(0.0, 0.56).y, 2.0, lighten(color, 0.2));
+            draw_rectangle(tl.x, p(0.0, 0.58).y, br.x - tl.x, 5.0 * u, ItemKind::Gold.color());
+            for sx in [0.34, 0.50, 0.66] {
+                draw_circle(r.x + r.w * sx, p(0.0, 0.58).y + 2.5 * u, 1.2 * u, lighten(ItemKind::Gold.color(), 0.25));
+            }
+            draw_line(cx, tl.y + 3.0, cx, p(0.0, 0.56).y, 2.0, lighten(color, 0.24));
+            draw_circle(cx, tl.y + 9.0 * u, 3.0 * u, ItemKind::Gold.color());
         }
     }
 }

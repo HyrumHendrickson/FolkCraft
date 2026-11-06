@@ -254,8 +254,32 @@ pub fn draw_dropped_items(items: &[DroppedItem], time: f32, player_chunk: (i32, 
         let phase = item.pos.x * 3.1 + item.pos.z * 7.7;
         let bob = 0.07 + 0.04 * (time * 2.5 + phase).sin();
         let centre = item.pos + vec3(0.0, bob, 0.0);
-        draw_box(centre, item.kind.draw_half_extents(), time * 1.6 + phase, item.kind.color());
+        let yaw = time * 1.6 + phase;
+        match item.kind {
+            ItemKind::ClayJar | ItemKind::WaterJar => draw_jar(centre, yaw, item.kind == ItemKind::WaterJar),
+            _ => draw_box(centre, item.kind.draw_half_extents(), yaw, item.kind.color()),
+        }
     }
+}
+
+/// A jar lying about: a round-bellied clay jar with a neck and a lip, or the same jar once it holds water, when it has gone
+/// clear: translucent glass with blue water in it and only the lip still clay.
+fn draw_jar(centre: Vec3, yaw: f32, water: bool) {
+    let clay = ItemKind::ClayJar.color();
+    let lip = (vec3(0.0, 0.10, 0.0), vec3(0.065, 0.015, 0.065));
+    if !water {
+        draw_box(centre + vec3(0.0, -0.035, 0.0), vec3(0.09, 0.065, 0.09), yaw, clay);
+        draw_box(centre + vec3(0.0, -0.01, 0.0), vec3(0.092, 0.012, 0.092), yaw, Color::new(0.50, 0.28, 0.20, 1.0));
+        draw_box(centre + vec3(0.0, 0.065, 0.0), vec3(0.05, 0.04, 0.05), yaw, clay);
+        draw_box(centre + lip.0, lip.1, yaw, Color::new(clay.r + 0.04, clay.g + 0.04, clay.b + 0.04, 1.0));
+        return;
+    }
+    // Opaque parts first, then the glass over them.
+    draw_box(centre + lip.0, lip.1, yaw, clay);
+    draw_box(centre + vec3(0.0, -0.05, 0.0), vec3(0.074, 0.046, 0.074), yaw, Color::new(0.20, 0.50, 0.92, 0.80));
+    draw_box(centre + vec3(0.0, -0.004, 0.0), vec3(0.074, 0.003, 0.074), yaw, Color::new(0.70, 0.90, 1.0, 0.85));
+    draw_box(centre + vec3(0.0, -0.035, 0.0), vec3(0.09, 0.065, 0.09), yaw, Color::new(0.82, 0.93, 1.0, 0.30));
+    draw_box(centre + vec3(0.0, 0.065, 0.0), vec3(0.05, 0.04, 0.05), yaw, Color::new(0.82, 0.93, 1.0, 0.30));
 }
 
 #[cfg(test)]

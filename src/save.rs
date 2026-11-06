@@ -56,6 +56,10 @@ pub struct SaveData {
     pub in_horizen: bool,
     /// The Horizen's own edits, items on the ground and the player's place in it, once the player has been there.
     pub horizen: Option<Box<SaveData>>,
+    /// Whether the player is in the Skylands (the fields above then describe the overworld, where they left it).
+    pub in_skylands: bool,
+    /// The Skylands' own edits, items on the ground and the player's place in it, once the player has been there.
+    pub skylands: Option<Box<SaveData>>,
 }
 
 impl SaveData {
@@ -79,6 +83,8 @@ impl SaveData {
             worn: None,
             in_horizen: false,
             horizen: None,
+            in_skylands: false,
+            skylands: None,
         }
     }
 }
@@ -110,6 +116,10 @@ impl SaveData {
 ///     "graveyard <x> <z>"       the graveyard, centred on that column
 ///     "worn <item>"             what the player wears
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
+///     "dimension skylands"     the player is in the Skylands (everything above is then the overworld)
+///     "yetislain"              the Yeti has been killed (a cyclone stands on the summit)
+///     "nessie <x> <z>"         the monster of the lake centred there has been killed (its castle gate is open)
+///     "s <record>"              a record of the Skylands, as for \"h\"
 ///     "h <record>"              a record of the Horizen: any of the above that makes sense there (blocks, fires,
 ///                                items, \"pos <x> <y> <z> <yaw> <pitch>\" for the player's place in it)
 /// Worlds saved before the inventory existed simply have none of the last six, and worlds saved before the
@@ -133,6 +143,8 @@ pub struct SaveExtras<'a> {
     pub worn: Option<ItemKind>,
     pub in_horizen: bool,
     pub horizen: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
+    pub in_skylands: bool,
+    pub skylands: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
 }
 
 /// The records that describe a world's edits, each starting with `prefix`.
@@ -195,6 +207,15 @@ pub fn serialize_save_full(
     if extras.in_horizen {
         out.push_str("dimension horizen\n");
     }
+    if extras.in_skylands {
+        out.push_str("dimension skylands\n");
+    }
+    if world.landmarks.yeti_slain {
+        out.push_str("yetislain\n");
+    }
+    for (x, z) in &world.landmarks.monsters_slain {
+        out.push_str(&format!("nessie {x} {z}\n"));
+    }
     for l in &world.landmarks.lakes {
         out.push_str(&format!("lake {} {} {} {} {} {}\n", l.x, l.z, l.radius, l.phase, l.from.0, l.from.1));
     }
@@ -252,6 +273,13 @@ pub fn serialize_save_full(
             out.push_str(&format!("h item {} {} {} {}\n", item.kind.id(), item.pos.x, item.pos.y, item.pos.z));
         }
     }
+    if let Some((sw, sp, sitems)) = extras.skylands {
+        out.push_str(&format!("s pos {} {} {} {} {}\n", sp.pos.x, sp.pos.y, sp.pos.z, sp.yaw, sp.pitch));
+        world_lines(sw, "s ", &mut out);
+        for item in sitems {
+            out.push_str(&format!("s item {} {} {} {}\n", item.kind.id(), item.pos.x, item.pos.y, item.pos.z));
+        }
+    }
     out
 }
 
@@ -282,6 +310,20 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 let horizen = data.horizen.get_or_insert_with(|| Box::new(SaveData::new()));
                 apply_line(horizen, rest);
             }
+            Some("s") => {
+                let rest = line.trim_start().strip_prefix('s').unwrap_or("");
+                let skylands = data.skylands.get_or_insert_with(|| Box::new(SaveData::new()));
+                apply_line(skylands, rest);
+            }
+            Some("yetislain") => data.landmarks.yeti_slain = true,
+            Some("nessie") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    if !data.landmarks.monsters_slain.contains(&(x, z)) {
+                        data.landmarks.monsters_slain.push((x, z));
+                    }
+                }
+            }
             Some("pos") => {
                 let v: Vec<f32> = t.filter_map(|s| s.parse().ok()).collect();
                 if v.len() == 5 {
@@ -291,7 +333,11 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 }
             }
             Some("worn") => data.worn = t.next().and_then(ItemKind::from_id).filter(|k| k.is_wearable()),
-            Some("dimension") => data.in_horizen = t.next() == Some("horizen"),
+            Some("dimension") => {
+                let which = t.next();
+                data.in_horizen = which == Some("horizen");
+                data.in_skylands = which == Some("skylands");
+            }
             Some("well") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {

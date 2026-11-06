@@ -590,3 +590,92 @@ pub const MOON_RADIUS: f32 = 30.0;
 pub const HORIZEN_STAR_ROTATION_SPEED: f32 = 1.92;
 /// A night scene receives a final 20% brightness reduction, including dynamic models and water.
 pub const NIGHT_SCENE_BRIGHTNESS: f32 = 0.80;
+
+// --- Bosses: the Yeti and the Loch Ness Monster ------------------------------------------
+
+/// Health of the two bosses (a bear has `BEAR_HEALTH`; an iron axe does `IRON_AXE_DAMAGE` a blow).
+pub const YETI_HEALTH: i32 = 300;
+pub const LOCH_NESS_HEALTH: i32 = 320;
+/// The Yeti stands on the summit and charges a player within `YETI_NOTICE_DISTANCE`. It never strays further than
+/// `YETI_LEASH` from the summit, and it is slower than a walking player.
+pub const YETI_NOTICE_DISTANCE: f32 = 26.0;
+pub const YETI_LEASH: f32 = 36.0;
+pub const YETI_WALK_SPEED: f32 = 1.8;
+pub const YETI_RUN_SPEED: f32 = 5.0;
+/// Below half health the Yeti is enraged: it runs and strikes faster.
+pub const YETI_ENRAGED_SPEED_FACTOR: f32 = 1.35;
+pub const YETI_ENRAGED_COOLDOWN_FACTOR: f32 = 0.7;
+pub const YETI_DAMAGE: u32 = 3;
+pub const YETI_ATTACK_COOLDOWN: f32 = 1.5;
+/// How far past its own body the Yeti's arm reaches.
+pub const YETI_REACH: f32 = 1.2;
+pub const YETI_PELT_DROP: u32 = 3;
+pub const YETI_GOLD_DROP: u32 = 3;
+/// The Yeti appears when the player comes within this many blocks of the summit (and its chunk is loaded).
+pub const YETI_SPAWN_DISTANCE: f32 = 90.0;
+/// The Loch Ness Monster swims only in its lake, within `LOCH_NESS_LEASH` of where it appeared. It hunts a player
+/// within `LOCH_NESS_NOTICE_DISTANCE`, as near as the water lets it come, and strikes with its neck at `LOCH_NESS_REACH`.
+pub const LOCH_NESS_NOTICE_DISTANCE: f32 = 55.0;
+pub const LOCH_NESS_LEASH: f32 = 110.0;
+pub const LOCH_NESS_WALK_SPEED: f32 = 2.4;
+pub const LOCH_NESS_RUN_SPEED: f32 = 4.6;
+pub const LOCH_NESS_DAMAGE: u32 = 3;
+pub const LOCH_NESS_ATTACK_COOLDOWN: f32 = 1.8;
+pub const LOCH_NESS_REACH: f32 = 3.2;
+pub const LOCH_NESS_GOLD_DROP: u32 = 4;
+pub const LOCH_NESS_IRON_DROP: u32 = 2;
+/// The monster rises when the player is within the lake's radius plus this margin.
+pub const LOCH_NESS_SPAWN_MARGIN: f32 = 40.0;
+/// A boss's health bar shows at the top of the screen while it is this close.
+pub const BOSS_BAR_DISTANCE: f32 = 110.0;
+/// Bosses are simulated and kept this far from the player (a lake is 130 blocks wide, so the usual
+/// `ANIMAL_UPDATE_DISTANCE` is too short for the monster).
+pub const BOSS_UPDATE_DISTANCE: f32 = 150.0;
+pub const BOSS_DESPAWN_DISTANCE: f32 = 190.0;
+
+// --- The summit cyclone and the Skylands ---------------------------------------------------
+
+/// The summit is made flat within this many blocks of its centre, as the Yeti's arena.
+pub const SUMMIT_PLATEAU_RADIUS: f32 = 14.0;
+/// After the Yeti dies a cyclone stands on the summit. Standing in it for `CYCLONE_SECONDS` carries the player to the
+/// Skylands; the screen fades to white over the last `CYCLONE_FADE_SECONDS`.
+pub const CYCLONE_SECONDS: f32 = 5.0;
+pub const CYCLONE_FADE_SECONDS: f32 = 1.5;
+pub const CYCLONE_RADIUS: f32 = 2.2;
+pub const CYCLONE_HEIGHT: f32 = 7.0;
+pub const CYCLONE_SPIN_SPEED: f32 = 9.0;
+/// Seconds the white fades away after arriving by cyclone.
+pub const SKY_ARRIVAL_FADE_SECONDS: f32 = 1.6;
+
+/// The Skylands: islands on a grid of `SKY_CELL` blocks, each with its own size and height, joined to their east and
+/// south neighbours by wooden bridges `SKY_BRIDGE_WIDTH` wide.
+pub const SKY_CELL: i32 = 56;
+pub const SKY_BASE_Y: i32 = 100;
+/// Islands' tops differ by at most twice this, and their centres stray at most `SKY_ISLAND_JITTER` from the middle of
+/// their cell, so two neighbours are always far enough apart (over 13 blocks of bridge) for the deck to climb a block
+/// at most once every three.
+pub const SKY_HEIGHT_JITTER: i32 = 3;
+pub const SKY_ISLAND_JITTER: i32 = 8;
+pub const SKY_ISLAND_MIN_RADIUS: f32 = 8.0;
+pub const SKY_ISLAND_MAX_RADIUS: f32 = 11.0;
+/// How thick the rock under an island is at its middle.
+pub const SKY_ISLAND_MIN_DEPTH: i32 = 9;
+pub const SKY_ISLAND_MAX_DEPTH: i32 = 15;
+/// Layers of dirt on top of the rock.
+pub const SKY_DIRT_LAYERS: i32 = 3;
+pub const SKY_BRIDGE_WIDTH: f32 = 3.0;
+/// Percent of the south bridges that exist (the east ones, and every south bridge of column 0, always do).
+pub const SKY_SOUTH_BRIDGE_PERCENT: u64 = 60;
+/// The first island: centre, radius and the cyclone that leads home, a few blocks from where the player arrives.
+pub const SKY_SPAWN_CENTRE: (i32, i32) = (8, 8);
+pub const SKY_SPAWN_RADIUS: f32 = 15.0;
+pub const SKY_HOME_CYCLONE_OFFSET: f32 = 9.0;
+/// Below this height the player has fallen off every island.
+pub const SKY_VOID_Y: f32 = 55.0;
+/// A fall off an island: the white fades in over `SKY_FALL_FADE_IN`, the player is taken to the normal world and put
+/// `SKY_FALL_DROP` blocks above its spawn point, and the white fades out again over `SKY_FALL_FADE_OUT` as they fall.
+pub const SKY_FALL_FADE_IN: f32 = 0.9;
+pub const SKY_FALL_FADE_OUT: f32 = 3.2;
+pub const SKY_FALL_DROP: f32 = 50.0;
+/// Trees on an island: percent of columns that try to grow one.
+pub const SKY_TREE_PERCENT: u64 = 3;
