@@ -53,7 +53,7 @@ pub struct SaveData {
     pub dev_mode: bool,
     /// The one thing the player wears (a pelt cloak or the royal armour).
     pub worn: Option<ItemKind>,
-    /// The backpack on the player's back.
+    /// The backpack of a save made when it had a place of its own (read, never written: it is `worn` now).
     pub back: Option<ItemKind>,
     /// Whether the player is in the Horizen. The fields above then describe the overworld, where they fell in.
     pub in_horizen: bool,
@@ -122,8 +122,10 @@ impl SaveData {
 ///     "well <x> <z>"            the well (its water's corner with the smallest coordinates)
 ///     "graveyard <x> <z>"       the graveyard, centred on that column
 ///     "ghostrest"               the graveyard's ghost has heard its song and rests
-///     "worn <item>"             what the player wears
-///     "back <item>"             the backpack on the player's back (slots 36 to 53 of "inv" then belong to the pack)
+///     "won"                     the player has beaten the Wild Hunt and won the game
+///     "worn <item>"             what the player wears: a cloak, the armour, the crown or a backpack (while it is a backpack,
+///                               slots 36 to 53 of "inv" belong to the pack)
+///     "back <item>"             read only: saves made when the backpack had a place of its own; it is worn now
 ///     "quailkills <n>"          how many quail the player has killed
 ///     "ruinedcastle <x> <z>"    the ruined castle with the sword in the stone, centred on that column
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
@@ -156,7 +158,6 @@ pub fn serialize_save(
 #[derive(Default)]
 pub struct SaveExtras<'a> {
     pub worn: Option<ItemKind>,
-    pub back: Option<ItemKind>,
     pub in_horizen: bool,
     pub horizen: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
     pub in_skylands: bool,
@@ -177,6 +178,9 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
     }
     for (x, z) in &landmarks.sky_visited {
         out.push_str(&format!("{prefix}skyvisit {x} {z}\n"));
+    }
+    if landmarks.game_won {
+        out.push_str(&format!("{prefix}won\n"));
     }
     if landmarks.graveyard_rested {
         out.push_str(&format!("{prefix}ghostrest\n"));
@@ -240,9 +244,6 @@ pub fn serialize_save_full(
     out.push_str(&format!("health {}\n", health));
     if dev_mode {
         out.push_str("mode dev\n");
-    }
-    if let Some(back) = extras.back {
-        out.push_str(&format!("back {}\n", back.id()));
     }
     if let Some(worn) = extras.worn {
         out.push_str(&format!("worn {}\n", worn.id()));
@@ -401,6 +402,7 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 }
             }
             Some("ghostrest") => data.landmarks.graveyard_rested = true,
+            Some("won") => data.landmarks.game_won = true,
             Some("cavevisit") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {

@@ -43,6 +43,23 @@ impl Arrow {
         Arrow { kind: ItemKind::Pebble, pos: origin, vel: dir * SLING_SPEED, age: 0.0 }
     }
 
+    /// An arrow shot by the Wild Hunt's archer from `origin` along the unit vector `dir`. It hurts the player, not animals.
+    pub fn from_archer(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::Arrow, pos: origin, vel: dir * HUNT_ARROW_SPEED, age: 0.0 }
+    }
+
+    /// Whether the straight path this arrow has just flown, from `from` to where it is now, passed through the player standing at
+    /// `player` (feet).
+    pub fn hit_player(&self, from: Vec3, player: Vec3) -> bool {
+        let path = self.pos - from;
+        let length = path.length();
+        let (lo, hi) = (player - vec3(PLAYER_HALF_WIDTH, 0.0, PLAYER_HALF_WIDTH), player + vec3(PLAYER_HALF_WIDTH, PLAYER_HEIGHT, PLAYER_HALF_WIDTH));
+        if length < 1e-6 {
+            return (lo.x..=hi.x).contains(&from.x) && (lo.y..=hi.y).contains(&from.y) && (lo.z..=hi.z).contains(&from.z);
+        }
+        ray_box(from, path / length, lo.to_array(), hi.to_array()).map_or(false, |t| t <= length)
+    }
+
     /// Life points taken from an animal it hits.
     pub fn damage(&self) -> i32 {
         if self.kind == ItemKind::Pebble { SLING_DAMAGE } else { ARROW_DAMAGE }
@@ -126,6 +143,26 @@ mod tests {
             }
         }
         Fate::InFlight
+    }
+
+    #[test]
+    fn an_archers_arrow_that_passes_through_the_player_hits_them_and_one_that_passes_beside_them_does_not() {
+        let player = vec3(10.0, 6.0, 10.0);
+        let mut arrow = Arrow::from_archer(vec3(0.0, 7.0, 10.0), vec3(1.0, 0.0, 0.0));
+        let from = arrow.pos;
+        arrow.pos = vec3(12.0, 7.0, 10.0);
+        assert!(arrow.hit_player(from, player), "through the chest");
+        arrow.pos = vec3(9.0, 7.0, 10.0);
+        assert!(!arrow.hit_player(from, player), "stopped short");
+        let beside = Arrow::from_archer(vec3(0.0, 7.0, 12.0), vec3(1.0, 0.0, 0.0));
+        let mut beside_after = beside.clone();
+        beside_after.pos = vec3(20.0, 7.0, 12.0);
+        assert!(!beside_after.hit_player(beside.pos, player), "two blocks wide of them");
+        let mut over = Arrow::from_archer(vec3(0.0, 9.0, 10.0), vec3(1.0, 0.0, 0.0));
+        let start = over.pos;
+        over.pos = vec3(20.0, 9.0, 10.0);
+        assert!(!over.hit_player(start, player), "over their head");
+        assert!((arrow.vel.length() - HUNT_ARROW_SPEED).abs() < 1e-3);
     }
 
     #[test]

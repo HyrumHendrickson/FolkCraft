@@ -912,40 +912,21 @@ fn wrap_totals(parts: &[String], max_width: f32) -> Vec<String> {
 /// - press on a stack and release over another slot to move, merge or swap stacks;
 /// - click an entry in the crafting list to craft it once.
 /// Also shows a tooltip on hover.
-pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, back: &mut Option<ItemKind>, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
+pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, ui: &mut InventoryUi, selected: usize, toasts: &mut Toasts, dev_mode: bool) -> Option<usize> {
     let (w, h) = (screen_width(), screen_height());
     let slots = inventory.slots.len();
     let lay = layout(slots);
     let (mx, my) = mouse_position();
     let mouse = vec2(mx, my);
     let hovered_slot = slot_at(lay.grid, slots, mouse);
-    // The worn slot, beside the title: click it to take the garment off; drop a cloak or armour on it to put it on.
+    // The worn slot, beside the title: click it to take the garment off; drop a cloak, armour, crown or backpack on it to put it
+    // on. They all share it. A backpack's rows must be emptied into the other slots before it comes off.
     let worn_rect = Rect::new(lay.grid.x + 190.0, lay.panel.y + 24.0 + 4.0, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0);
     if is_mouse_button_pressed(MouseButton::Left) && worn_rect.contains(mouse) {
-        if let Some(kind) = *worn {
-            if inventory.add(kind, 1) == 0 {
-                *worn = None;
-                toasts.push(format!("You take off the {}", kind.name()));
-            } else {
-                toasts.push("Inventory full".to_string());
-            }
-        }
-    }
-
-    // The pack slot, beside the worn slot: click it to take the backpack off (its rows must be emptied into the other slots
-    // first, or have room there); drop a backpack on it to put it on.
-    let pack_rect = Rect::new(worn_rect.x + 120.0, worn_rect.y, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0);
-    if is_mouse_button_pressed(MouseButton::Left) && pack_rect.contains(mouse) {
-        if let Some(kind) = *back {
-            if !inventory.remove_pack_rows() {
-                toasts.push("Empty the backpack first: its things do not fit in the other slots".to_string());
-            } else if inventory.add(kind, 1) == 0 {
-                *back = None;
-                toasts.push(format!("You take off the {}", kind.name()));
-            } else {
-                inventory.add_pack_rows();
-                toasts.push("Inventory full".to_string());
-            }
+        match inventory.take_off(worn) {
+            Ok(Some(kind)) => toasts.push(format!("You take off the {}", kind.name())),
+            Ok(None) => {}
+            Err(why) => toasts.push(why.to_string()),
         }
     }
 
@@ -960,20 +941,11 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     let mut dropped_outside = None;
     if is_mouse_button_released(MouseButton::Left) {
         if let Some(from) = ui.drag_from.take() {
-            if pack_rect.contains(mouse) {
-                if back.is_none() && inventory.slots[from].map_or(false, |s| s.kind.is_backpack()) {
-                    let kind = inventory.take_from_slot(from).unwrap();
-                    inventory.add_pack_rows();
-                    *back = Some(kind);
-                }
-            } else if worn_rect.contains(mouse) {
-                if let Some(kind) = inventory.slots[from].map(|s| s.kind).filter(|k| k.is_wearable()) {
-                    inventory.take_from_slot(from);
-                    if let Some(old) = worn.replace(kind) {
-                        if inventory.add(old, 1) != 0 {
-                            *worn = Some(old);
-                            inventory.add(kind, 1);
-                        }
+            if worn_rect.contains(mouse) {
+                if inventory.slots[from].map_or(false, |s| s.kind.is_wearable()) {
+                    match inventory.put_on(worn, from) {
+                        Ok(kind) => toasts.push(format!("You put on the {}", kind.name())),
+                        Err(why) => toasts.push(why.to_string()),
                     }
                 }
             } else if let Some(to) = hovered_slot {
@@ -1006,8 +978,6 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     }
     draw_text("Worn:", lay.grid.x + 130.0, panel.y + pad + 22.0, 22.0, LIGHTGRAY);
     draw_slot(worn_rect, worn.map(|k| ItemStack { kind: k, count: 1 }).as_ref(), worn_rect.contains(mouse));
-    draw_text("Pack:", pack_rect.x - 60.0, panel.y + pad + 22.0, 22.0, LIGHTGRAY);
-    draw_slot(pack_rect, back.map(|k| ItemStack { kind: k, count: 1 }).as_ref(), pack_rect.contains(mouse));
 
     // --- Slots ---
     let mut hovered_stack: Option<ItemStack> = None;

@@ -435,6 +435,105 @@ fn loch_ness_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     parts
 }
 
+/// A bat: a small furry body, a head with big ears and a red mouth, and two long wings of fingered membrane that beat fast (and
+/// fold when it hangs about). It always seems to be flying, so there are no legs to walk on. Its eyes glow red at night, like the
+/// other creatures'.
+fn bat_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let fur = col(0.16, 0.12, 0.13);
+    let dark = col(0.09, 0.07, 0.09);
+    let membrane = col(0.24, 0.16, 0.19);
+    let flap = (time * 26.0 + a.phase * 2.0).sin();
+    let bob = 0.02 * (time * 7.0 + a.phase).sin();
+    let mut parts = vec![
+        block((0.0, 0.18 + bob, 0.0), (0.10, 0.07, 0.07), fur),
+        block((-0.09, 0.17 + bob, 0.0), (0.05, 0.03, 0.03), dark),
+        block((0.12, 0.20 + bob, 0.0), (0.06, 0.05, 0.05), fur),
+        block((0.17, 0.17 + bob, 0.0), (0.02, 0.015, 0.03), col(0.55, 0.15, 0.18)),
+    ];
+    for side in [-1.0, 1.0] {
+        parts.push(block((0.10, 0.27 + bob, 0.035 * side), (0.025, 0.05, 0.015), dark));
+        // Each wing: an arm bone out from the shoulder, then a wide membrane that swings up and down with it.
+        parts.push(tilted((0.0, 0.20 + bob + 0.10 * flap, 0.20 * side), (0.025, 0.012, 0.18), dark, 0.0));
+        parts.push(tilted((-0.03, 0.20 + bob + 0.16 * flap, 0.42 * side), (0.09, 0.008, 0.10), membrane, flap * 0.35));
+        parts.push(tilted((-0.07, 0.20 + bob + 0.07 * flap, 0.20 * side), (0.07, 0.008, 0.16), membrane, flap * 0.20));
+    }
+    eyes(&mut parts, (0.13, 0.215 + bob, 0.0), 0.05, 0.014, night, col(0.02, 0.02, 0.02));
+    parts
+}
+
+/// The look of a warrior of the Wild Hunt: the colour of its ghostly light, and its weapon.
+fn hunt_tint(kind: AnimalKind) -> (f32, f32, f32) {
+    match kind {
+        AnimalKind::HuntSwordsman => (0.72, 0.86, 1.0),
+        AnimalKind::HuntArcher => (0.66, 1.0, 0.82),
+        _ => (0.80, 0.68, 1.0),
+    }
+}
+
+/// A warrior of the Wild Hunt, all of it translucent: ragged robes that trail behind, a helmed head with two cold bright eyes, and
+/// a weapon in the hand that shows what it does: a long sword (the swordsman, who holds it forward as it runs), a drawn bow (the
+/// archer) or a dagger (the stalker, who runs bent low). Its legs stride as it moves and the robe streams out and sways.
+pub fn hunt_parts(a: &Animal, time: f32) -> Vec<Piece> {
+    let (r, g, b) = hunt_tint(a.kind);
+    let body = ghost(r, g, b, 0.42);
+    let dim = ghost(r * 0.6, g * 0.6, b * 0.7, 0.34);
+    let bright = ghost((r + 1.0) / 2.0, (g + 1.0) / 2.0, (b + 1.0) / 2.0, 0.85);
+    let steel = ghost(0.92, 0.96, 1.0, 0.80);
+    let moving = is_moving(a);
+    let stride = (a.phase * 2.2).sin() * 0.7 * moving;
+    let sway = (time * 2.0 + a.phase).sin();
+    let crouch = if a.kind == AnimalKind::HuntStalker { 0.55 } else { 0.0 };
+    let lean = crouch + if a.kind == AnimalKind::HuntSwordsman { 0.15 * moving } else { 0.0 };
+    let low = -0.30 * crouch;
+    let mut parts: Vec<Piece> = Vec::new();
+    for side in [-1.0, 1.0] {
+        let angle = if side > 0.0 { stride } else { -stride };
+        leg(&mut parts, (0.0, 0.92 + low, 0.14 * side), 0.46, 0.46, 0.07, angle, dim, dim);
+    }
+    // Torso, belt, shoulders, and the robe: a skirt below the waist and a long tatter streaming out behind.
+    parts.push(tilted((0.0, 1.22 + low, 0.0), (0.17, 0.30, 0.24), body, lean));
+    parts.push(tilted((0.0, 0.98 + low, 0.0), (0.19, 0.04, 0.26), dim, lean));
+    parts.push(tilted((-0.02, 0.62 + low, 0.0), (0.21, 0.30, 0.27), dim, lean * 0.5));
+    for i in 1..=3 {
+        let t = i as f32;
+        parts.push(tilted((-0.28 * t, 0.95 + low - 0.10 * t, 0.07 * t * (sway + t).sin()), (0.14, 0.22 - 0.04 * t, 0.20 - 0.03 * t), ghost(r, g, b, 0.30 - 0.07 * t), -0.25));
+    }
+    // The head: a helm with a crest and a dark face, with two bright eyes in it.
+    let head = (0.06 + 0.08 * crouch, 1.74 + low, 0.0);
+    parts.push(tilted(head, (0.12, 0.13, 0.12), body, lean * 0.5));
+    parts.push(tilted((head.0, head.1 + 0.17, 0.0), (0.14, 0.04, 0.03), bright, 0.0));
+    parts.push(block((head.0 + 0.11, head.1 - 0.02, 0.0), (0.02, 0.08, 0.10), ghost(0.04, 0.06, 0.12, 0.7)));
+    for side in [-1.0, 1.0] {
+        parts.push(block((head.0 + 0.125, head.1 + 0.01, 0.055 * side), (0.012, 0.022, 0.03), bright));
+    }
+    // Arms and weapon.
+    match a.kind {
+        AnimalKind::HuntSwordsman => {
+            let swing = 0.25 * (a.phase * 2.2).sin() * moving;
+            parts.push(tilted((0.20, 1.28, 0.30), (0.05, 0.26, 0.05), body, -1.2 + swing));
+            parts.push(tilted((0.28, 1.05, -0.28), (0.05, 0.26, 0.05), body, 0.3));
+            // A long straight blade held out in front, with a cross-guard.
+            parts.push(tilted((0.86, 1.36 + swing * 0.3, 0.30), (0.62, 0.025, 0.05), steel, -0.12 + swing));
+            parts.push(block((0.30, 1.30, 0.30), (0.03, 0.03, 0.14), bright));
+        }
+        AnimalKind::HuntArcher => {
+            // The left arm holds a bow out; the right is drawn back to the string.
+            parts.push(tilted((0.34, 1.34, 0.26), (0.05, 0.30, 0.05), body, -1.35));
+            parts.push(tilted((0.14, 1.34, -0.20), (0.05, 0.25, 0.05), body, -1.0));
+            parts.push(tilted((0.68, 1.34, 0.26), (0.03, 0.46, 0.03), steel, 0.12));
+            parts.push(block((0.62, 1.34, 0.26), (0.006, 0.44, 0.006), ghost(1.0, 1.0, 1.0, 0.45)));
+        }
+        _ => {
+            let reach = if a.hunt_phase == crate::animal::HuntPhase::Dash { -1.4 } else { -0.5 };
+            parts.push(tilted((0.20, 1.10 + low, 0.28), (0.05, 0.24, 0.05), body, reach));
+            parts.push(tilted((0.10, 1.06 + low, -0.26), (0.05, 0.24, 0.05), body, 0.4));
+            // A short dagger, point forward.
+            parts.push(tilted((0.50, 1.16 + low, 0.28), (0.20, 0.022, 0.035), steel, reach + 1.3));
+        }
+    }
+    parts
+}
+
 /// A colour with transparency, for the ghostly parts of a will-o-whisp.
 fn ghost(r: f32, g: f32, b: f32, alpha: f32) -> Color {
     Color::new(r, g, b, alpha)
@@ -475,7 +574,8 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             continue;
         }
         let parts = match a.kind {
-            AnimalKind::WillOWhisp => continue, // drawn by `draw_ghosts`, over the water
+            // Drawn by `draw_ghosts`, over the water.
+            AnimalKind::WillOWhisp | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => continue,
             AnimalKind::Deer => deer_parts(a, time, night),
             AnimalKind::Quail => quail_parts(a, time, night),
             AnimalKind::Crow => crow_parts(a, time, night),
@@ -485,6 +585,7 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::Moose => moose_parts(a, time, night),
             AnimalKind::Yeti => yeti_parts(a, time, night),
             AnimalKind::LochNessMonster => loch_ness_parts(a, time, night),
+            AnimalKind::Bat => bat_parts(a, time, night),
         };
         let (s, c) = a.heading.sin_cos();
         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
@@ -495,14 +596,21 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
     }
 }
 
-/// Draw the will-o-whisps in range, translucent. They go on after the water, with the other translucent things, so
-/// that the water and the world behind them show through. Call while the 3D camera is active.
+/// Draw the will-o-whisps and the warriors of the Wild Hunt in range, translucent. They go on after the water, with the other
+/// translucent things, so that the water and the world behind them show through. Call while the 3D camera is active.
 pub fn draw_ghosts(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
-    for a in animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp) {
+    for a in animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp || a.kind.is_wild_hunt()) {
         if !in_render_range(player_chunk, World::chunk_of_pos(a.pos)) {
             continue;
         }
         let (s, c) = a.heading.sin_cos();
+        if a.kind.is_wild_hunt() {
+            for (((fx, fy, fz), (hx, hy, hz), color), pitch) in hunt_parts(a, time) {
+                let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
+                draw_box_tilted(a.pos + offset, vec3(hx, hy, hz), a.heading, pitch, color);
+            }
+            continue;
+        }
         for ((fx, fy, fz), (hx, hy, hz), color) in will_o_whisp_parts(a, time) {
             let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
             draw_box(a.pos + offset, vec3(hx, hy, hz), a.heading, color);
@@ -558,6 +666,8 @@ mod tests {
             AnimalKind::Moose => moose_parts(a, time, night),
             AnimalKind::Yeti => yeti_parts(a, time, night),
             AnimalKind::LochNessMonster => loch_ness_parts(a, time, night),
+            AnimalKind::Bat => bat_parts(a, time, night),
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => hunt_parts(a, time),
             AnimalKind::WillOWhisp => unreachable!(),
         }
     }
@@ -651,6 +761,41 @@ mod tests {
         let heights: Vec<f32> = (0..200).map(|i| head_y(i as f32 * 0.1)).collect();
         let (lo, hi) = (heights.iter().cloned().fold(f32::MAX, f32::min), heights.iter().cloned().fold(0.0, f32::max));
         assert!(hi - lo > 0.3, "the deer's highest point drops by {} when it grazes", hi - lo);
+    }
+
+    #[test]
+    fn a_bat_has_two_wings_that_beat_and_red_eyes_at_night() {
+        let a = creature(AnimalKind::Bat);
+        let pieces = models(&a, 0.0, true);
+        assert_eq!(pieces.iter().filter(|((_, _, c), _)| c.a >= 1.0 && is_night_eye(*c)).count(), 2);
+        assert!(models(&a, 0.0, false).iter().all(|((_, _, c), _)| !is_night_eye(*c)), "nothing glows by day");
+        let wing_tip = |time: f32| models(&a, time, false).iter().map(|((o, _, _), _)| o.1).fold(0.0_f32, f32::max);
+        let heights: Vec<f32> = (0..40).map(|i| wing_tip(i as f32 * 0.013)).collect();
+        let (lo, hi) = (heights.iter().cloned().fold(f32::MAX, f32::min), heights.iter().cloned().fold(0.0, f32::max));
+        assert!(hi - lo > 0.05, "the wings beat ({lo}..{hi})");
+        assert!(models(&a, 0.0, false).iter().map(|((o, h, _), _)| o.2.abs() + h.2).fold(0.0_f32, f32::max) > 0.4, "a wide wingspan");
+    }
+
+    #[test]
+    fn the_three_warriors_of_the_wild_hunt_are_see_through_and_each_has_its_own_weapon() {
+        let mut sizes = Vec::new();
+        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntStalker] {
+            let a = creature(kind);
+            let parts = hunt_parts(&a, 0.5);
+            assert!(parts.iter().all(|((_, _, c), _)| c.a < 0.9), "{kind:?}: every part is translucent");
+            assert!(parts.iter().filter(|((_, _, c), _)| c.a >= 0.8).count() >= 3, "{kind:?}: bright eyes and a gleaming weapon");
+            let reach = parts.iter().map(|((o, h, _), _)| o.0 + h.0).fold(0.0_f32, f32::max);
+            sizes.push((kind, parts.len(), reach));
+            let top = parts.iter().map(|((o, h, _), _)| o.1 + h.1).fold(0.0_f32, f32::max);
+            assert!(top > 1.5 && top < 2.6, "{kind:?} is man-sized (the stalker crouches): {top}");
+        }
+        let sword = sizes[0].2;
+        assert!(sword > sizes[2].2 + 0.3, "the sword reaches well past the dagger: {sizes:?}");
+        // The stalker's arm snaps forward when it dashes.
+        let mut stalker = creature(AnimalKind::HuntStalker);
+        let before = hunt_parts(&stalker, 0.0);
+        stalker.hunt_phase = crate::animal::HuntPhase::Dash;
+        assert_ne!(before.iter().map(|((o, _, _), p)| (o.1 * 100.0) as i32 + (p * 100.0) as i32).collect::<Vec<_>>(), hunt_parts(&stalker, 0.0).iter().map(|((o, _, _), p)| (o.1 * 100.0) as i32 + (p * 100.0) as i32).collect::<Vec<_>>());
     }
 
     #[test]

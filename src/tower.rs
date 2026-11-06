@@ -17,6 +17,7 @@
 
 use crate::block::Block;
 use crate::config::*;
+use crate::rng::hash3;
 
 /// What lies on the plinth at the top of a tower.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +109,29 @@ pub fn tower_cell(dx: i32, dz: i32, dy: i32, locked: bool, relic: Relic) -> Opti
         return Some(relic.block());
     }
     Some(Block::Air)
+}
+
+/// What a **ruined** tower has in the cell (`dx`, `dz`, `dy`): the tower of a lake's island while its Loch Ness Monster lives.
+/// The walls have tumbled to ragged stumps of `1..=RUINED_WALL_MAX` blocks (the corners stand taller, but no one can climb
+/// them), the doorway is a gap with no door, the floors and the roof are gone with the relic's plinth, rubble lies about the
+/// ground floor, and the stair is broken off after its second step, so there is no way up. `Some(Air)` anywhere else inside the
+/// tower's square (so the ground there is cleared as for a whole tower), `None` outside it.
+pub fn ruined_tower_cell(dx: i32, dz: i32, dy: i32) -> Option<Block> {
+    let half = TOWER_HALF;
+    if dx.abs() > half || dz.abs() > half || !(0..TOWER_HEIGHT).contains(&dy) {
+        return None;
+    }
+    let roll = |salt: i32| hash3(RUINED_TOWER_SEED, dx, dz, salt) as i32;
+    let solid = if dx.abs().max(dz.abs()) == half {
+        let doorway = dx == 0 && dz == half;
+        let height = if dx.abs() == half && dz.abs() == half { RUINED_CORNER_HEIGHT } else { 1 + roll(1).rem_euclid(RUINED_WALL_MAX) };
+        !doorway && dy < height
+    } else if let Some(step) = stair_step(dx, dz, 0) {
+        dy < step.min(RUINED_STAIR_STEPS)
+    } else {
+        dy == 0 && roll(2).rem_euclid(100) < RUINED_RUBBLE_PERCENT
+    };
+    Some(if solid { Block::SilverStone } else { Block::Air })
 }
 
 /// Whether the column (dx, dz) from a tower's centre is within `margin` blocks of its square.
@@ -216,16 +240,23 @@ mod tests {
         }
     }
 
+    /// The blocks of the tower on flat ground, as a function of (dx, dz, dy): whole (`ruined` false, door `locked` or not), or the ruin.
+    type Cells<'a> = &'a dyn Fn(i32, i32, i32) -> Block;
+
     /// Whether a player could stand with their feet in the cell (x, y, z): room for the body, a floor under it.
-    fn can_stand(x: i32, y: i32, z: i32, locked: bool) -> bool {
-        !block(x, z, y, locked).collides() && !block(x, z, y + 1, locked).collides() && block(x, z, y - 1, locked).collides()
+    fn can_stand(cell: Cells, x: i32, y: i32, z: i32) -> bool {
+        !cell(x, z, y).collides() && !cell(x, z, y + 1).collides() && cell(x, z, y - 1).collides()
     }
 
-    /// Whether a player standing at (x, y, z) can reach every standing place of the tower from outside the door, hopping up
-    /// one block at a time, and so the top floor with the relic.
     fn climbable(locked: bool) -> HashSet<(i32, i32, i32)> {
+        reachable(&|x, z, y| block(x, z, y, locked))
+    }
+
+    /// Every place a player can stand that can be reached from outside the door by walking, hopping up one block at a time
+    /// (and dropping up to three), and so, for a whole tower with an open door, the top floor with the relic.
+    fn reachable(cell: Cells) -> HashSet<(i32, i32, i32)> {
         let start = (0, TOWER_HALF + 2, 0);
-        assert!(can_stand(start.0, start.2, start.1, locked));
+        assert!(can_stand(cell, start.0, start.2, start.1));
         let mut seen: HashSet<(i32, i32, i32)> = HashSet::from([(start.0, start.2, start.1)]);
         let mut queue = VecDeque::from([(start.0, start.2, start.1)]);
         while let Some((x, y, z)) = queue.pop_front() {
@@ -236,8 +267,8 @@ mod tests {
                 }
                 // Level, a hop up of one block (with room over the head for it), or a drop of up to three.
                 for ny in [y, y + 1, y - 1, y - 2, y - 3] {
-                    let hop_room = ny <= y || !block(x, z, y + 2, locked).collides();
-                    if hop_room && can_stand(nx, ny, nz, locked) && seen.insert((nx, ny, nz)) {
+                    let hop_room = ny <= y || !cell(x, z, y + 2).collides();
+                    if hop_room && can_stand(cell, nx, ny, nz) && seen.insert((nx, ny, nz)) {
                         queue.push_back((nx, ny, nz));
                         break;
                     }
@@ -261,6 +292,65 @@ mod tests {
         assert!(open.iter().any(|&(x, y, z)| y == top && (x, z) != (0, 0) && x.abs() <= 1 && z.abs() <= 1));
         // Nobody climbs out on to the roof, and every standing place is inside or in front of the tower.
         assert!(open.iter().all(|&(_, y, _)| y <= top + 1), "only the plinth is a step higher than the top floor");
+    }
+
+    /// The ruin on flat ground, like `block`.
+    fn ruin(dx: i32, dz: i32, dy: i32) -> Block {
+        if dy < 0 {
+            return Block::Dirt;
+        }
+        ruined_tower_cell(dx, dz, dy).unwrap_or(Block::Air)
+    }
+
+    #[test]
+    fn a_ruined_tower_is_low_ragged_stumps_with_a_gap_for_a_door_and_a_broken_stair() {
+        assert_eq!(ruined_tower_cell(TOWER_HALF + 1, 0, 0), None, "outside the square");
+        assert_eq!(ruined_tower_cell(0, 0, TOWER_HEIGHT), None, "above where the battlements were");
+        assert_eq!(ruined_tower_cell(0, 0, 10), Some(Block::Air), "cleared inside its square, so the island's plants are gone");
+        // Nothing is left of the floors, the roof or the relic's plinth, and there is no door to lock.
+        let (mut stones, mut highest) = (0, 0);
+        for dz in -TOWER_HALF..=TOWER_HALF {
+            for dx in -TOWER_HALF..=TOWER_HALF {
+                for dy in 0..TOWER_HEIGHT {
+                    let cell = ruin(dx, dz, dy);
+                    assert!(!matches!(cell, Block::TowerDoor | Block::TowerDoorTop | Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth));
+                    if cell == Block::SilverStone {
+                        stones += 1;
+                        highest = highest.max(dy + 1);
+                    }
+                }
+            }
+        }
+        assert!(stones > 20, "there is something left to see: {stones}");
+        assert_eq!(highest, RUINED_CORNER_HEIGHT, "only the corners stand above the stumps");
+        for dy in 0..TOWER_HEIGHT {
+            assert_eq!(ruin(0, TOWER_HALF, dy), Block::Air, "the doorway is an empty gap");
+        }
+        let stump = |dx: i32, dz: i32| (0..TOWER_HEIGHT).take_while(|&dy| ruin(dx, dz, dy) == Block::SilverStone).count() as i32;
+        for dz in -TOWER_HALF..=TOWER_HALF {
+            for dx in -TOWER_HALF..=TOWER_HALF {
+                if dx.abs().max(dz.abs()) == TOWER_HALF && !(dx == 0 && dz == TOWER_HALF) && !(dx.abs() == TOWER_HALF && dz.abs() == TOWER_HALF) {
+                    assert!((1..=RUINED_WALL_MAX).contains(&stump(dx, dz)), "a stump at {dx},{dz}");
+                }
+            }
+        }
+        // The stair is broken off after its second step; the whole one has four.
+        let stair: Vec<(i32, i32)> = (-TOWER_HALF + 1..TOWER_HALF).flat_map(|dz| (-TOWER_HALF + 1..TOWER_HALF).map(move |dx| (dx, dz))).filter(|&(dx, dz)| stair_step(dx, dz, 0).is_some()).collect();
+        assert_eq!(stair.len(), 4);
+        assert_eq!(stair.iter().map(|&(dx, dz)| stump(dx, dz)).max(), Some(RUINED_STAIR_STEPS), "no step higher than the second");
+        // It is the same ruin every time.
+        assert_eq!(ruin(2, 4, 1), ruin(2, 4, 1));
+    }
+
+    #[test]
+    fn nobody_can_climb_a_ruined_tower_but_the_ground_floor_can_be_walked() {
+        let seen = reachable(&ruin);
+        assert!(seen.iter().any(|&(x, _, z)| x.abs() < TOWER_HALF && z.abs() < TOWER_HALF), "the doorway lets them in");
+        let top = seen.iter().map(|&(_, y, _)| y).max().unwrap();
+        assert!(top <= RUINED_WALL_MAX, "the highest place anyone can stand is {top}");
+        assert!(top < TOWER_STOREY, "never as high as the first floor was");
+        // The whole tower, by contrast, climbs to the top once its door is open.
+        assert!(reachable(&|x, z, y| block(x, z, y, false)).iter().any(|&(_, y, _)| y >= TOWER_STOREY * (TOWER_STOREYS - 1)));
     }
 
     #[test]

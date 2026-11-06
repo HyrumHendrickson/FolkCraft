@@ -173,10 +173,15 @@ impl Lake {
 
     /// What the tower is made of in the cell `dy` blocks above the island's ground at the column (wx, wz) (see
     /// `tower::tower_cell`): `None` outside the tower's square or on a lake with no tower. With `locked` the doorway is
-    /// shut by `Block::TowerDoor`, as it is until a silver key has been used on it (see `Landmarks::tower_locked`).
-    pub fn tower_cell(&self, wx: i32, wz: i32, dy: i32, locked: bool) -> Option<Block> {
+    /// shut by `Block::TowerDoor`, as it is until a silver key has been used on it (see `Landmarks::tower_locked`). With
+    /// `ruined` the tower is `tower::ruined_tower_cell` instead (as it is while the lake's monster lives, see
+    /// `Landmarks::tower_ruined`), and `locked` does not matter: the ruin has no door to lock.
+    pub fn tower_cell(&self, wx: i32, wz: i32, dy: i32, locked: bool, ruined: bool) -> Option<Block> {
         if !self.has_tower() {
             return None;
+        }
+        if ruined {
+            return tower::ruined_tower_cell(wx - self.x, wz - self.z, dy);
         }
         tower::tower_cell(wx - self.x, wz - self.z, dy, locked, Relic::PhilosophersStone)
     }
@@ -783,6 +788,8 @@ pub struct Landmarks {
     pub sky_visited: Vec<(i32, i32)>,
     /// Whether the graveyard's ghost has been played its song and has rested (it says nothing more).
     pub graveyard_rested: bool,
+    /// Whether the player has beaten the Wild Hunt, and so won the game (they may play on).
+    pub game_won: bool,
     /// The squares of the Horizen's caves the player has entered, in the order they entered them.
     pub caves_visited: Vec<(i32, i32)>,
 }
@@ -846,6 +853,12 @@ impl Landmarks {
     /// Whether the door of the tower on the lake's island is still locked: it is, until a silver key has been used on it.
     pub fn tower_locked(&self, lake: &Lake) -> bool {
         lake.has_tower() && !self.towers_unlocked.contains(&(lake.x, lake.z))
+    }
+
+    /// Whether the tower on the lake's island is a ruin: it is, with its stair broken, for as long as the lake's Loch Ness
+    /// Monster lives. Killing the monster makes the tower whole again, with its door locked until a silver key opens it.
+    pub fn tower_ruined(&self, lake: &Lake) -> bool {
+        self.monster_alive(lake)
     }
 
     /// Whether the lake has a Loch Ness Monster still alive (every lake with a tower has one until it is killed).
@@ -1160,21 +1173,21 @@ mod tests {
                 assert!(!l.contains(l.x + dx, l.z + dz), "water at the tower's foot: {dx},{dz}");
             }
         }
-        let at = |dx: i32, dz: i32, dy: i32, locked: bool| l.tower_cell(l.x + dx, l.z + dz, dy, locked);
+        let at = |dx: i32, dz: i32, dy: i32, locked: bool| l.tower_cell(l.x + dx, l.z + dz, dy, locked, false);
         assert_eq!(at(TOWER_HALF, 0, 0, true), Some(Block::SilverStone), "the east wall");
         assert_eq!(at(0, TOWER_HALF, 0, true), Some(Block::TowerDoor), "the lock, in the south wall");
         assert_eq!(at(0, TOWER_HALF, 1, true), Some(Block::TowerDoorTop));
         assert_eq!(at(0, TOWER_HALF, 0, false), Some(Block::Air), "open once unlocked");
         assert_eq!(at(0, 0, TOWER_STOREY * (TOWER_STOREYS - 1), true), Some(Block::StonePlinth), "the Philosopher's Stone at the top");
         assert_eq!(at(0, 0, TOWER_HEIGHT, true), None, "nothing above the battlements");
-        assert_eq!(l.tower_cell(l.x + TOWER_REACH + 1, l.z, 0, true), None, "nothing outside its square");
+        assert_eq!(l.tower_cell(l.x + TOWER_REACH + 1, l.z, 0, true, false), None, "nothing outside its square");
         assert!(l.near_tower(l.x + TOWER_REACH + TOWER_TREE_MARGIN, l.z, TOWER_TREE_MARGIN));
     }
 
     #[test]
     fn a_small_lake_has_an_island_but_no_tower() {
         let l = Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) };
-        assert!(!l.has_tower() && l.tower_cell(0, 0, 0, true).is_none());
+        assert!(!l.has_tower() && l.tower_cell(0, 0, 0, true, false).is_none());
         assert!(!l.near_tower(0, 0, 100));
     }
 
@@ -1724,7 +1737,7 @@ mod boss_landmark_tests {
         for dx in -TOWER_REACH..=TOWER_REACH {
             for dz in -TOWER_REACH..=TOWER_REACH {
                 for dy in 0..TOWER_HEIGHT {
-                    let (open, closed) = (l.tower_cell(dx, dz, dy, false), l.tower_cell(dx, dz, dy, true));
+                    let (open, closed) = (l.tower_cell(dx, dz, dy, false, false), l.tower_cell(dx, dz, dy, true, false));
                     if open == closed {
                         continue;
                     }

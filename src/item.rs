@@ -126,7 +126,7 @@ pub enum ItemKind {
     TinPan,
     /// The sword from the stone in the ruined castle. The best weapon in the game.
     Excalibur,
-    /// Leather and leather cord sewn into a pack. Worn on the back (right click it, or the Pack slot of the inventory), it gives
+    /// Leather and leather cord sewn into a pack. Worn in the one worn place (right click it, or the Worn slot of the inventory), it gives
     /// two more rows of inventory slots, for as long as it is worn.
     LeatherBackpack,
 }
@@ -510,12 +510,14 @@ impl ItemKind {
         matches!(self, ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe)
     }
 
-    /// Whether this can be worn. A player wears one thing at a time: a pelt cloak, the royal armour or the king's crown.
+    /// Whether this can be worn. A player wears one thing at a time, all in the same place: a pelt cloak, the royal armour,
+    /// the king's crown or a leather backpack.
     pub fn is_wearable(self) -> bool {
-        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown)
+        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown | ItemKind::LeatherBackpack)
     }
 
-    /// Whether this is a backpack: worn in its own place, on the back, alongside a cloak, armour or crown.
+    /// Whether this is a backpack: it shares the one worn place with the cloak, the armour and the crown, and while it is on
+    /// the inventory has its extra rows.
     pub fn is_backpack(self) -> bool {
         self == ItemKind::LeatherBackpack
     }

@@ -5,7 +5,7 @@
 /// What the ghost of the graveyard says when the player walks in: it asks for a song.
 pub const GRAVEYARD_ASKS: &str = "Traveller... I cannot rest. Will you play me a song, so that I may finally sleep?";
 /// What it says once it has heard one (and gives the player a silver key). After this it says nothing more.
-pub const GRAVEYARD_THANKS: &str = "Thank you. At last I can rest. Take this key: it is yours to keep.";
+pub const GRAVEYARD_THANKS: &str = "Thank you. At last I can rest. Take this key: it is yours to keep. In three lonely towers there are others who may like to hear the music.";
 /// The voice in the Skylands' tower.
 pub const SKY_TOWER_GHOST: &str = "Wade through the river until you find the island, and do not leave the water until you do.";
 /// The voice in the Horizen's tower, in the cave.
@@ -46,5 +46,6 @@ mod tests {
         assert!(CAVE_TOWER_GHOST.contains("night") && CAVE_TOWER_GHOST.contains("tools"));
         assert!(LAKE_TOWER_GHOST.contains("horn") && LAKE_TOWER_GHOST.contains("stonehenge"));
         assert!(GRAVEYARD_ASKS.contains("song") && GRAVEYARD_THANKS.contains("Thank") && GRAVEYARD_THANKS.contains("key"));
+        assert!(GRAVEYARD_THANKS.contains("three lonely towers") && GRAVEYARD_THANKS.contains("others") && GRAVEYARD_THANKS.contains("music"));
     }
 }

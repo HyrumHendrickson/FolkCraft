@@ -1,4 +1,4 @@
-//! The Horizen's fire tornado: one moving hazard, replaced by the next spawn.
+//! The Skylands' fire tornado: a moving hazard that stays where it arrives until it has lasted `SKY_TORNADO_LIFETIME`.
 
 use macroquad::prelude::*;
 
@@ -14,14 +14,17 @@ pub struct FireTornado {
     pub arrived: bool,
     /// Time spent inside the fire since the last damage tick.
     pub damage_timer: f32,
+    /// Seconds since it appeared; it is gone after `SKY_TORNADO_LIFETIME`.
+    pub age: f32,
 }
 
 impl FireTornado {
     pub fn new(pos: Vec3, target: Vec3) -> Self {
-        FireTornado { pos, target, arrived: false, damage_timer: 0.0 }
+        FireTornado { pos, target, arrived: false, damage_timer: 0.0, age: 0.0 }
     }
 
     pub fn update(&mut self, dt: f32) {
+        self.age += dt;
         if self.arrived {
             return;
         }
@@ -79,6 +82,14 @@ mod tests {
         let position = tornado.pos;
         tornado.update(10.0);
         assert_eq!(tornado.pos, position);
+    }
+
+    #[test]
+    fn a_tornado_ages_whether_or_not_it_has_arrived() {
+        let mut tornado = FireTornado::new(vec3(40.0, 6.0, 0.0), vec3(0.0, 6.0, 0.0));
+        tornado.update(1.0);
+        tornado.update(20.0);
+        assert!(tornado.arrived && (tornado.age - 21.0).abs() < 1e-4);
     }
 
     #[test]

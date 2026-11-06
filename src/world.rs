@@ -282,10 +282,12 @@ impl World {
         }
     }
 
-    /// Note that the monster of `lake` has been killed.
+    /// Note that the monster of `lake` has been killed, and so make its island's tower whole again: the loaded chunks that
+    /// hold it are made again, with the floors and the stair mended and the door shut and locked until a silver key opens it.
     pub fn record_monster_slain(&mut self, lake: &Lake) {
         if !self.landmarks.monsters_slain.contains(&(lake.x, lake.z)) {
             self.landmarks.monsters_slain.push((lake.x, lake.z));
+            self.regenerate_tower_chunks(lake.x, lake.z);
         }
     }
 

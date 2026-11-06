@@ -5,6 +5,7 @@ use macroquad::prelude::*;
 use crate::block::Block;
 use crate::config::*;
 use crate::dropped::draw_box;
+use crate::horizen::Dimension;
 use crate::landmarks::Rainbow;
 use crate::rng::hash3;
 use crate::tornado::{Cyclone, FireTornado};
@@ -511,11 +512,21 @@ pub fn trail_wisps(path: &[(f32, f32)], length: f32, spacing: f32, time: f32) ->
     wisps
 }
 
+/// The height a trail's wisps float over in the column (x, z): the ground in the overworld and the Horizen; in the Skylands the
+/// top of the island or bridge deck there, and over the void the height of the player's feet (`feet_y`), so that the trail
+/// carries on through the air from island to island.
+pub fn trail_floor(world: &World, x: i32, z: i32, feet_y: f32) -> f32 {
+    if world.dimension == Dimension::Skylands {
+        return crate::skylands::surface_top(world.seed, x, z).map_or(feet_y.floor(), |top| top as f32 + 1.0);
+    }
+    world.ground_top(x, z).max(GROUND_TOP) as f32 + 1.0
+}
+
 /// Draw the ghostly trail of a peep stone: faint, drifting, pulsing lights floating over the ground along `path`, pale
 /// blue at night and pale gold by day. Call while the 3D camera is active, with the other translucent things.
-pub fn draw_trail(world: &World, path: &[(f32, f32)], (r, g, b): (f32, f32, f32), time: f32) {
+pub fn draw_trail(world: &World, path: &[(f32, f32)], (r, g, b): (f32, f32, f32), time: f32, feet_y: f32) {
     for wisp in trail_wisps(path, TRAIL_LENGTH, TRAIL_SPACING, time) {
-        let ground = world.ground_top(wisp.x.floor() as i32, wisp.z.floor() as i32).max(GROUND_TOP) as f32 + 1.0;
+        let ground = trail_floor(world, wisp.x.floor() as i32, wisp.z.floor() as i32, feet_y);
         let y = ground + TRAIL_HEIGHT + 0.12 * (time * 2.0 + wisp.along).sin();
         let alpha = wisp.fade * (0.22 + 0.5 * wisp.pulse);
         let size = 0.09 + 0.07 * wisp.pulse;

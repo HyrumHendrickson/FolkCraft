@@ -1,7 +1,7 @@
 //! Stonehenge: a ring of tall standing stones with lintels over some of them, round an altar stone. It stands
 //! `STONEHENGE_DISTANCE_CHUNKS` chunks from the spawn point, in a direction the seed decides (a pure function of the seed).
-//! A player who blacks out in the Horizen's cave wakes inside the ring (`arrival`). There is, as yet, nothing to do here
-//! (the Nessie ghost tells of a horn that is to be blown here).
+//! A player who blacks out in the Horizen's cave wakes inside the ring (`arrival`). It is where the Horn of the Hunt is blown to
+//! call the Wild Hunt (`Game::blow_horn`).
 
 use crate::block::Block;
 use crate::config::*;

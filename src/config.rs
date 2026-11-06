@@ -199,6 +199,16 @@ pub const TOWER_STOREYS: i32 = 5;
 pub const TOWER_HEIGHT: i32 = TOWER_STOREY * TOWER_STOREYS + 1;
 /// No tree grows within this many blocks of a tower's outer edge.
 pub const TOWER_TREE_MARGIN: i32 = 6;
+/// The ruined tower of a lake's island (`tower::ruined_tower_cell`), as it stands until the lake's Loch Ness Monster is killed:
+/// its wall stumps are `1..=RUINED_WALL_MAX` blocks high and its corners `RUINED_CORNER_HEIGHT`; the stair is broken off after
+/// `RUINED_STAIR_STEPS` steps (the stair climbs one block a step, so that is as high as it goes); `RUINED_RUBBLE_PERCENT` of
+/// the floor's other cells hold a block of rubble. `RUINED_TOWER_SEED` seeds the ragged edges. A test checks that nothing a
+/// player can hop from one block to the next gets higher than the stumps, so there is no way to the top.
+pub const RUINED_WALL_MAX: i32 = 3;
+pub const RUINED_CORNER_HEIGHT: i32 = 6;
+pub const RUINED_STAIR_STEPS: i32 = 2;
+pub const RUINED_RUBBLE_PERCENT: i32 = 12;
+pub const RUINED_TOWER_SEED: i64 = 0x70E5;
 /// A tower in the Horizen stands on dry cave floor: no pond comes within this many blocks of it.
 pub const TOWER_POND_MARGIN: i32 = 4;
 /// The player must have walked on this many different Skylands islands before the next island to appear carries a tower.
@@ -375,8 +385,11 @@ pub const FIRE_SECONDS: f32 = 60.0;
 
 // --- Skylands fire tornadoes -------------------------------------------------------------
 
-/// A new fire tornado appears in the Skylands this often during the day.
-pub const SKY_TORNADO_INTERVAL: f32 = 30.0;
+/// A fire tornado in the Skylands lasts this many seconds (it stays where it arrives until then).
+pub const SKY_TORNADO_LIFETIME: f32 = 30.0;
+/// A new fire tornado appears in the Skylands this often during the day: twice as often as one lasts, so there are sometimes
+/// two at once.
+pub const SKY_TORNADO_INTERVAL: f32 = SKY_TORNADO_LIFETIME / 2.0;
 /// The tornado begins this far from the player and travels toward the position it recorded at spawn.
 pub const SKY_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
 pub const SKY_TORNADO_SPEED: f32 = 7.0;
@@ -850,3 +863,78 @@ pub const STONEHENGE_STONE_HEIGHT: i32 = 5;
 pub const STONEHENGE_REACH: i32 = 14;
 /// No tree grows within this many blocks of the ring.
 pub const STONEHENGE_TREE_MARGIN: i32 = 4;
+
+// --- Bats -----------------------------------------------------------------------------------
+
+/// A bat is small and flies without ever touching the ground: it bites for `BAT_DAMAGE` once every `BAT_ATTACK_COOLDOWN` seconds
+/// and flutters at `BAT_SPEED` (a little slower than a walking player runs). Bats do not live in the normal world: playing the
+/// Musical Pipes at night calls `BATS_PER_PIPES` of them (at most `MAX_BAT_OVERWORLD` at once) from `BAT_PIPES_MIN_DISTANCE`..`MAX`
+/// blocks away, and they go with the dawn. In the Horizen's cave they are part of the wildlife: up to `MAX_BAT_CAVE`, spawning
+/// every `ANIMAL_SPAWN_INTERVAL`, and they attack a player who comes within `BAT_NOTICE_DISTANCE`.
+pub const BAT_HEALTH: i32 = 2;
+pub const BAT_HALF_WIDTH: f32 = 0.22;
+pub const BAT_HEIGHT: f32 = 0.35;
+pub const BAT_SPEED: f32 = 5.5;
+pub const BAT_WANDER_SPEED: f32 = 2.4;
+pub const BAT_DAMAGE: u32 = 1;
+pub const BAT_ATTACK_COOLDOWN: f32 = 1.2;
+pub const BAT_REACH: f32 = 0.45;
+pub const BAT_NOTICE_DISTANCE: f32 = 22.0;
+pub const BATS_PER_PIPES: usize = 4;
+pub const MAX_BAT_OVERWORLD: usize = 8;
+pub const MAX_BAT_CAVE: usize = 6;
+pub const BAT_PIPES_MIN_DISTANCE: f32 = 9.0;
+pub const BAT_PIPES_MAX_DISTANCE: f32 = 15.0;
+/// How high above the ground a bat called by the pipes first appears.
+pub const BAT_SPAWN_HEIGHT: f32 = 3.0;
+/// A cave bat needs at least this much open air above the floor to appear.
+pub const BAT_CAVE_MIN_AIR: i32 = 5;
+
+// --- The Wild Hunt ---------------------------------------------------------------------------
+
+/// Blowing the Horn of the Hunt inside Stonehenge (within `STONEHENGE_REACH` of its middle) calls the Wild Hunt, the last boss: three
+/// ghostly warriors who appear `HUNT_SPAWN_MIN_DISTANCE`..`MAX` blocks from the player and hunt them until they are dead (or the
+/// player is). They are three separate creatures with a shared health bar.
+/// - The **swordsman** runs at the player at `HUNT_SWORDSMAN_SPEED` (slower than a sprint) and cuts for `HUNT_SWORD_DAMAGE` every
+///   `HUNT_SWORD_COOLDOWN` seconds.
+/// - The **archer** keeps between `HUNT_ARCHER_MIN_RANGE` and `HUNT_ARCHER_MAX_RANGE` of the player, side-stepping, and shoots an arrow
+///   every `HUNT_ARCHER_INTERVAL` seconds when it can see them (`HUNT_ARROW_DAMAGE` each, `HUNT_ARROW_SPREAD` radians of error). A Rabbit
+///   Foot in the player's hotbar makes it fire only half as often (`HUNT_ARCHER_FOOT_FACTOR`).
+/// - The **stalker** circles round to get behind the player (the way they are facing), at `HUNT_STALKER_CIRCLE_SPEED` and
+///   `HUNT_STALKER_CIRCLE_RADIUS` blocks out; once it is within `HUNT_STALKER_BEHIND_ANGLE` radians of straight behind, it dashes in
+///   at `HUNT_STALKER_DASH_SPEED` (faster than a sprint) and stabs once for `HUNT_STALKER_DAMAGE`, then runs back for
+///   `HUNT_STALKER_RETREAT_SECONDS` before circling again. A dash that finds no one in `HUNT_STALKER_DASH_SECONDS` gives up the same way.
+/// Excalibur does `EXCALIBUR_HUNT_FACTOR` times its damage to all three. Beating all three wins the game (the game goes on).
+pub const HUNT_SWORDSMAN_HEALTH: i32 = 200;
+pub const HUNT_ARCHER_HEALTH: i32 = 120;
+pub const HUNT_STALKER_HEALTH: i32 = 140;
+pub const HUNT_HALF_WIDTH: f32 = 0.4;
+pub const HUNT_HEIGHT: f32 = 1.9;
+pub const HUNT_SPAWN_MIN_DISTANCE: f32 = 10.0;
+pub const HUNT_SPAWN_MAX_DISTANCE: f32 = 16.0;
+pub const HUNT_SWORDSMAN_SPEED: f32 = 6.0;
+pub const HUNT_SWORD_DAMAGE: u32 = 3;
+pub const HUNT_SWORD_COOLDOWN: f32 = 1.1;
+pub const HUNT_SWORD_REACH: f32 = 0.9;
+pub const HUNT_ARCHER_SPEED: f32 = 5.5;
+pub const HUNT_ARCHER_STRAFE_SPEED: f32 = 2.6;
+pub const HUNT_ARCHER_MIN_RANGE: f32 = 14.0;
+pub const HUNT_ARCHER_MAX_RANGE: f32 = 28.0;
+pub const HUNT_ARCHER_INTERVAL: f32 = 3.0;
+pub const HUNT_ARCHER_FOOT_FACTOR: f32 = 2.0;
+pub const HUNT_ARROW_SPEED: f32 = 30.0;
+pub const HUNT_ARROW_DAMAGE: u32 = 2;
+pub const HUNT_ARROW_SPREAD: f32 = 0.03;
+pub const HUNT_ARCHER_RANGE: f32 = 45.0;
+pub const HUNT_STALKER_CIRCLE_SPEED: f32 = 7.0;
+pub const HUNT_STALKER_CIRCLE_RADIUS: f32 = 7.0;
+pub const HUNT_STALKER_BEHIND_ANGLE: f32 = 0.55;
+pub const HUNT_STALKER_DASH_SPEED: f32 = 9.5;
+pub const HUNT_STALKER_DASH_SECONDS: f32 = 2.0;
+pub const HUNT_STALKER_RETREAT_SECONDS: f32 = 1.0;
+pub const HUNT_STALKER_DAMAGE: u32 = 4;
+pub const HUNT_STALKER_COOLDOWN: f32 = 0.5;
+pub const HUNT_STALKER_REACH: f32 = 0.8;
+pub const EXCALIBUR_HUNT_FACTOR: i32 = 3;
+/// How long the victory message stays on the screen.
+pub const VICTORY_TEXT_SECONDS: f32 = 14.0;

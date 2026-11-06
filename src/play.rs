@@ -191,6 +191,10 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     if game.play_pipes() {
         return;
     }
+    // The Horn of the Hunt in hand: right click blows it (it calls the Wild Hunt in Stonehenge).
+    if game.blow_horn() {
+        return;
+    }
     // A bush is an explicit harvest target, even when the player happens to be holding food.
     // This keeps right-clicking a bush from eating the held berries instead.
     if let Some(hit) = target {
@@ -261,7 +265,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     draw_flames(&game.world, get_time() as f32, World::chunk_of_pos(eye));
     draw_meat(&game.world, World::chunk_of_pos(eye));
     draw_pots(&game.world, World::chunk_of_pos(eye));
-    if let Some(tornado) = game.tornado.as_ref() {
+    for tornado in &game.tornadoes {
         draw_fire_tornado(tornado, get_time() as f32, World::chunk_of_pos(eye));
     }
     if let Some(cyclone) = game.cyclone() {
@@ -269,6 +273,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     }
     draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye), game.world.night);
     draw_arrows(&game.arrows);
+    draw_arrows(&game.hostile_arrows);
     // The water goes on last: it is translucent and the bed, the items and the animals behind it show through.
     for key in &drawn {
         for mesh in &game.world.chunks[key].water {
@@ -288,7 +293,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     }
     // A peep stone in the hand also shows a ghostly trail: to the grand castle by night, to the end of the rainbow by day.
     if let Some(path) = game.trail_path() {
-        draw_trail(&game.world, &path, game.trail_color(), get_time() as f32);
+        draw_trail(&game.world, &path, game.trail_color(), get_time() as f32, game.player.pos.y);
     }
     if let Some(hit) = target {
         // Outline the block's actual shape, so a pebble gets a small box and a trunk a thin one.
@@ -327,7 +332,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
     set_default_camera();
     let (w, h) = (screen_width(), screen_height());
     if game.inventory_open {
-        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.worn, &mut game.worn_back, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
+        if let Some(slot) = inventory_screen(&mut game.inventory, &mut game.worn, &mut game.inventory_ui, game.selected, &mut game.toasts, game.dev_mode) {
             game.drop_inventory_stack(slot);
         }
     } else {
@@ -366,6 +371,9 @@ fn render_hud(game: &mut Game, drawn: usize) {
     if let Some((text, left)) = game.ghost_text.as_ref() {
         draw_ghost_text(text, *left);
     }
+    if let Some(left) = game.victory {
+        draw_victory(left);
+    }
     // Between day and night, or while passing through the well, the whole screen goes black for a moment.
     let darkness = game.blackout.map_or(0.0, |b| b.darkness()).max(game.horizen_transition_darkness());
     if darkness > 0.0 {
@@ -391,6 +399,21 @@ fn draw_ghost_text(text: &str, left: f32) {
         let (x, y) = ((w - width) / 2.0, top + i as f32 * (size + 6.0));
         draw_rectangle(x - 10.0, y - size + 4.0, width + 20.0, size + 6.0, Color::new(0.02, 0.04, 0.10, 0.45 * alpha));
         draw_text(line, x, y, size, Color::new(0.80, 0.90, 1.0, alpha));
+    }
+}
+
+/// The victory message after the Wild Hunt is beaten: it fades in and, over the last two seconds, out again.
+fn draw_victory(left: f32) {
+    let (w, h) = (screen_width(), screen_height());
+    let alpha = ((VICTORY_TEXT_SECONDS - left) * 1.0).min(left / 2.0).clamp(0.0, 1.0);
+    let lines = [("VICTORY", 72.0), ("You have beaten the Wild Hunt and won Folk Craft.", 30.0), ("You may keep playing.", 26.0)];
+    let mut y = h * 0.30;
+    for (line, size) in lines {
+        let width = measure_text(line, None, size as u16, 1.0).width;
+        let x = (w - width) / 2.0;
+        draw_text(line, x + 2.0, y + 2.0, size, Color::new(0.0, 0.0, 0.0, 0.8 * alpha));
+        draw_text(line, x, y, size, Color::new(1.0, 0.90, 0.45, alpha));
+        y += size + 14.0;
     }
 }
 

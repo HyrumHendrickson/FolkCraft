@@ -40,6 +40,45 @@ impl Inventory {
         true
     }
 
+    /// Put on the garment in `slot` (a cloak, the armour, the crown or a backpack) in the one worn place. Whatever was worn
+    /// goes back into the inventory. A backpack brings its extra rows with it and takes them away again when it comes off
+    /// (what lies in them has to fit in the other slots). All-or-nothing: on `Err` nothing has changed.
+    pub fn put_on(&mut self, worn: &mut Option<ItemKind>, slot: usize) -> Result<ItemKind, &'static str> {
+        let kind = self.slots.get(slot).copied().flatten().map(|s| s.kind).filter(|k| k.is_wearable()).ok_or("That cannot be worn")?;
+        let mut trial = self.clone();
+        trial.take_from_slot(slot);
+        if let Some(old) = *worn {
+            if old.is_backpack() && !trial.remove_pack_rows() {
+                return Err("Empty the backpack first: its things do not fit in the other slots");
+            }
+            if trial.add(old, 1) != 0 {
+                return Err("Inventory full");
+            }
+        }
+        if kind.is_backpack() {
+            trial.add_pack_rows();
+        }
+        *self = trial;
+        *worn = Some(kind);
+        Ok(kind)
+    }
+
+    /// Take off what is worn, into the inventory. A backpack's rows must be emptied into the other slots first. All-or-nothing:
+    /// on `Err` nothing has changed (and `Ok(None)` means nothing was worn).
+    pub fn take_off(&mut self, worn: &mut Option<ItemKind>) -> Result<Option<ItemKind>, &'static str> {
+        let Some(old) = *worn else { return Ok(None) };
+        let mut trial = self.clone();
+        if old.is_backpack() && !trial.remove_pack_rows() {
+            return Err("Empty the backpack first: its things do not fit in the other slots");
+        }
+        if trial.add(old, 1) != 0 {
+            return Err("Inventory full");
+        }
+        *self = trial;
+        *worn = None;
+        Ok(Some(old))
+    }
+
     /// Add `count` items, topping up existing stacks first, then using empty slots.
     /// Returns how many items did not fit.
     pub fn add(&mut self, kind: ItemKind, count: u32) -> u32 {
@@ -164,6 +203,60 @@ mod tests {
         light.slots[INVENTORY_SLOTS + 3] = Some(ItemStack { kind: ItemKind::Gold, count: 7 });
         assert!(light.remove_pack_rows());
         assert_eq!((light.slots.len(), light.count(ItemKind::Gold)), (INVENTORY_SLOTS, 7));
+    }
+
+    fn with(slot: usize, kind: ItemKind) -> Inventory {
+        let mut inv = Inventory::new();
+        inv.slots[slot] = Some(ItemStack { kind, count: 1 });
+        inv
+    }
+
+    #[test]
+    fn a_backpack_and_a_cloak_share_the_one_worn_place() {
+        let mut inv = with(2, ItemKind::LeatherBackpack);
+        let mut worn = None;
+        assert_eq!(inv.put_on(&mut worn, 2), Ok(ItemKind::LeatherBackpack));
+        assert_eq!((worn, inv.slots.len(), inv.count(ItemKind::LeatherBackpack)), (Some(ItemKind::LeatherBackpack), INVENTORY_SLOTS + BACKPACK_SLOTS, 0));
+        // Things in the pack's rows come along into the other slots when a cloak takes its place.
+        inv.slots[INVENTORY_SLOTS + 1] = Some(ItemStack { kind: ItemKind::Gold, count: 4 });
+        inv.slots[5] = Some(ItemStack { kind: ItemKind::PeltCloak, count: 1 });
+        assert_eq!(inv.put_on(&mut worn, 5), Ok(ItemKind::PeltCloak));
+        assert_eq!(worn, Some(ItemKind::PeltCloak));
+        assert_eq!((inv.slots.len(), inv.count(ItemKind::Gold), inv.count(ItemKind::LeatherBackpack)), (INVENTORY_SLOTS, 4, 1), "the pack is back in the inventory, its rows gone");
+        // And a backpack in turn sends the cloak back.
+        let slot = inv.slots.iter().position(|s| s.map_or(false, |s| s.kind == ItemKind::LeatherBackpack)).unwrap();
+        assert_eq!(inv.put_on(&mut worn, slot), Ok(ItemKind::LeatherBackpack));
+        assert_eq!((worn, inv.count(ItemKind::PeltCloak), inv.slots.len()), (Some(ItemKind::LeatherBackpack), 1, INVENTORY_SLOTS + BACKPACK_SLOTS));
+        assert_eq!(inv.put_on(&mut worn, 30), Err("That cannot be worn"), "an empty slot is nothing to wear");
+    }
+
+    #[test]
+    fn a_full_pack_cannot_be_swapped_for_a_cloak_and_nothing_changes() {
+        let mut inv = Inventory::new();
+        inv.add_pack_rows();
+        for slot in 0..inv.slots.len() {
+            inv.slots[slot] = Some(ItemStack { kind: ItemKind::Stone, count: MAX_STACK });
+        }
+        inv.slots[3] = Some(ItemStack { kind: ItemKind::PeltCloak, count: 1 });
+        let mut worn = Some(ItemKind::LeatherBackpack);
+        let before = inv.clone();
+        assert!(inv.put_on(&mut worn, 3).is_err());
+        assert_eq!((inv, worn), (before.clone(), Some(ItemKind::LeatherBackpack)));
+        let mut inv = before;
+        assert!(inv.take_off(&mut worn).is_err());
+        assert_eq!(worn, Some(ItemKind::LeatherBackpack));
+    }
+
+    #[test]
+    fn taking_off_returns_the_garment_and_drops_the_pack_rows() {
+        let mut inv = Inventory::new();
+        let mut worn = None;
+        assert_eq!(inv.take_off(&mut worn), Ok(None));
+        inv.add_pack_rows();
+        worn = Some(ItemKind::LeatherBackpack);
+        inv.slots[INVENTORY_SLOTS] = Some(ItemStack { kind: ItemKind::Log, count: 3 });
+        assert_eq!(inv.take_off(&mut worn), Ok(Some(ItemKind::LeatherBackpack)));
+        assert_eq!((worn, inv.slots.len(), inv.count(ItemKind::Log), inv.count(ItemKind::LeatherBackpack)), (None, INVENTORY_SLOTS, 3, 1));
     }
 
     #[test]

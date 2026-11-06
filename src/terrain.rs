@@ -520,6 +520,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
     // rocks), then the tower is built. The top of the island's hill is flat, so the tower stands level, on the top of it.
     for lake in landmarks.lakes.iter().filter(|l| l.has_tower()) {
         let locked = landmarks.tower_locked(lake);
+        let ruined = landmarks.tower_ruined(lake);
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
@@ -527,7 +528,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
                     continue;
                 }
                 for dy in 0..TOWER_HEIGHT {
-                    if let Some(block) = lake.tower_cell(wx, wz, dy, locked) {
+                    if let Some(block) = lake.tower_cell(wx, wz, dy, locked, ruined) {
                         blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
                     }
                 }
@@ -1428,6 +1429,8 @@ mod tests {
     fn a_big_lake_has_a_silver_tower_on_its_island_in_a_cleared_square() {
         let mut marks = Landmarks::default();
         marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 4, from: (0, 0) });
+        // Its monster is dead, so the tower stands whole (while it lives the tower is a ruin: see the next test).
+        marks.monsters_slain.push((0, 0));
         // The island is a hill with a flat top, and the tower stands on the top.
         let y0 = GROUND_TOP + ISLAND_HILL_HEIGHT + 1;
         let b = generate_chunk_with(11, 0, 0, &marks);
@@ -1459,6 +1462,29 @@ mod tests {
         assert!(!generate_chunk_with(11, 0, 0, &Landmarks::default()).contains(&Block::SilverStone));
         marks.towers_unlocked.push((0, 0));
         assert_eq!(generate_chunk_with(11, 0, 0, &marks)[idx(0, y0, TOWER_HALF)], Block::Air);
+    }
+
+    #[test]
+    fn while_its_monster_lives_the_lakes_tower_is_a_ruin_and_the_cleared_square_is_still_cleared() {
+        let mut marks = Landmarks::default();
+        marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 4, from: (0, 0) });
+        let y0 = GROUND_TOP + ISLAND_HILL_HEIGHT + 1;
+        let ruin = generate_chunk_with(11, 0, 0, &marks);
+        assert_eq!(ruin[idx(0, y0, TOWER_HALF)], Block::Air, "a gap where the door was");
+        assert_eq!(ruin[idx(0, y0 + 1, TOWER_HALF)], Block::Air);
+        assert_eq!(ruin[idx(TOWER_HALF, y0 + TOWER_STOREY, TOWER_HALF)], Block::SilverStone, "a corner still stands");
+        assert!((0..TOWER_HEIGHT).all(|dy| ruin[idx(0, y0 + dy, 0)] != Block::StonePlinth), "no plinth, and no relic to take");
+        assert!((0..TOWER_HEIGHT).all(|dy| (0..=TOWER_HALF).all(|d| ruin[idx(d, y0 + dy, 0)] != Block::TowerDoor)));
+        for lz in 0..=TOWER_REACH + TOWER_TREE_MARGIN {
+            for lx in 0..=TOWER_REACH + TOWER_TREE_MARGIN {
+                assert!(!(0..WORLD_HEIGHT).any(|y| ruin[idx(lx, y, lz)] == Block::Wood), "a trunk near the ruin at {lx},{lz}");
+            }
+        }
+        // Killing the monster makes the same chunk a whole tower.
+        marks.monsters_slain.push((0, 0));
+        let whole = generate_chunk_with(11, 0, 0, &marks);
+        assert_eq!(whole[idx(0, y0, TOWER_HALF)], Block::TowerDoor);
+        assert_eq!(whole[idx(0, y0 + TOWER_STOREY * (TOWER_STOREYS - 1), 0)], Block::StonePlinth);
     }
 
     #[test]

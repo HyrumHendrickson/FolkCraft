@@ -17,6 +17,10 @@
 //!   they are `MOOSE_GIVE_UP_DISTANCE` apart, and hits for `MOOSE_DAMAGE` when it reaches them.
 //! - **Will-o-whisps** appear only at night, float above the terrain and flee when the player gets close. They have no
 //!   attacks or drops.
+//! - **Bats** fly: they hover about the player's body and bite. The pipes call them at night in the normal world; the Horizen's cave
+//!   has them as wildlife.
+//! - **The Wild Hunt** is three ghostly warriors: a swordsman that charges, an archer that keeps its distance and shoots (`Game` flies
+//!   its arrows), and a stalker that circles behind the player, dashes in to stab once and runs back (`HuntPhase`).
 //! - A hurt animal, and a hurt player, are knocked back (`Animal::knock_back`, `Player::knock_back`).
 //!
 //! Animals hop up one-block steps, so hills and logs do not trap them, and turn aside when
@@ -45,6 +49,14 @@ pub enum AnimalKind {
     Crow,
     /// The boss that comes for a player who has killed ten quail. It never gives up.
     MotherOfQuail,
+    /// A small flying biter: called by the pipes at night in the normal world, and part of the wildlife of the Horizen's cave.
+    Bat,
+    /// The Wild Hunt, the last boss, is these three ghostly warriors: one charges with a sword...
+    HuntSwordsman,
+    /// ...one shoots arrows from afar...
+    HuntArcher,
+    /// ...and one gets behind the player, runs in to stab once, and runs back.
+    HuntStalker,
 }
 
 impl AnimalKind {
@@ -60,18 +72,33 @@ impl AnimalKind {
             AnimalKind::LochNessMonster => LOCH_NESS_HEALTH,
             AnimalKind::Crow => CROW_HEALTH,
             AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_HEALTH,
+            AnimalKind::Bat => BAT_HEALTH,
+            AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_HEALTH,
+            AnimalKind::HuntArcher => HUNT_ARCHER_HEALTH,
+            AnimalKind::HuntStalker => HUNT_STALKER_HEALTH,
         }
+    }
+
+    /// Whether this is one of the three warriors of the Wild Hunt.
+    pub fn is_wild_hunt(self) -> bool {
+        matches!(self, AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker)
+    }
+
+    /// Whether the game keeps this creature alive and moving wherever the player goes: the Mother of Quail and the Wild Hunt hunt
+    /// for ever (until the player dies or leaves the world).
+    pub fn never_gives_up(self) -> bool {
+        self == AnimalKind::MotherOfQuail || self.is_wild_hunt()
     }
 
     /// Whether this is one of the two bosses (they show a health bar, are never spawned as wildlife and are kept
     /// within a leash of where they appeared).
     pub fn is_boss(self) -> bool {
-        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail)
+        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail) || self.is_wild_hunt()
     }
 
     /// Whether this boss stays near where it appeared and is given up on when far away (the others hunt for ever).
     pub fn is_leashed(self) -> bool {
-        self.is_boss() && self != AnimalKind::MotherOfQuail
+        self.is_boss() && !self.never_gives_up()
     }
 
     /// The name shown over a boss's health bar.
@@ -80,6 +107,7 @@ impl AnimalKind {
             AnimalKind::Yeti => "The Yeti",
             AnimalKind::LochNessMonster => "The Loch Ness Monster",
             AnimalKind::MotherOfQuail => "The Mother of Quail",
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => "The Wild Hunt",
             _ => "",
         }
     }
@@ -90,6 +118,9 @@ impl AnimalKind {
             AnimalKind::Yeti => YETI_REACH,
             AnimalKind::LochNessMonster => LOCH_NESS_REACH,
             AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_REACH,
+            AnimalKind::Bat => BAT_REACH,
+            AnimalKind::HuntSwordsman => HUNT_SWORD_REACH,
+            AnimalKind::HuntStalker => HUNT_STALKER_REACH,
             _ => BEAR_REACH,
         }
     }
@@ -107,6 +138,8 @@ impl AnimalKind {
             AnimalKind::LochNessMonster => 1.1,
             AnimalKind::Crow => 0.2,
             AnimalKind::MotherOfQuail => 1.0,
+            AnimalKind::Bat => BAT_HALF_WIDTH,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => HUNT_HALF_WIDTH,
         }
     }
 
@@ -123,6 +156,8 @@ impl AnimalKind {
             AnimalKind::LochNessMonster => 3.4,
             AnimalKind::Crow => 0.45,
             AnimalKind::MotherOfQuail => 2.2,
+            AnimalKind::Bat => BAT_HEIGHT,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => HUNT_HEIGHT,
         }
     }
 
@@ -138,6 +173,10 @@ impl AnimalKind {
             AnimalKind::LochNessMonster => LOCH_NESS_WALK_SPEED,
             AnimalKind::Crow => CROW_WALK_SPEED,
             AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_RUN_SPEED,
+            AnimalKind::Bat => BAT_WANDER_SPEED,
+            AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_SPEED,
+            AnimalKind::HuntArcher => HUNT_ARCHER_STRAFE_SPEED,
+            AnimalKind::HuntStalker => HUNT_STALKER_CIRCLE_SPEED,
         }
     }
 
@@ -151,6 +190,8 @@ impl AnimalKind {
             AnimalKind::Moose => (3.0, 8.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
             AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => (2.0, 5.0),
+            AnimalKind::Bat => (0.5, 1.5),
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => (1.0, 1.0),
         }
     }
 
@@ -164,6 +205,8 @@ impl AnimalKind {
             AnimalKind::Moose => (2.0, 5.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
             AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => (3.0, 6.0),
+            AnimalKind::Bat => (1.0, 2.5),
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => (1.0, 1.0),
         }
     }
 
@@ -177,6 +220,7 @@ impl AnimalKind {
         match self {
             AnimalKind::Rabbit => RABBIT_RUN_SPEED,
             AnimalKind::WillOWhisp => WILL_O_WHISP_FLEE_SPEED,
+            AnimalKind::HuntArcher => HUNT_ARCHER_SPEED,
             _ => DEER_RUN_SPEED,
         }
     }
@@ -189,6 +233,9 @@ impl AnimalKind {
             AnimalKind::Yeti => YETI_DAMAGE,
             AnimalKind::LochNessMonster => LOCH_NESS_DAMAGE,
             AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_DAMAGE,
+            AnimalKind::Bat => BAT_DAMAGE,
+            AnimalKind::HuntSwordsman => HUNT_SWORD_DAMAGE,
+            AnimalKind::HuntStalker => HUNT_STALKER_DAMAGE,
             _ => 0,
         }
     }
@@ -201,6 +248,8 @@ impl AnimalKind {
             AnimalKind::Yeti => "The Yeti killed you",
             AnimalKind::LochNessMonster => "The Loch Ness Monster killed you",
             AnimalKind::MotherOfQuail => "The Mother of Quail killed you",
+            AnimalKind::Bat => "A bat killed you",
+            AnimalKind::HuntSwordsman | AnimalKind::HuntStalker => "The Wild Hunt killed you",
             _ => "An animal killed you",
         }
     }
@@ -253,6 +302,8 @@ impl AnimalKind {
             // A crow leaves only feathers, no poultry.
             AnimalKind::Crow => add(ItemKind::Feather, CROW_FEATHER_DROP),
             AnimalKind::MotherOfQuail => add(ItemKind::SilverKey, 1),
+            // Bats and the ghostly warriors leave nothing behind.
+            AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => {}
         }
         out
     }
@@ -270,6 +321,20 @@ pub enum Mode {
     Fly,
     /// A bear running at the player.
     Charge,
+}
+
+/// What the stalker of the Wild Hunt is doing: working round behind the player, running in at them, or running back.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HuntPhase {
+    Circle,
+    Dash,
+    Retreat,
+}
+
+/// `angle` brought into `-PI..PI`.
+fn wrap_angle(angle: f32) -> f32 {
+    let tau = std::f32::consts::TAU;
+    (angle + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI
 }
 
 #[derive(Clone, Debug)]
@@ -322,6 +387,15 @@ pub struct Animal {
     pub lure_target: Option<Vec3>,
     /// Seconds a bird that has come to the pipes still stands quite still.
     pub calm: f32,
+    /// A bat called by the pipes: it hunts the player wherever they are, until the dawn.
+    pub hunting: bool,
+    /// The Wild Hunt's stalker: what it is doing now, and the seconds left of a dash or a retreat.
+    pub hunt_phase: HuntPhase,
+    hunt_timer: f32,
+    /// The Wild Hunt's archer: which way (1 or -1) it side-steps.
+    strafe: f32,
+    /// Set every frame by the game for the Wild Hunt's stalker: the way the player faces (radians, `x = cos`, `z = sin`).
+    pub player_facing: f32,
 }
 
 /// What a body bumped into during one step.
@@ -406,7 +480,16 @@ impl Animal {
             west_followed: 0.0,
             lure_target: None,
             calm: 0.0,
+            hunting: false,
+            hunt_phase: HuntPhase::Circle,
+            hunt_timer: 0.0,
+            strafe: 1.0,
+            player_facing: 0.0,
         };
+        // The archer takes a moment to nock its first arrow.
+        if kind == AnimalKind::HuntArcher {
+            a.attack_cooldown = HUNT_ARCHER_INTERVAL / 2.0;
+        }
         // Taken from the random heading, so that each whisp has its own place on the circle.
         a.orbit = a.heading * 1.7;
         a.rest(rng);
@@ -541,13 +624,33 @@ impl Animal {
             AnimalKind::Yeti => YETI_ATTACK_COOLDOWN,
             AnimalKind::LochNessMonster => LOCH_NESS_ATTACK_COOLDOWN,
             AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_ATTACK_COOLDOWN,
+            AnimalKind::Bat => BAT_ATTACK_COOLDOWN,
+            AnimalKind::HuntSwordsman => HUNT_SWORD_COOLDOWN,
+            // The stalker stabs only on a dash, and once.
+            AnimalKind::HuntStalker if self.hunt_phase == HuntPhase::Dash => HUNT_STALKER_COOLDOWN,
             _ => return false,
         };
         if self.attack_cooldown > 0.0 || !self.within_reach_of(player) {
             return false;
         }
         self.attack_cooldown = cooldown;
+        if self.kind == AnimalKind::HuntStalker {
+            self.hunt_phase = HuntPhase::Retreat;
+            self.hunt_timer = HUNT_STALKER_RETREAT_SECONDS;
+        }
         true
+    }
+
+    /// Whether the Wild Hunt's archer has an arrow ready for a player standing at `player` (feet): it is in range and has nocked
+    /// one. The game then checks it can see the player and calls `shot_fired`.
+    pub fn ready_to_shoot(&self, player: Vec3) -> bool {
+        self.kind == AnimalKind::HuntArcher && self.attack_cooldown <= 0.0 && (self.pos - player).length() <= HUNT_ARCHER_RANGE
+    }
+
+    /// The archer has shot: it nocks the next arrow after `HUNT_ARCHER_INTERVAL` seconds, times `slowdown` (2 when the player has
+    /// a Rabbit Foot in the hotbar, so that it fires half as often).
+    pub fn shot_fired(&mut self, slowdown: f32) {
+        self.attack_cooldown = HUNT_ARCHER_INTERVAL * slowdown;
     }
 
     /// Whether a will-o-whisp is drawn to the player who holds a holly rod in their hotbar: it is once it is bonded,
@@ -693,6 +796,74 @@ impl Animal {
                     self.heading = towards + detour;
                 }
             }
+            AnimalKind::Bat => {
+                if self.hunting || flat_gap < BAT_NOTICE_DISTANCE || self.alarm > 0.0 {
+                    self.mode = Mode::Charge;
+                } else if self.mode == Mode::Charge {
+                    self.rest(rng);
+                }
+                if self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    // A bat's flight is jinking: it weaves from side to side as it comes.
+                    self.heading = towards + detour + (self.phase * 3.0).sin() * 0.5;
+                }
+            }
+            AnimalKind::HuntSwordsman => {
+                self.mode = Mode::Charge;
+                if flat_gap > 1e-3 {
+                    self.heading = towards + detour;
+                }
+            }
+            AnimalKind::HuntArcher => {
+                self.hunt_timer -= dt;
+                if self.hunt_timer <= 0.0 {
+                    self.strafe = -self.strafe;
+                    self.hunt_timer = 2.5;
+                }
+                if flat_gap < HUNT_ARCHER_MIN_RANGE {
+                    self.mode = Mode::Flee;
+                    self.heading = away + detour;
+                } else if flat_gap > HUNT_ARCHER_MAX_RANGE {
+                    self.mode = Mode::Charge;
+                    self.heading = towards + detour;
+                } else {
+                    self.mode = Mode::Wander;
+                    self.heading = towards + self.strafe * std::f32::consts::FRAC_PI_2;
+                }
+            }
+            AnimalKind::HuntStalker => {
+                self.mode = Mode::Charge;
+                self.hunt_timer -= dt;
+                if self.hunt_phase == HuntPhase::Circle {
+                    // Work round the player, at a distance, to the point straight behind them.
+                    let theta = (self.pos.z - threat.z).atan2(self.pos.x - threat.x);
+                    let diff = wrap_angle(self.player_facing + std::f32::consts::PI - theta);
+                    if diff.abs() <= HUNT_STALKER_BEHIND_ANGLE && flat_gap <= HUNT_STALKER_CIRCLE_RADIUS * 1.5 {
+                        self.hunt_phase = HuntPhase::Dash;
+                        self.hunt_timer = HUNT_STALKER_DASH_SECONDS;
+                    } else {
+                        let ahead = theta + diff.signum() * diff.abs().min(0.6);
+                        let r = flat_gap + (HUNT_STALKER_CIRCLE_RADIUS - flat_gap).clamp(-3.0, 3.0);
+                        let (gx, gz) = (threat.x + ahead.cos() * r, threat.z + ahead.sin() * r);
+                        self.heading = (gz - self.pos.z).atan2(gx - self.pos.x) + detour;
+                    }
+                }
+                if self.hunt_phase == HuntPhase::Dash {
+                    if self.hunt_timer <= 0.0 {
+                        // It found no one to stab: back it goes.
+                        self.hunt_phase = HuntPhase::Retreat;
+                        self.hunt_timer = HUNT_STALKER_RETREAT_SECONDS;
+                    } else if flat_gap > 1e-3 {
+                        self.heading = towards + detour;
+                    }
+                }
+                if self.hunt_phase == HuntPhase::Retreat {
+                    if self.hunt_timer <= 0.0 {
+                        self.hunt_phase = HuntPhase::Circle;
+                    } else if flat_gap > 1e-3 {
+                        self.heading = away + detour;
+                    }
+                }
+            }
             AnimalKind::Yeti | AnimalKind::LochNessMonster => {
                 let (notice, leash) = if self.kind == AnimalKind::Yeti { (YETI_NOTICE_DISTANCE, YETI_LEASH) } else { (LOCH_NESS_NOTICE_DISTANCE, LOCH_NESS_LEASH) };
                 let home_gap = vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length();
@@ -729,7 +900,7 @@ impl Animal {
             }
         }
 
-        if self.kind != AnimalKind::WillOWhisp && self.calm <= 0.0 && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
+        if self.kind != AnimalKind::WillOWhisp && !self.kind.is_wild_hunt() && self.calm <= 0.0 && matches!(self.mode, Mode::Idle | Mode::Wander) && self.timer <= 0.0 {
             if self.mode == Mode::Idle {
                 self.mode = Mode::Wander;
                 let straying = self.kind.is_leashed() && vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length() > 12.0;
@@ -778,6 +949,13 @@ impl Animal {
             Mode::Charge if self.kind == AnimalKind::Yeti => YETI_RUN_SPEED * if self.boss_enraged() { YETI_ENRAGED_SPEED_FACTOR } else { 1.0 },
             Mode::Charge if self.kind == AnimalKind::LochNessMonster => LOCH_NESS_RUN_SPEED,
             Mode::Charge if self.kind == AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_RUN_SPEED,
+            Mode::Charge if self.kind == AnimalKind::Bat => BAT_SPEED,
+            Mode::Charge if self.kind == AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_SPEED,
+            Mode::Charge if self.kind == AnimalKind::HuntArcher => HUNT_ARCHER_SPEED,
+            Mode::Charge if self.kind == AnimalKind::HuntStalker => match self.hunt_phase {
+                HuntPhase::Circle => HUNT_STALKER_CIRCLE_SPEED,
+                HuntPhase::Dash | HuntPhase::Retreat => HUNT_STALKER_DASH_SPEED,
+            },
             Mode::Charge => BEAR_RUN_SPEED,
         };
         if self.kind == AnimalKind::LochNessMonster {
@@ -800,7 +978,12 @@ impl Animal {
         self.vel.x += self.knock.x;
         self.vel.z += self.knock.z;
         self.knock *= (1.0 - KNOCKBACK_DECAY * dt).max(0.0);
-        if self.kind == AnimalKind::MotherOfQuail && self.mode == Mode::Charge {
+        if self.kind == AnimalKind::Bat {
+            // A bat never touches the ground: it flutters up and down about the player's body as it attacks, and about its
+            // own height when it wanders.
+            let goal = if self.mode == Mode::Charge { threat.y + 0.9 + 0.4 * (self.phase * 2.3).sin() } else { self.launch_y + 0.5 * (self.phase * 1.7).sin() };
+            self.vel.y = ((goal - self.pos.y) * 3.0).clamp(-4.0, 4.0);
+        } else if self.kind == AnimalKind::MotherOfQuail && self.mode == Mode::Charge {
             // She flies: up to just over the player's head while she is on her way (higher still if something is in the way),
             // and down to their level once she is beside them.
             let goal = threat.y + if flat_gap > 3.0 { 2.0 } else { 0.0 } + if self.stuck > 0.0 { 8.0 } else { 0.0 };
