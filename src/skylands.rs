@@ -8,6 +8,10 @@
 //! from the first. A bridge is a deck of `Block::BridgePlank`, `SKY_BRIDGE_WIDTH` wide, climbing from the top of one
 //! island to the top of the other, with a post now and then along its edges.
 //!
+//! Islands are of four kinds (`IslandKind`): wooded, with ancient ruins, with a hill, or with an ancient altar and some bones. One in
+//! `SKY_LARGE_ONE_IN` is the large form of its kind. Far away, in place of a block of nine cells, lies the giant island of the Phoenix
+//! (`giant_island`): about four times as wide, with a volcano on it (`volcano_crater`).
+//!
 //! The Skylands have their own day and night. A player who falls below `SKY_VOID_Y` has fallen off (see
 //! `Game::update_skylands`).
 
@@ -32,8 +36,26 @@ pub struct Island {
     pub top: i32,
     /// How many blocks of rock hang below the top at the middle.
     pub depth: i32,
+    /// What is on it (see `IslandKind`), and whether it is the large form.
+    pub kind: IslandKind,
+    pub large: bool,
     /// Decides the shape of the shore.
     phase: u64,
+}
+
+/// What an island has on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IslandKind {
+    /// Grass and a few oaks.
+    Wooded,
+    /// A broken ring of wall, standing pillars and rubble.
+    Ruins,
+    /// A smooth hill in the middle.
+    Hill,
+    /// An ancient altar on a dais with nothing on it, and bones lying about.
+    Altar,
+    /// The giant island of the Phoenix, with its volcano.
+    Volcano,
 }
 
 impl Island {
@@ -62,6 +84,85 @@ impl Island {
     pub fn contains(&self, wx: i32, wz: i32) -> bool {
         self.share(wx, wz) < 1.0
     }
+
+    /// How many blocks above `top` the ground of the column (wx, wz) rises: a hill's slope, a volcano's cone and crater, else nothing.
+    pub fn rise_at(&self, wx: i32, wz: i32) -> i32 {
+        match self.kind {
+            IslandKind::Hill => {
+                let t = (1.0 - self.share(wx, wz) / SKY_HILL_SHARE).clamp(0.0, 1.0);
+                (SKY_HILL_HEIGHT as f32 * t * t * (3.0 - 2.0 * t)).round() as i32
+            }
+            IslandKind::Volcano => {
+                let d = vec2(wx as f32 + 0.5 - (self.x as f32 + 0.5), wz as f32 + 0.5 - (self.z as f32 + 0.5)).length();
+                volcano_rise(d)
+            }
+            _ => 0,
+        }
+    }
+
+    /// y of the highest block of the island in the column (wx, wz).
+    pub fn surface_y(&self, wx: i32, wz: i32) -> i32 {
+        self.top + self.rise_at(wx, wz)
+    }
+}
+
+/// The height of the volcano above the island's top at `d` blocks from its middle: a cone `VOLCANO_RADIUS` wide at its foot and
+/// `VOLCANO_HEIGHT` high, with a bowl-shaped crater `VOLCANO_CRATER_RADIUS` wide in the top whose floor lies `VOLCANO_FLOOR` up.
+pub fn volcano_rise(d: f32) -> i32 {
+    if d >= VOLCANO_RADIUS {
+        return 0;
+    }
+    let rim = (VOLCANO_HEIGHT as f32 * (1.0 - VOLCANO_CRATER_RADIUS / VOLCANO_RADIUS)).round();
+    if d >= VOLCANO_CRATER_RADIUS {
+        return (VOLCANO_HEIGHT as f32 * (1.0 - d / VOLCANO_RADIUS)).round() as i32;
+    }
+    let floor = VOLCANO_FLOOR as f32;
+    let t = d / VOLCANO_CRATER_RADIUS;
+    (floor + (rim - floor) * t * t).round() as i32
+}
+
+/// The cell of the grid at the middle of the block of nine that the giant island takes the place of: a few cells from the first island,
+/// in a direction the seed decides.
+fn giant_cell(seed: i64) -> (i32, i32) {
+    let angle = (hash3(seed, 0, 0, 0x9F0E) % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
+    let cells = (PHOENIX_ISLAND_DISTANCE / SKY_CELL as f32).round();
+    ((angle.cos() * cells).round() as i32, (angle.sin() * cells).round() as i32)
+}
+
+/// The giant island of the Phoenix, in the middle of its block of nine cells (every cell of the block is this island).
+pub fn giant_island(seed: i64) -> Island {
+    let (cx, cz) = giant_cell(seed);
+    Island {
+        x: cx * SKY_CELL,
+        z: cz * SKY_CELL,
+        radius: PHOENIX_ISLAND_RADIUS,
+        top: SKY_BASE_Y,
+        depth: PHOENIX_ISLAND_DEPTH,
+        kind: IslandKind::Volcano,
+        large: true,
+        phase: hash3(seed, 0, 0, 0x9F0F) >> 20,
+    }
+}
+
+/// Whether the grid cell (cx, cz) belongs to the giant island's block of nine.
+fn in_giant_block(seed: i64, cx: i32, cz: i32) -> bool {
+    let (gx, gz) = giant_cell(seed);
+    (cx - gx).abs() <= 1 && (cz - gz).abs() <= 1
+}
+
+/// Where the Phoenix lives: the floor of the volcano's crater, standing height above it.
+pub fn volcano_crater(seed: i64) -> Vec3 {
+    let g = giant_island(seed);
+    vec3(g.x as f32 + 0.5, (g.top + VOLCANO_FLOOR) as f32 + 1.01, g.z as f32 + 0.5)
+}
+
+/// The point over the giant island a peep stone leads to: the foot of the volcano on its side towards the first island, on the
+/// ground (the trail itself is drawn by `Game::trail_path`).
+pub fn volcano_foot(seed: i64) -> (f32, f32) {
+    let g = giant_island(seed);
+    let (dx, dz) = (SKY_SPAWN_CENTRE.0 - g.x, SKY_SPAWN_CENTRE.1 - g.z);
+    let len = ((dx * dx + dz * dz) as f32).sqrt().max(1.0);
+    (g.x as f32 + 0.5 + dx as f32 / len * VOLCANO_RADIUS * 0.8, g.z as f32 + 0.5 + dz as f32 / len * VOLCANO_RADIUS * 0.8)
 }
 
 /// The number of the grid cell that holds the world coordinate `w` (cell 0 is centred on 0).
@@ -73,14 +174,35 @@ fn cell_of(w: i32) -> i32 {
 pub fn island_in_cell(seed: i64, cx: i32, cz: i32) -> Island {
     let h = hash3(seed, cx, cz, 0x5C1A);
     if (cx, cz) == (0, 0) {
-        return Island { x: SKY_SPAWN_CENTRE.0, z: SKY_SPAWN_CENTRE.1, radius: SKY_SPAWN_RADIUS, top: SKY_BASE_Y, depth: (SKY_ISLAND_MAX_DEPTH + SKY_ISLAND_MIN_DEPTH) / 2, phase: h >> 20 };
+        return Island {
+            x: SKY_SPAWN_CENTRE.0,
+            z: SKY_SPAWN_CENTRE.1,
+            radius: SKY_SPAWN_RADIUS,
+            top: SKY_BASE_Y,
+            depth: (SKY_ISLAND_MAX_DEPTH + SKY_ISLAND_MIN_DEPTH) / 2,
+            kind: IslandKind::Wooded,
+            large: false,
+            phase: h >> 20,
+        };
+    }
+    if in_giant_block(seed, cx, cz) {
+        return giant_island(seed);
     }
     let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
     let jitter = |u: f32| ((u * 2.0 - 1.0) * SKY_ISLAND_JITTER as f32).round() as i32;
+    let large = hash3(seed, cx, cz, 0x5C1F) % SKY_LARGE_ONE_IN == 0;
+    let kind = match hash3(seed, cx, cz, 0x5C20) % 4 {
+        0 => IslandKind::Wooded,
+        1 => IslandKind::Ruins,
+        2 => IslandKind::Hill,
+        _ => IslandKind::Altar,
+    };
     Island {
         x: cx * SKY_CELL + jitter(unit(0)),
         z: cz * SKY_CELL + jitter(unit(16)),
-        radius: SKY_ISLAND_MIN_RADIUS + unit(32) * (SKY_ISLAND_MAX_RADIUS - SKY_ISLAND_MIN_RADIUS),
+        radius: (SKY_ISLAND_MIN_RADIUS + unit(32) * (SKY_ISLAND_MAX_RADIUS - SKY_ISLAND_MIN_RADIUS)) * if large { SKY_LARGE_FACTOR } else { 1.0 },
+        kind,
+        large,
         top: SKY_BASE_Y + ((unit(48) * 2.0 - 1.0) * SKY_HEIGHT_JITTER as f32).round() as i32,
         depth: SKY_ISLAND_MIN_DEPTH + (hash3(seed, cx, cz, 0x5C1B) % (SKY_ISLAND_MAX_DEPTH - SKY_ISLAND_MIN_DEPTH + 1) as u64) as i32,
         phase: h >> 20,
@@ -107,10 +229,14 @@ pub fn pick_tower_cell(seed: i64, at: (i32, i32), visited: &[(i32, i32)], made: 
     for dz in -8..=8 {
         for dx in -8..=8 {
             let cell = (cx + dx, cz + dz);
-            if cell == (0, 0) || visited.contains(&cell) {
+            if cell == (0, 0) || visited.contains(&cell) || in_giant_block(seed, cell.0, cell.1) {
                 continue;
             }
             let island = island_in_cell(seed, cell.0, cell.1);
+            // The tower needs level ground: a wooded island (which is flat) and nothing else.
+            if island.kind != IslandKind::Wooded {
+                continue;
+            }
             let reach = (tower::TOWER_FOOT_MARGIN + island.radius.ceil() as i32) as i32;
             let chunks_made = (island.z - reach).div_euclid(CHUNK_SIZE)..=(island.z + reach).div_euclid(CHUNK_SIZE);
             if chunks_made.into_iter().any(|kz| ((island.x - reach).div_euclid(CHUNK_SIZE)..=(island.x + reach).div_euclid(CHUNK_SIZE)).any(|kx| made(kx, kz))) {
@@ -157,6 +283,10 @@ impl Bridge {
     /// its two islands (which are drawn instead). The deck runs level with the top of the island at each end and climbs
     /// in between.
     pub fn deck_at(&self, wx: i32, wz: i32) -> Option<Deck> {
+        if self.from == self.to {
+            // Both ends are the giant island: there is no bridge between a cell of its block and another.
+            return None;
+        }
         let (a, b) = ((self.from.x as f32 + 0.5, self.from.z as f32 + 0.5), (self.to.x as f32 + 0.5, self.to.z as f32 + 0.5));
         let (px, pz) = (wx as f32 + 0.5, wz as f32 + 0.5);
         let (ax, az) = (b.0 - a.0, b.1 - a.1);
@@ -196,7 +326,7 @@ pub fn deck_at(seed: i64, wx: i32, wz: i32) -> Option<Deck> {
 /// y of the highest block of the land in the column (wx, wz) (the top of an island, or a bridge's deck), `None` over the
 /// void.
 pub fn surface_top(seed: i64, wx: i32, wz: i32) -> Option<i32> {
-    island_at(seed, wx, wz).map(|i| i.top).or_else(|| deck_at(seed, wx, wz).map(|d| d.y))
+    island_at(seed, wx, wz).map(|i| i.surface_y(wx, wz)).or_else(|| deck_at(seed, wx, wz).map(|d| d.y))
 }
 
 /// Where the player arrives: the middle of the first island, standing on its grass.
@@ -204,21 +334,77 @@ pub fn spawn_point() -> Vec3 {
     vec3(SKY_SPAWN_CENTRE.0 as f32 + 0.5, SKY_BASE_Y as f32 + 1.01, SKY_SPAWN_CENTRE.1 as f32 + 0.5)
 }
 
-/// Where the cyclone that leads home stands: on the first island, a few blocks from where the player arrives.
-pub fn home_cyclone() -> Vec3 {
-    spawn_point() + vec3(SKY_HOME_CYCLONE_OFFSET, -0.01, 0.0)
-}
-
-/// Whether trees grow near (wx, wz): never on the stretch of the first island where the player arrives and the cyclone
-/// stands, nor near any island's shore.
+/// Whether trees grow near (wx, wz): only on wooded islands, never on the stretch of the first island where the player arrives,
+/// nor near any island's shore.
 fn tree_site(seed: i64, wx: i32, wz: i32, island: &Island, landmarks: &Landmarks) -> bool {
     if landmarks.sky_tower == Some((cell_of(island.x), cell_of(island.z))) {
         return false;
     }
     let near = |p: Vec3| (p.x - wx as f32).abs() < 5.0 && (p.z - wz as f32).abs() < 5.0;
-    island.share(wx, wz) < 0.6
-        && !(*island == island_in_cell(seed, 0, 0) && (near(spawn_point()) || near(home_cyclone())))
+    island.kind == IslandKind::Wooded
+        && island.share(wx, wz) < 0.6
+        && !(*island == island_in_cell(seed, 0, 0) && near(spawn_point()))
         && hash3(seed, wx, wz, 0x5C1D) % 100 < SKY_TREE_PERCENT
+}
+
+/// What an island of a given kind has above its ground in the column (wx, wz), as (blocks above the ground, block) pairs: the
+/// ruins' broken wall, pillars and rubble, the altar's dais and bones.
+fn decoration(seed: i64, island: &Island, wx: i32, wz: i32) -> Vec<(i32, Block)> {
+    let share = island.share(wx, wz);
+    let h = hash3(seed, wx, wz, 0x5C30);
+    let mut out = Vec::new();
+    match island.kind {
+        IslandKind::Ruins => {
+            if (SKY_RUIN_RING_SHARE - 0.05..SKY_RUIN_RING_SHARE + 0.05).contains(&share) {
+                // The wall is broken: some columns are gone, the rest are of different heights.
+                let height = if h % 5 == 0 { 0 } else { 1 + ((h >> 8) % SKY_RUIN_WALL_HEIGHT as u64) as i32 };
+                out.extend((1..=height).map(|dy| (dy, Block::CastleStone)));
+            }
+            for k in 0..SKY_RUIN_PILLARS {
+                let angle = (island.phase & 0xFF) as f32 / 255.0 * std::f32::consts::TAU + k as f32 * std::f32::consts::TAU / SKY_RUIN_PILLARS as f32;
+                let r = SKY_RUIN_RING_SHARE * island.reach(angle);
+                let (px, pz) = ((island.x as f32 + 0.5 + angle.cos() * r).floor() as i32, (island.z as f32 + 0.5 + angle.sin() * r).floor() as i32);
+                if (px, pz) == (wx, wz) {
+                    let height = 3 + (hash3(seed, px, pz, 0x5C31) % 3) as i32;
+                    out.extend((1..=height).map(|dy| (dy, Block::CastleStone)));
+                }
+            }
+            if share < SKY_RUIN_RING_SHARE - 0.12 && h % 40 == 0 {
+                out.push((1, Block::PlacedStone));
+            }
+        }
+        IslandKind::Altar => {
+            let (dx, dz) = (wx - island.x, wz - island.z);
+            if dx.abs() <= 1 && dz.abs() <= 1 {
+                // A low dais with the altar on it: nothing lies on the altar.
+                out.push((1, Block::CastleStone));
+                if (dx, dz) == (0, 0) {
+                    out.push((2, Block::AncientAltar));
+                }
+            } else if share < 0.7 && h % 1000 < SKY_BONES_PER_MILLE {
+                out.push((1, Block::Bones));
+            }
+        }
+        IslandKind::Wooded | IslandKind::Hill | IslandKind::Volcano => {}
+    }
+    out
+}
+
+/// The block of an island's ground at height `y` in the column (wx, wz), whose surface is at `surface`: dirt over rock; on the volcano,
+/// bare rock with glowing magma on the crater floor and in veins on its slopes.
+fn ground_block(seed: i64, island: &Island, wx: i32, wz: i32, y: i32, surface: i32) -> Block {
+    if y <= surface - SKY_DIRT_LAYERS {
+        return Block::Stone;
+    }
+    if island.kind != IslandKind::Volcano {
+        return Block::Dirt;
+    }
+    let d = vec2(wx as f32 + 0.5 - (island.x as f32 + 0.5), wz as f32 + 0.5 - (island.z as f32 + 0.5)).length();
+    if d >= VOLCANO_RADIUS {
+        return Block::Dirt;
+    }
+    let vein = d < VOLCANO_CRATER_RADIUS + 4.0 && hash3(seed, wx, wz, 0x5C32) % 100 < 6;
+    if y >= surface - 1 && (d < VOLCANO_CRATER_RADIUS * 0.6 || vein) { Block::Magma } else { Block::Stone }
 }
 
 /// The blocks of chunk (cx, cz) of the Skylands: the islands (rock, dirt, a few oaks), and the bridges' decks and posts.
@@ -230,10 +416,17 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
             let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
             if let Some(island) = island_at(seed, wx, wz) {
                 let bottom = island.bottom_at(wx, wz).unwrap_or(island.top);
-                for y in bottom..=island.top {
-                    blocks[idx(lx, y, lz)] = if y > island.top - SKY_DIRT_LAYERS { Block::Dirt } else { Block::Stone };
+                let surface = island.surface_y(wx, wz);
+                for y in bottom..=surface {
+                    blocks[idx(lx, y, lz)] = ground_block(seed, &island, wx, wz, y, surface);
                 }
-                if landmarks.sky_tower == Some((cell_of(island.x), cell_of(island.z))) {
+                let tower_island = landmarks.sky_tower == Some((cell_of(island.x), cell_of(island.z)));
+                if !tower_island {
+                    for (dy, block) in decoration(seed, &island, wx, wz) {
+                        blocks[idx(lx, surface + dy, lz)] = block;
+                    }
+                }
+                if tower_island {
                     let (dx, dz) = (wx - island.x, wz - island.z);
                     let locked = !landmarks.is_unlocked(island.x, island.z);
                     for dy in 0..TOWER_HEIGHT {
@@ -276,9 +469,6 @@ mod tests {
         assert_eq!((first.x, first.z, first.top), (SKY_SPAWN_CENTRE.0, SKY_SPAWN_CENTRE.1, SKY_BASE_Y));
         let p = spawn_point();
         assert_eq!(surface_top(7, p.x.floor() as i32, p.z.floor() as i32), Some(SKY_BASE_Y));
-        let home = home_cyclone();
-        assert_eq!(surface_top(7, home.x.floor() as i32, home.z.floor() as i32), Some(SKY_BASE_Y), "the way home stands on the first island");
-        assert!((home - p).length() > CYCLONE_RADIUS + 3.0, "arriving never puts the player inside the cyclone");
     }
 
     #[test]
@@ -293,6 +483,9 @@ mod tests {
         for seed in 0..6 {
             for cz in -4..4 {
                 for cx in -4..4 {
+                    if in_giant_block(seed, cx, cz) || in_giant_block(seed, cx + 1, cz) {
+                        continue;
+                    }
                     let i = island_in_cell(seed, cx, cz);
                     let reach = i.radius * 1.19;
                     let (x0, z0) = ((cx * SKY_CELL - SKY_CELL / 2) as f32, (cz * SKY_CELL - SKY_CELL / 2) as f32);
@@ -402,10 +595,10 @@ mod tests {
     }
 
     #[test]
-    fn trees_keep_off_the_arrival_spot_and_the_way_home() {
+    fn trees_keep_off_the_arrival_spot() {
         for seed in 0..30 {
             let blocks = generate_chunk(seed, 0, 0, &Landmarks::default());
-            for p in [spawn_point(), home_cyclone()] {
+            for p in [spawn_point()] {
                 for dz in -2..=2 {
                     for dx in -2..=2 {
                         let (lx, lz) = (p.x.floor() as i32 + dx, p.z.floor() as i32 + dz);
@@ -416,6 +609,154 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn islands_are_of_four_kinds_and_one_in_three_is_large() {
+        let mut kinds = HashSet::new();
+        let (mut large, mut total) = (0, 0);
+        for seed in 0..4 {
+            for cz in -8..8 {
+                for cx in -8..8 {
+                    if (cx, cz) == (0, 0) || in_giant_block(seed, cx, cz) {
+                        continue;
+                    }
+                    let i = island_in_cell(seed, cx, cz);
+                    kinds.insert(format!("{:?}", i.kind));
+                    total += 1;
+                    large += i.large as i32;
+                    let (lo, hi) = (SKY_ISLAND_MIN_RADIUS, SKY_ISLAND_MAX_RADIUS);
+                    if i.large {
+                        assert!(i.radius >= lo * SKY_LARGE_FACTOR - 0.01 && i.radius <= hi * SKY_LARGE_FACTOR + 0.01, "{i:?}");
+                    } else {
+                        assert!(i.radius >= lo - 0.01 && i.radius <= hi + 0.01, "{i:?}");
+                    }
+                }
+            }
+        }
+        assert_eq!(kinds.len(), 4, "wooded, ruins, hill and altar islands: {kinds:?}");
+        let share = large as f32 / total as f32;
+        assert!((share - 1.0 / 3.0).abs() < 0.06, "about one in three is large: {share}");
+        let first = island_in_cell(3, 0, 0);
+        assert!(first.kind == IslandKind::Wooded && !first.large, "the first island is the ordinary wooded one");
+    }
+
+    /// Every block the chunks around an island hold, as (x, y, z, block).
+    fn blocks_of(seed: i64, island: &Island) -> Vec<(i32, i32, i32, Block)> {
+        let reach = island.radius.ceil() as i32 + 3;
+        let mut out = Vec::new();
+        for cz in (island.z - reach).div_euclid(CHUNK_SIZE)..=(island.z + reach).div_euclid(CHUNK_SIZE) {
+            for cx in (island.x - reach).div_euclid(CHUNK_SIZE)..=(island.x + reach).div_euclid(CHUNK_SIZE) {
+                let blocks = generate_chunk(seed, cx, cz, &Landmarks::default());
+                for lz in 0..CHUNK_SIZE {
+                    for lx in 0..CHUNK_SIZE {
+                        for y in island.top + 1..island.top + 30 {
+                            let b = blocks[idx(lx, y, lz)];
+                            if b != Block::Air {
+                                out.push((cx * CHUNK_SIZE + lx, y, cz * CHUNK_SIZE + lz, b));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn first_of_kind(seed: i64, kind: IslandKind) -> Island {
+        (1..12).flat_map(|cx| (1..12).map(move |cz| (cx, cz))).map(|(cx, cz)| island_in_cell(seed, cx, cz)).find(|i| i.kind == kind && !in_giant_block(seed, (i.x as f32 / SKY_CELL as f32).round() as i32, (i.z as f32 / SKY_CELL as f32).round() as i32)).unwrap()
+    }
+
+    #[test]
+    fn a_ruins_island_has_a_broken_wall_and_pillars_a_hill_island_a_hill_and_an_altar_island_an_empty_altar_and_bones() {
+        let seed = 11;
+        let ruins = blocks_of(seed, &first_of_kind(seed, IslandKind::Ruins));
+        assert!(ruins.iter().filter(|b| b.3 == Block::CastleStone).count() > 15, "wall and pillars of old stone");
+        let island = first_of_kind(seed, IslandKind::Ruins);
+        let tallest = ruins.iter().filter(|b| b.3 == Block::CastleStone).map(|b| b.1 - island.top).max().unwrap();
+        assert!(tallest >= 3, "pillars stand taller than the wall: {tallest}");
+        let hill = first_of_kind(seed, IslandKind::Hill);
+        let middle = hill.surface_y(hill.x, hill.z);
+        assert!(middle >= hill.top + SKY_HILL_HEIGHT - 1, "a hill rises in the middle: {middle} over {}", hill.top);
+        assert_eq!(hill.surface_y(hill.x + hill.radius as i32 + 2, hill.z), hill.top, "and the shore is level");
+        let altar = first_of_kind(seed, IslandKind::Altar);
+        let blocks = blocks_of(seed, &altar);
+        let on_altar = blocks.iter().find(|b| b.3 == Block::AncientAltar).expect("an altar");
+        assert_eq!((on_altar.0, on_altar.2), (altar.x, altar.z));
+        assert!(!blocks.iter().any(|b| b.0 == altar.x && b.2 == altar.z && b.1 > on_altar.1), "nothing lies on the altar");
+        assert!(blocks.iter().filter(|b| b.3 == Block::Bones).count() >= 3, "bones lie on the ground");
+        let wooded = blocks_of(seed, &first_of_kind(seed, IslandKind::Wooded));
+        assert!(wooded.iter().any(|b| b.3 == Block::Wood), "a wooded island has trees");
+        assert!(!ruins.iter().any(|b| b.3 == Block::Wood), "and the others have none");
+    }
+
+    #[test]
+    fn every_hill_slope_can_be_walked_up_a_block_at_a_time() {
+        for seed in 0..6 {
+            for cx in 1..10 {
+                let i = island_in_cell(seed, cx, 2);
+                if i.kind != IslandKind::Hill || in_giant_block(seed, cx, 2) {
+                    continue;
+                }
+                for dz in -20..20 {
+                    for dx in -20..20 {
+                        let (x, z) = (i.x + dx, i.z + dz);
+                        if i.contains(x, z) && i.contains(x + 1, z) {
+                            assert!((i.surface_y(x, z) - i.surface_y(x + 1, z)).abs() <= 1, "seed {seed}: a step of more than one block at ({x}, {z})");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_giant_island_is_about_four_times_as_wide_with_a_volcano_and_a_crater_and_is_reached_by_bridges() {
+        for seed in [1, 7, 42] {
+            let g = giant_island(seed);
+            assert_eq!(g.kind, IslandKind::Volcano);
+            assert!(g.radius >= 3.0 * SKY_ISLAND_MAX_RADIUS && g.radius <= 5.0 * SKY_ISLAND_MAX_RADIUS, "about four times a normal island's width: {}", g.radius);
+            let (cx, cz) = giant_cell(seed);
+            assert!(cx.abs() >= 3 || cz.abs() >= 3, "far from the first island");
+            assert_eq!(island_in_cell(seed, cx + 1, cz - 1), g, "it stands in place of the nine cells round it");
+            let crater = volcano_crater(seed);
+            assert_eq!(surface_top(seed, crater.x.floor() as i32, crater.z.floor() as i32), Some(g.top + VOLCANO_FLOOR), "the Phoenix's floor");
+            let rim = (0..40).map(|d| g.surface_y(g.x + d, g.z)).max().unwrap();
+            assert!(rim > g.top + VOLCANO_FLOOR + 4 && rim <= g.top + VOLCANO_HEIGHT, "the cone rises round the crater: {rim}");
+            // The cone climbs a block at a time (steps of at most one) from the foot to the rim.
+            for d in 0..(VOLCANO_RADIUS as i32 + 3) {
+                assert!((g.surface_y(g.x + d, g.z) - g.surface_y(g.x + d + 1, g.z)).abs() <= 2, "seed {seed}: the slope at {d}");
+            }
+            // The first island is bridged on towards it: there is a deck leaving the giant island on every side that has a neighbour.
+            let outside = island_in_cell(seed, cx + 2, cz);
+            assert_ne!(outside, g);
+            assert!(east_bridge(seed, cx + 1, cz).from == g && east_bridge(seed, cx + 1, cz).to == outside);
+        }
+    }
+
+    #[test]
+    fn the_volcano_is_rock_with_magma_on_the_crater_floor() {
+        let seed = 5;
+        let g = giant_island(seed);
+        let (cx, cz) = (g.x.div_euclid(CHUNK_SIZE), g.z.div_euclid(CHUNK_SIZE));
+        let blocks = generate_chunk(seed, cx, cz, &Landmarks::default());
+        let (lx, lz) = (g.x.rem_euclid(CHUNK_SIZE), g.z.rem_euclid(CHUNK_SIZE));
+        assert_eq!(blocks[idx(lx, g.top + VOLCANO_FLOOR, lz)], Block::Magma, "the floor of the crater");
+        assert_eq!(blocks[idx(lx, g.top + VOLCANO_FLOOR + 1, lz)], Block::Air, "open above it");
+        let slope_x = (g.x + (VOLCANO_CRATER_RADIUS as i32 + 3)).rem_euclid(CHUNK_SIZE);
+        let slope_chunk = (g.x + VOLCANO_CRATER_RADIUS as i32 + 3).div_euclid(CHUNK_SIZE);
+        let blocks = generate_chunk(seed, slope_chunk, cz, &Landmarks::default());
+        let top = surface_top(seed, g.x + VOLCANO_CRATER_RADIUS as i32 + 3, g.z).unwrap();
+        assert!(matches!(blocks[idx(slope_x, top, lz)], Block::Stone | Block::Magma), "bare rock on the slopes");
+    }
+
+    #[test]
+    fn the_tower_island_is_always_a_flat_wooded_one() {
+        for seed in 0..5 {
+            if let Some(cell) = pick_tower_cell(seed, (0, 0), &[], &|_, _| false) {
+                assert_eq!(island_in_cell(seed, cell.0, cell.1).kind, IslandKind::Wooded);
             }
         }
     }

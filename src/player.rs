@@ -36,6 +36,8 @@ pub struct Player {
     pub on_ground: bool,
     /// Horizontal push from a blow (or a burn), added to the player's own movement and dying away.
     pub knock: Vec3,
+    /// How fast the push dies away (`KNOCKBACK_DECAY`, or `LAUNCH_DECAY` after a hard knock).
+    pub knock_decay: f32,
 }
 
 impl Player {
@@ -47,6 +49,7 @@ impl Player {
             pitch: 0.0,
             on_ground: false,
             knock: Vec3::ZERO,
+            knock_decay: KNOCKBACK_DECAY,
         }
     }
 
@@ -56,6 +59,18 @@ impl Player {
         let flat = vec3(away.x, 0.0, away.z);
         let dir = if flat.length() > 1e-3 { flat.normalize() } else { -vec3(self.yaw.cos(), 0.0, self.yaw.sin()) };
         self.knock = dir * PLAYER_KNOCKBACK_SPEED;
+        self.knock_decay = KNOCKBACK_DECAY;
+        self.vel.y = KNOCKBACK_HOP;
+        self.on_ground = false;
+    }
+
+    /// Throw the player `blocks` away from whatever hit them (the Yeti's smash): a long push that dies away at `LAUNCH_DECAY`, so it
+    /// carries `blocks` blocks over open ground.
+    pub fn launch(&mut self, away: Vec3, blocks: f32) {
+        let flat = vec3(away.x, 0.0, away.z);
+        let dir = if flat.length() > 1e-3 { flat.normalize() } else { -vec3(self.yaw.cos(), 0.0, self.yaw.sin()) };
+        self.knock = dir * blocks * LAUNCH_DECAY;
+        self.knock_decay = LAUNCH_DECAY;
         self.vel.y = KNOCKBACK_HOP;
         self.on_ground = false;
     }
@@ -118,7 +133,7 @@ impl Player {
         let wish = if wish.length_squared() > 0.0 { wish.normalize() * speed } else { Vec3::ZERO };
         self.vel.x = wish.x + self.knock.x;
         self.vel.z = wish.z + self.knock.z;
-        self.knock *= (1.0 - KNOCKBACK_DECAY * dt).max(0.0);
+        self.knock *= (1.0 - self.knock_decay * dt).max(0.0);
 
         if input.jump && self.on_ground {
             self.vel.y = JUMP_SPEED;

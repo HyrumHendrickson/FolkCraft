@@ -790,6 +790,8 @@ pub struct Landmarks {
     pub graveyard_rested: bool,
     /// Whether the player has beaten the Wild Hunt, and so won the game (they may play on).
     pub game_won: bool,
+    /// Whether the Phoenix of the Skylands' volcano is dead: it does not return, and the fire tornadoes have stopped for good.
+    pub phoenix_slain: bool,
     /// The squares of the Horizen's caves the player has entered, in the order they entered them.
     pub caves_visited: Vec<(i32, i32)>,
 }

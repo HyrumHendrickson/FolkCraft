@@ -387,9 +387,9 @@ pub const FIRE_SECONDS: f32 = 60.0;
 
 /// A fire tornado in the Skylands lasts this many seconds (it stays where it arrives until then).
 pub const SKY_TORNADO_LIFETIME: f32 = 30.0;
-/// A new fire tornado appears in the Skylands this often during the day: twice as often as one lasts, so there are sometimes
-/// two at once.
-pub const SKY_TORNADO_INTERVAL: f32 = SKY_TORNADO_LIFETIME / 2.0;
+/// A new fire tornado appears in the Skylands this often during the day: four times as often as one lasts, so there are
+/// sometimes four at once.
+pub const SKY_TORNADO_INTERVAL: f32 = SKY_TORNADO_LIFETIME / 4.0;
 /// The tornado begins this far from the player and travels toward the position it recorded at spawn.
 pub const SKY_TORNADO_SPAWN_DISTANCE: f32 = 40.0;
 pub const SKY_TORNADO_SPEED: f32 = 7.0;
@@ -401,7 +401,7 @@ pub const SKY_TORNADO_CAP_SPIN_SPEED: f32 = 2.1;
 pub const SKY_TORNADO_FOOT_SHARE: f32 = 0.28;
 pub const SKY_TORNADO_RADIUS: f32 = 1.8;
 pub const SKY_TORNADO_HEIGHT: f32 = 6.0;
-pub const SKY_TORNADO_DAMAGE: u32 = 2;
+pub const SKY_TORNADO_DAMAGE: u32 = 4;
 pub const SKY_TORNADO_DAMAGE_INTERVAL: f32 = 1.0;
 
 // --- Block breaking ---------------------------------------------------------------------
@@ -707,8 +707,8 @@ pub const BOSS_DESPAWN_DISTANCE: f32 = 190.0;
 pub const SUMMIT_PLATEAU_RADIUS: f32 = 14.0;
 /// After the Yeti dies a cyclone stands on the summit. Standing in it for `CYCLONE_SECONDS` carries the player to the
 /// Skylands; the screen fades to white over the last `CYCLONE_FADE_SECONDS`.
-pub const CYCLONE_SECONDS: f32 = 5.0;
-pub const CYCLONE_FADE_SECONDS: f32 = 1.5;
+pub const CYCLONE_SECONDS: f32 = 2.5;
+pub const CYCLONE_FADE_SECONDS: f32 = 0.75;
 pub const CYCLONE_RADIUS: f32 = 2.2;
 pub const CYCLONE_HEIGHT: f32 = 7.0;
 pub const CYCLONE_SPIN_SPEED: f32 = 9.0;
@@ -737,7 +737,6 @@ pub const SKY_SOUTH_BRIDGE_PERCENT: u64 = 60;
 /// The first island: centre, radius and the cyclone that leads home, a few blocks from where the player arrives.
 pub const SKY_SPAWN_CENTRE: (i32, i32) = (8, 8);
 pub const SKY_SPAWN_RADIUS: f32 = 15.0;
-pub const SKY_HOME_CYCLONE_OFFSET: f32 = 9.0;
 /// Below this height the player has fallen off every island.
 pub const SKY_VOID_Y: f32 = 55.0;
 /// A fall off an island: the white fades in over `SKY_FALL_FADE_IN`, the player is taken to the jungle of the normal world
@@ -756,8 +755,6 @@ pub const BREAK_SECONDS_KEY: f32 = 0.6;
 pub const BREAK_SECONDS_RELIC: f32 = 1.0;
 /// Lumps of pink salt a crystal drops.
 pub const PINK_SALT_DROP: u32 = 2;
-/// The mines are a salt mine: this many in a thousand of the dirt blocks that face a tunnel are crystals of pink salt.
-pub const MINE_SALT_PER_MILLE: u64 = 70;
 /// A silver key lies on a stand in the middle of the chamber where the middle ring crosses the shafts numbered in
 /// `MINE_KEY_SHAFTS` (one key for each of the three towers).
 pub const MINE_KEY_RING: usize = 1;
@@ -819,17 +816,30 @@ pub const CROW_LOSE_DISTANCE: f32 = 45.0;
 /// How far from where the crow comes down the game looks for a spot for the altar.
 pub const ALTAR_SEARCH_RADIUS: i32 = 6;
 
-// --- The Mother of Quail -------------------------------------------------------------------
+// --- The Iron Quail -------------------------------------------------------------------
 
-/// Every this many quail the player kills, a Mother of Quail comes for them.
-pub const QUAIL_KILLS_PER_MOTHER: u32 = 10;
-pub const MOTHER_OF_QUAIL_HEALTH: i32 = 120;
-pub const MOTHER_OF_QUAIL_RUN_SPEED: f32 = 6.8;
-pub const MOTHER_OF_QUAIL_DAMAGE: u32 = 2;
-pub const MOTHER_OF_QUAIL_ATTACK_COOLDOWN: f32 = 1.1;
-pub const MOTHER_OF_QUAIL_REACH: f32 = 0.9;
-/// She appears this far from the player.
-pub const MOTHER_OF_QUAIL_SPAWN_DISTANCE: f32 = 14.0;
+/// Every this many quail the player kills, `IRON_QUAILS_PER_SUMMON` Iron Quails come for them.
+pub const QUAIL_KILLS_PER_IRON_QUAIL: u32 = 10;
+pub const IRON_QUAILS_PER_SUMMON: u32 = 3;
+pub const IRON_QUAIL_HEALTH: i32 = 120;
+pub const IRON_QUAIL_RUN_SPEED: f32 = 6.8;
+pub const IRON_QUAIL_DAMAGE: u32 = 2;
+pub const IRON_QUAIL_ATTACK_COOLDOWN: f32 = 1.1;
+pub const IRON_QUAIL_REACH: f32 = 0.9;
+/// Each appears this far from the player (the three are spread round them).
+pub const IRON_QUAIL_SPAWN_DISTANCE: f32 = 14.0;
+/// An Iron Quail also shoots iron feathers (`IRON_FEATHER_DAMAGE` each, `IRON_FEATHER_SPEED` blocks per second) at a player it can
+/// see between `IRON_QUAIL_FEATHER_MIN_RANGE` and `IRON_QUAIL_FEATHER_MAX_RANGE` blocks away, once every
+/// `IRON_QUAIL_FEATHER_INTERVAL` seconds. A feather that misses lands as an item the player can pick up and throw back:
+/// holding one, a click throws it (`IRON_FEATHER_THROW_COOLDOWN` apart).
+pub const IRON_QUAIL_FEATHER_INTERVAL: f32 = 2.4;
+pub const IRON_QUAIL_FEATHER_MIN_RANGE: f32 = 4.0;
+pub const IRON_QUAIL_FEATHER_MAX_RANGE: f32 = 32.0;
+pub const IRON_FEATHER_SPEED: f32 = 28.0;
+pub const IRON_FEATHER_DAMAGE: i32 = 2;
+pub const IRON_FEATHER_THROW_DAMAGE: i32 = 10;
+pub const IRON_FEATHER_THROW_COOLDOWN: f32 = 0.45;
+pub const IRON_FEATHER_SPREAD: f32 = 0.02;
 
 // --- The ruined castle (found by wearing the crown) -----------------------------------------
 
@@ -892,22 +902,30 @@ pub const BAT_CAVE_MIN_AIR: i32 = 5;
 
 // --- The Wild Hunt ---------------------------------------------------------------------------
 
-/// Blowing the Horn of the Hunt inside Stonehenge (within `STONEHENGE_REACH` of its middle) calls the Wild Hunt, the last boss: three
+/// Blowing the Horn of the Hunt inside Stonehenge (within `STONEHENGE_REACH` of its middle) calls the Wild Hunt, the last boss:
 /// ghostly warriors who appear `HUNT_SPAWN_MIN_DISTANCE`..`MAX` blocks from the player and hunt them until they are dead (or the
-/// player is). They are three separate creatures with a shared health bar.
+/// player is). They are separate creatures with a shared health bar: a swordsman, two archers, two lancers on horses,
+/// `HUNT_GHOST_BEARS` ghostly bears and `HUNT_GHOST_CROWS` ghostly crows.
 /// - The **swordsman** runs at the player at `HUNT_SWORDSMAN_SPEED` (slower than a sprint) and cuts for `HUNT_SWORD_DAMAGE` every
 ///   `HUNT_SWORD_COOLDOWN` seconds.
-/// - The **archer** keeps between `HUNT_ARCHER_MIN_RANGE` and `HUNT_ARCHER_MAX_RANGE` of the player, side-stepping, and shoots an arrow
+/// - Each **archer** keeps between `HUNT_ARCHER_MIN_RANGE` and `HUNT_ARCHER_MAX_RANGE` of the player, side-stepping, and shoots an arrow
 ///   every `HUNT_ARCHER_INTERVAL` seconds when it can see them (`HUNT_ARROW_DAMAGE` each, `HUNT_ARROW_SPREAD` radians of error). A Rabbit
 ///   Foot in the player's hotbar makes it fire only half as often (`HUNT_ARCHER_FOOT_FACTOR`).
-/// - The **stalker** circles round to get behind the player (the way they are facing), at `HUNT_STALKER_CIRCLE_SPEED` and
-///   `HUNT_STALKER_CIRCLE_RADIUS` blocks out; once it is within `HUNT_STALKER_BEHIND_ANGLE` radians of straight behind, it dashes in
-///   at `HUNT_STALKER_DASH_SPEED` (faster than a sprint) and stabs once for `HUNT_STALKER_DAMAGE`, then runs back for
-///   `HUNT_STALKER_RETREAT_SECONDS` before circling again. A dash that finds no one in `HUNT_STALKER_DASH_SECONDS` gives up the same way.
-/// Excalibur does `EXCALIBUR_HUNT_FACTOR` times its damage to all three. Beating all three wins the game (the game goes on).
+/// - Each **lancer** rides a ghostly horse. It charges straight at the player at `HUNT_LANCER_CHARGE_SPEED` (faster than a sprint) and
+///   runs them through with its lance for `HUNT_LANCER_DAMAGE`, then gallops away for `HUNT_LANCER_RETREAT_SECONDS`, stands
+///   and rests for `HUNT_LANCER_REST_SECONDS`, and charges again. A charge that finds no one in `HUNT_LANCER_CHARGE_SECONDS` ends the same way.
+/// - The **ghostly bears** charge like bears (`HUNT_BEAR_*`) and the **ghostly crows** fly at the player and peck (`HUNT_CROW_*`). The first
+///   `HUNT_GHOST_BEARS` bears and the first `HUNT_GHOST_CROWS` crows each split in two when killed: `HUNT_SPLIT_INTO` more of the same kind
+///   come (and those do not split again).
+/// Excalibur does `EXCALIBUR_HUNT_FACTOR` times its damage to all of them. Beating them all wins the game (the game goes on).
 pub const HUNT_SWORDSMAN_HEALTH: i32 = 200;
 pub const HUNT_ARCHER_HEALTH: i32 = 120;
-pub const HUNT_STALKER_HEALTH: i32 = 140;
+pub const HUNT_LANCER_HEALTH: i32 = 140;
+pub const HUNT_BEAR_HEALTH: i32 = 60;
+pub const HUNT_CROW_HEALTH: i32 = 10;
+pub const HUNT_GHOST_BEARS: usize = 2;
+pub const HUNT_GHOST_CROWS: usize = 4;
+pub const HUNT_SPLIT_INTO: usize = 2;
 pub const HUNT_HALF_WIDTH: f32 = 0.4;
 pub const HUNT_HEIGHT: f32 = 1.9;
 pub const HUNT_SPAWN_MIN_DISTANCE: f32 = 10.0;
@@ -926,15 +944,176 @@ pub const HUNT_ARROW_SPEED: f32 = 30.0;
 pub const HUNT_ARROW_DAMAGE: u32 = 2;
 pub const HUNT_ARROW_SPREAD: f32 = 0.03;
 pub const HUNT_ARCHER_RANGE: f32 = 45.0;
-pub const HUNT_STALKER_CIRCLE_SPEED: f32 = 7.0;
-pub const HUNT_STALKER_CIRCLE_RADIUS: f32 = 7.0;
-pub const HUNT_STALKER_BEHIND_ANGLE: f32 = 0.55;
-pub const HUNT_STALKER_DASH_SPEED: f32 = 9.5;
-pub const HUNT_STALKER_DASH_SECONDS: f32 = 2.0;
-pub const HUNT_STALKER_RETREAT_SECONDS: f32 = 1.0;
-pub const HUNT_STALKER_DAMAGE: u32 = 4;
-pub const HUNT_STALKER_COOLDOWN: f32 = 0.5;
-pub const HUNT_STALKER_REACH: f32 = 0.8;
-pub const EXCALIBUR_HUNT_FACTOR: i32 = 3;
+/// A lancer's horse and rider are bigger than a walking warrior.
+pub const HUNT_LANCER_HALF_WIDTH: f32 = 0.6;
+pub const HUNT_LANCER_HEIGHT: f32 = 2.4;
+pub const HUNT_LANCER_CHARGE_SPEED: f32 = 10.5;
+pub const HUNT_LANCER_RETREAT_SPEED: f32 = 9.0;
+pub const HUNT_LANCER_CHARGE_SECONDS: f32 = 4.0;
+pub const HUNT_LANCER_RETREAT_SECONDS: f32 = 2.5;
+pub const HUNT_LANCER_REST_SECONDS: f32 = 3.0;
+pub const HUNT_LANCER_DAMAGE: u32 = 3;
+pub const HUNT_LANCER_COOLDOWN: f32 = 0.5;
+/// The lance reaches well past the horse's head.
+pub const HUNT_LANCER_REACH: f32 = 2.2;
+pub const HUNT_BEAR_DAMAGE: u32 = 2;
+pub const HUNT_BEAR_COOLDOWN: f32 = 1.2;
+pub const HUNT_BEAR_SPEED: f32 = 5.6;
+pub const HUNT_CROW_DAMAGE: u32 = 1;
+pub const HUNT_CROW_COOLDOWN: f32 = 1.3;
+pub const HUNT_CROW_SPEED: f32 = 7.0;
+pub const HUNT_CROW_REACH: f32 = 0.5;
 /// How long the victory message stays on the screen.
 pub const VICTORY_TEXT_SECONDS: f32 = 14.0;
+
+// --- Boss update: movement, the Yeti's attacks, Nessie, ravens, the Phoenix ---------------------
+
+/// Bosses climb ledges of up to two blocks (the mountain's cliffs, rocks and tree roots) instead of getting stuck on them: their jump
+/// is stronger than a deer's, and they feel for a free heading a few blocks ahead (`Animal::steer`) rather than walking into a wall.
+pub const BOSS_JUMP_SPEED: f32 = 11.5;
+/// How far ahead (blocks) a boss looks for something in its way, and for how long (seconds) it keeps to the way round it.
+pub const BOSS_FEEL_DISTANCE: f32 = 1.6;
+pub const BOSS_DETOUR_SECONDS: f32 = 0.8;
+/// A boss that has made less than `BOSS_UNSTICK_PROGRESS` blocks of headway in `BOSS_UNSTICK_SECONDS` takes a few strides the other way.
+pub const BOSS_UNSTICK_SECONDS: f32 = 1.2;
+pub const BOSS_UNSTICK_PROGRESS: f32 = 0.6;
+
+/// The Yeti's **smash**: within `YETI_SMASH_TRIGGER_RANGE` it may hit the ground (after `YETI_SMASH_WINDUP` seconds of rearing up), and
+/// everything within `YETI_SMASH_RADIUS` blocks takes `YETI_SMASH_DAMAGE` and is thrown `YETI_SMASH_KNOCKBACK` blocks away.
+pub const YETI_SMASH_RADIUS: f32 = 2.0;
+pub const YETI_SMASH_DAMAGE: u32 = 4;
+pub const YETI_SMASH_KNOCKBACK: f32 = 10.0;
+pub const YETI_SMASH_TRIGGER_RANGE: f32 = 3.2;
+pub const YETI_SMASH_WINDUP: f32 = 0.7;
+pub const YETI_SMASH_COOLDOWN: f32 = 6.0;
+/// The Yeti's **ice throw**, used only while the player is more than `YETI_ICE_MIN_RANGE` blocks away (and within `YETI_ICE_MAX_RANGE`):
+/// a lump of ice that bursts on landing, hurting everything within `ICE_BURST_RADIUS` for `ICE_BURST_DAMAGE`.
+pub const YETI_ICE_MIN_RANGE: f32 = 6.0;
+pub const YETI_ICE_MAX_RANGE: f32 = 40.0;
+pub const YETI_ICE_WINDUP: f32 = 0.6;
+pub const YETI_ICE_COOLDOWN: f32 = 4.0;
+pub const ICE_BALL_SPEED: f32 = 22.0;
+pub const ICE_BALL_GRAVITY: f32 = 9.0;
+pub const ICE_BURST_RADIUS: f32 = 2.5;
+pub const ICE_BURST_DAMAGE: u32 = 3;
+
+/// A smash's expanding ring and a burst's flash stay on screen this many seconds.
+pub const BURST_SHOW_SECONDS: f32 = 0.6;
+/// A hard knock (`Player::launch`, `Animal::launch`) throws its victim a given number of blocks: the push dies away at this rate.
+pub const LAUNCH_DECAY: f32 = 2.5;
+
+/// **Ravens** come out at night (up to `MAX_RAVEN`, weight `SPAWN_WEIGHT_RAVEN`) and go with the dawn. A raven keeps about `RAVEN_ORBIT_RADIUS`
+/// blocks from the player and `RAVEN_ORBIT_HEIGHT` above them, circling; every `RAVEN_ATTACK_MIN..MAX` seconds it swoops down at
+/// `RAVEN_DIVE_SPEED`, pecks for `RAVEN_DAMAGE`, and flies away again for `RAVEN_FLEE_SECONDS`. A raven called by the Loch Ness
+/// Monster (`Animal::summoned`) behaves as if it were night, by day as well, and does not leave at dawn.
+pub const RAVEN_HEALTH: i32 = 3;
+pub const RAVEN_HALF_WIDTH: f32 = 0.25;
+pub const RAVEN_HEIGHT: f32 = 0.5;
+pub const RAVEN_ORBIT_RADIUS: f32 = 13.0;
+pub const RAVEN_ORBIT_HEIGHT: f32 = 9.0;
+pub const RAVEN_CIRCLE_SPEED: f32 = 6.5;
+pub const RAVEN_DIVE_SPEED: f32 = 15.0;
+pub const RAVEN_FLEE_SPEED: f32 = 9.0;
+pub const RAVEN_FLEE_SECONDS: f32 = 3.0;
+pub const RAVEN_DIVE_SECONDS: f32 = 2.5;
+pub const RAVEN_ATTACK_MIN: f32 = 3.0;
+pub const RAVEN_ATTACK_MAX: f32 = 7.0;
+pub const RAVEN_DAMAGE: u32 = 1;
+pub const RAVEN_REACH: f32 = 0.6;
+pub const RAVEN_FEATHER_DROP: u32 = 1;
+pub const MAX_RAVEN: usize = 4;
+pub const SPAWN_WEIGHT_RAVEN: u64 = 60;
+
+/// **Nessie** (the Loch Ness Monster) will not come within `LOCH_NESS_SHORE_MARGIN` blocks of the shore. While the player is more than
+/// `LOCH_NESS_RAVEN_RANGE` blocks from her she calls `LOCH_NESS_RAVENS_PER_CALL` ravens (day or night) every `LOCH_NESS_RAVEN_INTERVAL`
+/// seconds, up to `LOCH_NESS_MAX_RAVENS` of hers at once. Every `LOCH_NESS_ACID_COOLDOWN` seconds she taints a line of water
+/// `LOCH_NESS_ACID_WIDTH` blocks wide, from herself towards the player, up to `LOCH_NESS_ACID_LENGTH` blocks long: for
+/// `ACID_SECONDS` it is brown and acidic, and a player wading in it loses `ACID_DAMAGE` every `ACID_DAMAGE_INTERVAL` seconds.
+/// A bow or a sling shot within `LOCH_NESS_SHOT_HEARING` blocks of her sends her off to the middle of the lake for `LOCH_NESS_FLEE_SECONDS`
+/// and calls `LOCH_NESS_ALARM_RAVENS` more ravens.
+pub const LOCH_NESS_SHORE_MARGIN: f32 = 5.0;
+pub const LOCH_NESS_RAVEN_RANGE: f32 = 6.0;
+/// She sets ravens and acid on a player anywhere within this many blocks of her (she hunts one within `LOCH_NESS_NOTICE_DISTANCE`).
+pub const LOCH_NESS_RAVEN_DISTANCE: f32 = 90.0;
+pub const LOCH_NESS_RAVENS_PER_CALL: usize = 2;
+pub const LOCH_NESS_RAVEN_INTERVAL: f32 = 9.0;
+pub const LOCH_NESS_MAX_RAVENS: usize = 6;
+pub const LOCH_NESS_ACID_COOLDOWN: f32 = 11.0;
+pub const LOCH_NESS_ACID_LENGTH: f32 = 36.0;
+pub const LOCH_NESS_ACID_WIDTH: f32 = 3.0;
+pub const LOCH_NESS_ACID_RANGE: f32 = 70.0;
+pub const ACID_SECONDS: f32 = 10.0;
+pub const ACID_DAMAGE: u32 = 1;
+pub const ACID_DAMAGE_INTERVAL: f32 = 1.0;
+pub const LOCH_NESS_SHOT_HEARING: f32 = 120.0;
+pub const LOCH_NESS_FLEE_SECONDS: f32 = 10.0;
+pub const LOCH_NESS_ALARM_RAVENS: usize = 4;
+pub const LOCH_NESS_RAVEN_SPAWN_HEIGHT: f32 = 12.0;
+
+// --- Sky islands, the volcano and the Phoenix -------------------------------------------------
+
+/// A Skylands island is of one of four kinds (`skylands::IslandKind`): wooded, with ancient ruins, with a hill, or with an ancient altar
+/// and bones. One island in `SKY_LARGE_ONE_IN` is the large form of its kind, `SKY_LARGE_FACTOR` times as wide.
+pub const SKY_LARGE_ONE_IN: u64 = 3;
+pub const SKY_LARGE_FACTOR: f32 = 1.3;
+/// The hill in the middle of a hill island rises this high, over this share of the island's radius.
+pub const SKY_HILL_HEIGHT: i32 = 3;
+pub const SKY_HILL_SHARE: f32 = 0.7;
+/// Ruins: a ring of broken wall at this share of the island's radius, and this many standing pillars inside it.
+pub const SKY_RUIN_RING_SHARE: f32 = 0.55;
+pub const SKY_RUIN_WALL_HEIGHT: i32 = 3;
+pub const SKY_RUIN_PILLARS: usize = 5;
+/// Bones lying about an altar island, per mille of the columns of its inner half.
+pub const SKY_BONES_PER_MILLE: u64 = 45;
+/// The giant island of the Phoenix: `PHOENIX_ISLAND_RADIUS` wide (about four times a normal island), `PHOENIX_ISLAND_DISTANCE` blocks from
+/// the middle of the Skylands in a direction the seed decides. A peep stone held in the Skylands leads there until the Phoenix is dead. The
+/// volcano is a cone `VOLCANO_RADIUS` wide at its foot and `VOLCANO_HEIGHT` high with a crater `VOLCANO_CRATER_RADIUS` wide.
+pub const PHOENIX_ISLAND_RADIUS: f32 = 38.0;
+pub const PHOENIX_ISLAND_DISTANCE: f32 = 320.0;
+pub const PHOENIX_ISLAND_DEPTH: i32 = 22;
+pub const VOLCANO_RADIUS: f32 = 22.0;
+pub const VOLCANO_HEIGHT: i32 = 16;
+pub const VOLCANO_CRATER_RADIUS: f32 = 9.0;
+/// The crater's floor lies this many blocks above the island's top.
+pub const VOLCANO_FLOOR: i32 = 3;
+/// The Phoenix lives in the crater and appears when the player comes within `PHOENIX_SPAWN_DISTANCE` of it. It flies, never straying more
+/// than `PHOENIX_LEASH` from the crater. It **swoops** (dives at the player for `PHOENIX_SWOOP_DAMAGE`) every `PHOENIX_SWOOP_INTERVAL`
+/// seconds and in between hovers and throws **fireballs** (`FIREBALL_DAMAGE` at the centre of a burst of `FIREBALL_RADIUS`) every
+/// `PHOENIX_FIREBALL_INTERVAL` seconds. Killing it ends the fire tornadoes for good and drops a Phoenix Feather.
+pub const PHOENIX_HEALTH: i32 = 260;
+pub const PHOENIX_HALF_WIDTH: f32 = 1.4;
+pub const PHOENIX_HEIGHT: f32 = 2.0;
+pub const PHOENIX_SPAWN_DISTANCE: f32 = 110.0;
+pub const PHOENIX_LEASH: f32 = 70.0;
+pub const PHOENIX_HOVER_HEIGHT: f32 = 14.0;
+pub const PHOENIX_HOVER_RADIUS: f32 = 16.0;
+pub const PHOENIX_CIRCLE_SPEED: f32 = 8.0;
+pub const PHOENIX_SWOOP_SPEED: f32 = 17.0;
+pub const PHOENIX_SWOOP_DAMAGE: u32 = 4;
+pub const PHOENIX_SWOOP_INTERVAL: f32 = 7.0;
+pub const PHOENIX_SWOOP_SECONDS: f32 = 3.0;
+pub const PHOENIX_SWOOP_REACH: f32 = 1.4;
+pub const PHOENIX_FIREBALL_INTERVAL: f32 = 3.2;
+pub const PHOENIX_FIREBALL_RANGE: f32 = 60.0;
+pub const FIREBALL_SPEED: f32 = 20.0;
+pub const FIREBALL_RADIUS: f32 = 2.2;
+pub const FIREBALL_DAMAGE: u32 = 3;
+pub const PHOENIX_FEATHER_DROP: u32 = 1;
+
+// --- Salt crystals, mine bats -----------------------------------------------------------------
+
+/// Pink salt crystals stand on the floors of the mines only deep inside the mountain (within `MINE_SALT_MAX_SHARE` of its radius from the
+/// middle), and are rare: `MINE_SALT_FLOOR_PER_MILLE` of the floor cells there.
+pub const MINE_SALT_MAX_SHARE: f32 = 0.5;
+pub const MINE_SALT_FLOOR_PER_MILLE: u64 = 14;
+/// Bats live in the mineshafts (`MAX_BAT_MINE` at a time, never in the open air): they come out of sight in the tunnels near the player.
+pub const MAX_BAT_MINE: usize = 5;
+pub const BAT_MINE_MIN_DISTANCE: f32 = 8.0;
+pub const BAT_MINE_MAX_DISTANCE: f32 = 26.0;
+
+/// An Iron Quail that is keeping her distance to shoot closes in below `IRON_QUAIL_KITE_MIN` blocks' worth of room and backs off above
+/// `IRON_QUAIL_KITE_MAX`: she holds between the two, strafing. A bat of the mines notices a player within `BAT_MINE_NOTICE_DISTANCE`.
+pub const IRON_QUAIL_KITE_MIN: f32 = 10.0;
+pub const IRON_QUAIL_KITE_MAX: f32 = 16.0;
+pub const BAT_MINE_NOTICE_DISTANCE: f32 = 14.0;
+pub const EXCALIBUR_HUNT_FACTOR: i32 = 3;

@@ -708,3 +708,71 @@ mod tests {
         assert!(trail_wisps(&[], TRAIL_LENGTH, TRAIL_SPACING, 0.0).is_empty());
     }
 }
+
+// --- Boss effects: thrown ice and fire, bursts, the Yeti's smash ring, Nessie's acid ----------------
+
+/// Draw the Yeti's lumps of ice and the Phoenix's fireballs in flight. Call while the 3D camera is active.
+pub fn draw_projectiles(projectiles: &[crate::hazard::Projectile], time: f32) {
+    use crate::hazard::ProjectileKind;
+    for p in projectiles {
+        match p.kind {
+            ProjectileKind::IceBall => {
+                draw_box(p.pos, Vec3::splat(0.32), time * 3.0 + p.age, Color::new(0.70, 0.88, 1.0, 1.0));
+                draw_box(p.pos, Vec3::splat(0.22), -time * 2.0, Color::new(0.92, 0.97, 1.0, 1.0));
+            }
+            ProjectileKind::Fireball => {
+                let flicker = 0.5 + 0.5 * (time * 20.0 + p.age * 9.0).sin();
+                draw_box(p.pos, Vec3::splat(0.45), time * 4.0, Color::new(1.0, 0.45, 0.05, 1.0));
+                draw_box(p.pos, Vec3::splat(0.30), -time * 3.0, Color::new(1.0, 0.85, 0.25, 1.0));
+                draw_box(p.pos, Vec3::splat(0.75 + 0.2 * flicker), time, Color::new(1.0, 0.40, 0.05, 0.25));
+            }
+        }
+    }
+}
+
+/// Draw the flashes where a lump of ice or a fireball burst, and the ring that runs out from the Yeti's smash: translucent boxes that grow
+/// and fade over `BURST_SHOW_SECONDS`. Call while the 3D camera is active, with the other translucent things.
+pub fn draw_bursts(bursts: &[crate::game::ShownBurst]) {
+    use crate::game::BurstShape;
+    for b in bursts {
+        let t = (b.age / BURST_SHOW_SECONDS).clamp(0.0, 1.0);
+        let fade = 1.0 - t;
+        match b.shape {
+            BurstShape::Ice | BurstShape::Fire => {
+                let (radius, colour) = if b.shape == BurstShape::Ice {
+                    (ICE_BURST_RADIUS, (0.75, 0.92, 1.0))
+                } else {
+                    (FIREBALL_RADIUS, (1.0, 0.50, 0.10))
+                };
+                let r = radius * (0.35 + 0.65 * t);
+                draw_box(b.pos, Vec3::splat(r * 0.7), t * 3.0, Color::new(colour.0, colour.1, colour.2, 0.55 * fade));
+                for i in 0..8 {
+                    let a = i as f32 * std::f32::consts::TAU / 8.0 + t;
+                    draw_box(b.pos + vec3(a.cos() * r, 0.2 + 0.5 * t, a.sin() * r), Vec3::splat(0.14), a, Color::new(colour.0, colour.1, colour.2, 0.9 * fade));
+                }
+            }
+            BurstShape::Smash => {
+                // A ring of dust and cracked ground that runs out to the smash's radius and beyond.
+                let r = (crate::config::YETI_SMASH_RADIUS + 0.9) * (0.3 + 0.7 * t);
+                for i in 0..20 {
+                    let a = i as f32 * std::f32::consts::TAU / 20.0;
+                    draw_box(b.pos + vec3(a.cos() * r, 0.15 + 0.3 * (1.0 - t), a.sin() * r), vec3(0.25, 0.18 + 0.2 * fade, 0.25), a, Color::new(0.85, 0.88, 0.95, 0.8 * fade));
+                }
+            }
+        }
+    }
+}
+
+/// Draw the lake water Nessie has made acid: a brown, translucent skin over each tainted column, just over the water's surface.
+/// Call while the 3D camera is active, after the water.
+pub fn draw_acid(world: &World, acid: &[crate::hazard::AcidCell], time: f32) {
+    for cell in acid {
+        let ground = world.ground_top(cell.x, cell.z);
+        // The surface of the water: the top of the highest wet cell above the lake bed.
+        let Some(wet) = (ground..ground + 5).rev().find(|&y| world.block_at(cell.x, y, cell.z).is_wet()) else { continue };
+        let fade = (cell.left / 1.5).clamp(0.0, 1.0);
+        let y = wet as f32 + 1.0 - WATER_SURFACE_DROP + 0.02;
+        let shimmer = 0.04 * (time * 3.0 + cell.x as f32 * 0.7 + cell.z as f32 * 0.5).sin();
+        draw_box(vec3(cell.x as f32 + 0.5, y, cell.z as f32 + 0.5), vec3(0.5, 0.02 + shimmer.abs(), 0.5), 0.0, Color::new(0.45, 0.28, 0.10, 0.62 * fade));
+    }
+}

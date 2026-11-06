@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
 use crate::culling::chunks_to_draw;
 use crate::dropped::draw_dropped_items;
-use crate::effects::{draw_cyclone, draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
+use crate::effects::{draw_acid, draw_bursts, draw_projectiles, draw_cyclone, draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
 use crate::game::Game;
 use crate::item::ItemKind;
 use crate::hud::{draw_compass, CompassTarget, draw_hotbar, inventory_screen};
@@ -274,13 +274,16 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye), game.world.night);
     draw_arrows(&game.arrows);
     draw_arrows(&game.hostile_arrows);
+    draw_projectiles(&game.projectiles, get_time() as f32);
     // The water goes on last: it is translucent and the bed, the items and the animals behind it show through.
     for key in &drawn {
         for mesh in &game.world.chunks[key].water {
             draw_mesh(mesh);
         }
     }
+    draw_acid(&game.world, &game.acid, get_time() as f32);
     draw_ghosts(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
+    draw_bursts(&game.bursts);
     if game.storm_active {
         draw_storm_rain(eye, get_time() as f32);
         if let Some((pos, flash)) = game.storm_lightning() {

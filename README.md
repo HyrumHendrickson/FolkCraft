@@ -233,6 +233,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `world.rs` | Chunk streaming, block access, edits (`break_block`, `set_block`), fire timers and bellows glow, cooking and smelting on fires, shape-aware collision (`box_blocked`), raycast (`raycast_hit`), `ray_box`. |
 | `terrain.rs` | Generation: ground (`ground_top_with`, hills and valleys as `Relief`, river and lake beds and water, mountains and their snow), trees, clearings and their plants. `generate_chunk_with` takes the world's `Landmarks`. |
 | `horizen.rs` | `Dimension` and the Horizen, a cave: arrival chamber and pool, a winding tunnel (`tunnel_point`, `route`), one very large cavern (`cavern_centre`) and ponds on the floor. `air_height` is the cave's shape. |
+| `hazard.rs` | The Yeti's ice balls and the Phoenix's fireballs (`Projectile`, `Burst`) and the line of acid water Nessie makes (`acid_line`, `AcidCell`). Pure logic. |
 | `tornado.rs` | The Skylands' one daytime fire tornado (movement, target capture, collision and damage timing) and the `Cyclone` that carries the player between dimensions. |
 | `skylands.rs` | The third dimension: floating islands on a grid, wooden bridges between them, a few oaks (`generate_chunk`, `surface_top`, `spawn_point`, `home_cyclone`). Pure functions of the seed. |
 | `tower.rs` | The silver tower: `tower_cell` (shape, locked door, spiral stair, relic plinth), `Relic`, and `Tower` (the Horizen's, with its trail approach). Pure functions. |
@@ -526,7 +527,7 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
   middle. A fall out of the Skylands lands there (`Game::jungle_landing`), `SKY_FALL_DROP` above the ground.
 - **Deer** leave `DEER_BONE_DROP` Deer Bones `DEER_BONE_CHANCE` percent of the time; 3 bones craft Musical Pipes. Pipes, pink salt and the three relics do nothing yet.
 
-## Update: the cave Horizen, crows, the Mother of Quail, the tin pan and the king's relics
+## Update: the cave Horizen, crows, the Iron Quail, the tin pan and the king's relics
 
 - **The Horizen is a cave** (`horizen.rs`). Solid stone to `HORIZEN_ROOF_Y` with a flat dirt floor at `GROUND_TOP`; `air_height(seed, x, z)` is the
   free height above the floor (0 = rock, otherwise at least `HORIZEN_MIN_AIR`, with a rough ceiling). Three parts, one connected way (tests walk it for 12
@@ -541,8 +542,8 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
   while the player is within `CROW_FOLLOW_DISTANCE`; beyond `CROW_LOSE_DISTANCE` it resets. At `CROW_ALTAR_WEST_BLOCKS` (two chunks) the crow, as it comes down,
   lands on a new **ancient altar** (`Game::land_crows_at_altars`): `Block::AltarLoadstone` placed on bare ground near it (saved as a placed block). Taking the loadstone by hand
   (`Game::mine`) leaves `Block::AncientAltar`.
-- **Mother of Quail** (`AnimalKind::MotherOfQuail`, a boss with a health bar, `is_leashed` false): every `QUAIL_KILLS_PER_MOTHER` quail killed (`Game::quail_kills`, saved as
-  `quailkills`) one comes (`Game::summon_mothers`, `mothers_owed`). She charges at all times, never despawns and is removed when the player dies; one left behind in
+- **Iron Quail** (`AnimalKind::IronQuail`, a boss with a health bar, `is_leashed` false): every `QUAIL_KILLS_PER_IRON_QUAIL` quail killed (`Game::quail_kills`, saved as
+  `quailkills`) one comes (`Game::summon_iron_quails`, `iron_quails_owed`). She charges at all times, never despawns and is removed when the player dies; one left behind in
   another dimension returns on re-entering the overworld. Drops a Silver Key.
 - **Tin Pan** (2 Tin): breaking `WetClay` with it held adds a Gold with `TIN_PAN_GOLD_CHANCE` percent, `TIN_PAN_RABBIT_FOOT_GOLD_CHANCE` with a rabbit foot in the hotbar.
 - **Philosopher's Stone**: right click a `Boulder` (`Game::turn_boulder_to_gold`) to make a `GoldBoulder` (saved as a placed block; the boulder's removal is recorded so
@@ -580,7 +581,7 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 ## Update: reusable key, a flying Mother, the forge, the backpack, ghosts, Stonehenge and the pipes
 
 - **Silver key** is kept: `Game::try_unlock` opens the door for good and does not take the key.
-- **Mother of Quail flies** (`Animal::update`): while charging she holds a height just above the player's head (`threat.y + 2`; level with them once within three
+- **Iron Quail flies** (`Animal::update`): while charging she holds a height just above the player's head (`threat.y + 2`; level with them once within three
   blocks, higher while `stuck` against something), with no gravity, and is drawn with wings beating whenever she is off the ground (`Animal::is_airborne`).
 - **Clay forge model** (`block.rs`, `forge_parts!`): footing, rounded body, shoulder, chimney with a rim, a stoking mouth under an arch with a bellows nozzle, and buttresses. The coal
   is `parts()[5]` at the chimney's mouth, and `effects::draw_flames` puts the glow and flames there.
@@ -605,7 +606,7 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Bone totem in the Skylands.** `Game::trail_path` leads a held totem, by day or night, to the Skylands tower (`Landmarks::sky_tower`, by way of `Tower::approach`) once it has appeared. `effects::trail_floor` keeps the wisps over each island's top, or at the player's feet height over the void.
 - **Ruined lake tower** (`tower::ruined_tower_cell`, `Lake::tower_cell(.., ruined)`, `Landmarks::tower_ruined`). While a lake's Loch Ness Monster lives (`monster_alive`), its island's tower is a ruin: wall stumps of `1..=RUINED_WALL_MAX` blocks (corners `RUINED_CORNER_HEIGHT`), a doorway gap and no door, no floors, roof or plinth, rubble, and a stair broken after `RUINED_STAIR_STEPS` steps. A test searches every place a player can reach by hopping one block at a time and finds nothing above the stumps. `World::record_monster_slain` now regenerates the tower's chunks: it is whole again, with its door locked until a silver key is used on it (`Game::try_unlock`, unchanged).
 - **Bats** (`AnimalKind::Bat`): fly (no gravity; they hover about the player's body, weaving), bite for `BAT_DAMAGE` every `BAT_ATTACK_COOLDOWN`, `BAT_HEALTH` 2, no drops. They are never normal-world wildlife (`Game::spawn_wildlife` gives them no room there). `Game::play_pipes` calls `Game::call_bats` at night in the overworld: `BATS_PER_PIPES` appear `BAT_PIPES_MIN_DISTANCE..MAX` away in the air, `Animal::hunting` set, never more than `MAX_BAT_OVERWORLD` in all; `update_animals` removes overworld bats once it is day. In the Horizen `update_animals` now runs (it used to return at once) and `Game::spawn_cave_bats` is the only spawn, in open cave with `BAT_CAVE_MIN_AIR` of air, up to `MAX_BAT_CAVE`; a cave bat attacks within `BAT_NOTICE_DISTANCE`. Drawn by `animal_draw::bat_parts`.
-- **The Wild Hunt** (final boss). The Horn of the Hunt (the Skylands tower's relic) is blown with right click (`Game::blow_horn`, called from `play::handle_placing`). Outside Stonehenge (`Game::in_stonehenge`: within `STONEHENGE_REACH` of the middle, overworld) only the wind answers; inside, three separate bosses (`AnimalKind::HuntSwordsman`, `HuntArcher`, `HuntStalker`, `is_wild_hunt`) appear `HUNT_SPAWN_MIN_DISTANCE..MAX` from the player, one health bar between them (`Game::boss_bar`). Blowing again while any lives calls no more. They never despawn (`AnimalKind::never_gives_up`, shared with the Mother of Quail) and are removed, with their arrows, when the player dies or changes dimension.
+- **The Wild Hunt** (final boss). The Horn of the Hunt (the Skylands tower's relic) is blown with right click (`Game::blow_horn`, called from `play::handle_placing`). Outside Stonehenge (`Game::in_stonehenge`: within `STONEHENGE_REACH` of the middle, overworld) only the wind answers; inside, three separate bosses (`AnimalKind::HuntSwordsman`, `HuntArcher`, `HuntStalker`, `is_wild_hunt`) appear `HUNT_SPAWN_MIN_DISTANCE..MAX` from the player, one health bar between them (`Game::boss_bar`). Blowing again while any lives calls no more. They never despawn (`AnimalKind::never_gives_up`, shared with the Iron Quail) and are removed, with their arrows, when the player dies or changes dimension.
   - Swordsman: charges at `HUNT_SWORDSMAN_SPEED` (below `SPRINT_SPEED`), strikes through `Animal::try_attack`.
   - Archer: keeps `HUNT_ARCHER_MIN_RANGE..MAX_RANGE` from the player and side-steps. `Animal::ready_to_shoot` says when an arrow is nocked; `Game::update_animals` aims it (leading the player and allowing for gravity, `HUNT_ARROW_SPREAD` of error), checks `clear_line`, pushes an `Arrow::from_archer` into `Game::hostile_arrows` and calls `Animal::shot_fired(slowdown)`. A Rabbit Foot in the hotbar makes `slowdown` `HUNT_ARCHER_FOOT_FACTOR` (2): half as often. `Game::update_hostile_arrows` flies them; `Arrow::hit_player` tests the segment each frame. They hurt the player only and are not dropped as items.
   - Stalker: `Animal::hunt_phase` (`HuntPhase::Circle`, `Dash`, `Retreat`). It works round the player at `HUNT_STALKER_CIRCLE_RADIUS` to the point straight behind the way they face (`Animal::player_facing`, set each frame from `Player::yaw`); within `HUNT_STALKER_BEHIND_ANGLE` of it, it dashes at `HUNT_STALKER_DASH_SPEED`. `try_attack` lets it stab only while dashing, and a stab (or `HUNT_STALKER_DASH_SECONDS` without one) starts a `HUNT_STALKER_RETREAT_SECONDS` retreat.
@@ -615,3 +616,30 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Graveyard ghost** (`ghosts::GRAVEYARD_THANKS`) now also says that in three lonely towers there are others who may like to hear the music.
 - **Fire tornadoes** (Skylands): `Game::tornadoes` is a list. One spawns every `SKY_TORNADO_INTERVAL` (15 s, half what it was) and each lasts `SKY_TORNADO_LIFETIME` (30 s, as long as before: `FireTornado::age`), so there are sometimes two. Night clears them all.
 - Save format: `won` (the Wild Hunt is beaten). `back` is read but no longer written.
+
+## Update: the boss update, ravens, sky islands, the Phoenix
+
+- **Boss movement** (`Animal::steer`, `way_is_free`, `can_hop`, `check_progress`): every boss that walks feels `BOSS_FEEL_DISTANCE` ahead for something in its way, picks the nearest free turn
+  on the side it last went round by (so it does not dither along a wall) and keeps it for `BOSS_DETOUR_SECONDS`. Bosses jump with `BOSS_JUMP_SPEED` and climb ledges of two blocks, but jump only at what they can get over. One
+  that has made less than `BOSS_UNSTICK_PROGRESS` of headway in `BOSS_UNSTICK_SECONDS` takes a forced stride the other way.
+- **Yeti**: close up (`YETI_SMASH_TRIGGER_RANGE`) it rears up for `YETI_SMASH_WINDUP` and smashes: `BossEvent::Smash` -> `Game::carry_out` hurts everything within `YETI_SMASH_RADIUS` of its body (4 damage) and throws it
+  `YETI_SMASH_KNOCKBACK` blocks (`Player::launch`, `Animal::launch`, which decay at `LAUNCH_DECAY` so the throw carries a set distance), other yetis excepted. More than `YETI_ICE_MIN_RANGE` away it throws ice
+  (`BossEvent::IceThrow`, `Projectile` + `Burst`, `ICE_BURST_RADIUS`, `ICE_BURST_DAMAGE`). Its fists still hit.
+- **Loch Ness Monster**: keeps `LOCH_NESS_SHORE_MARGIN` blocks from the shore (`shore_clearance`; one nearer the shore may still move out). Within `LOCH_NESS_RAVEN_DISTANCE`, while the player is more than `LOCH_NESS_RAVEN_RANGE`
+  from her, she calls ravens (`BossEvent::CallRavens`, `Animal::summoned`, they act as if it were night and stay by day) and every `LOCH_NESS_ACID_COOLDOWN` taints a strip of water towards the player (`BossEvent::Acid`,
+  `Game::acid`, drawn brown by `effects::draw_acid`): for `ACID_SECONDS` wading in it costs `ACID_DAMAGE` a second (`Game::standing_in_acid`). A bow or sling shot (`Game::alarm_nessie`) sends her to open water for
+  `LOCH_NESS_FLEE_SECONDS` and calls `LOCH_NESS_ALARM_RAVENS` more ravens.
+- **Ravens** (`AnimalKind::Raven`, `AirPhase`): at night up to `MAX_RAVEN` circle the player at `RAVEN_ORBIT_RADIUS`, swoop for `RAVEN_DAMAGE`, fly off for `RAVEN_FLEE_SECONDS`, and go at dawn.
+- **Iron Quail** (was the Mother of Quail): `IRON_QUAILS_PER_SUMMON` (3) come for every `QUAIL_KILLS_PER_IRON_QUAIL` quail. Each alternates closing in to strike with keeping `IRON_QUAIL_KITE_MIN..MAX` off and shooting iron feathers
+  (`Arrow::from_iron_quail`, `Game::hostile_arrows`). A missed **Iron Feather** lies on the ground; held, a click throws it (`Game::throw_feather`, `IRON_FEATHER_THROW_DAMAGE`): used up only on hitting an animal.
+- **Silver key**: `Game::key_or_gold` turns any further silver key drop (mine stand, graveyard ghost, Iron Quail) into a Gold if the player has a key or one lies on the ground (`Game::has_silver_key`).
+- **Wild Hunt**: swordsman, two archers, two **lancers** (`HuntLancer`: `HuntPhase::Dash`/`Retreat`/`Rest`, replacing the stalker), `HUNT_GHOST_BEARS` ghostly bears and `HUNT_GHOST_CROWS` ghostly crows. Bears and crows
+  with `Animal::splits` are replaced by `HUNT_SPLIT_INTO` of their kind (which do not split) when killed (`Game::remove_dead`). `Game::hunt_total` is the shared bar's whole.
+- **Fire tornadoes**: `SKY_TORNADO_INTERVAL` is a quarter of the lifetime (up to four at once), `SKY_TORNADO_DAMAGE` 4. `Landmarks::phoenix_slain` (saved as `phoenixslain` in the Skylands' records) stops them for good.
+- **Cyclone**: `CYCLONE_SECONDS` 2.5. The Skylands have no cyclone; the way down is to fall.
+- **Salt and bats in the mines**: `Block::PinkSalt` is a crystal cluster on tunnel floors, only within `MINE_SALT_MAX_SHARE` of the mountain's radius, `MINE_SALT_FLOOR_PER_MILLE` of floor cells. Up to `MAX_BAT_MINE` bats
+  (`Animal::lives_in_mine`) come out in the tunnels (`Game::player_in_mine`, `spawn_mine_bats`) and stay by day.
+- **Sky islands** (`skylands::IslandKind`): wooded, ruins (`decoration`), hill (`Island::rise_at`) or altar (`Block::AncientAltar` and `Block::Bones`); one in `SKY_LARGE_ONE_IN` is `SKY_LARGE_FACTOR` wider. Only wooded
+  islands take the tower. The **giant island** (`giant_island`) replaces a block of nine cells a few cells from the first island; a held Peep Stone leads to the foot of its volcano (`volcano_foot`, `Game::trail_path`).
+- **Phoenix** (`AnimalKind::Phoenix`, `skylands::volcano_crater`, `Block::Magma`): spawns in the crater when the player comes within `PHOENIX_SPAWN_DISTANCE` (`Game::spawn_bosses`), hovers and throws fireballs
+  (`BossEvent::Fireball`) and swoops. It drops a **Phoenix Feather**; Pebble + Stick + Phoenix Feather make a **Phoenix Arrow**, which a bow shoots in preference to ordinary arrows, never used up and never landing.

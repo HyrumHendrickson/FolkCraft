@@ -19,8 +19,13 @@
 //!   attacks or drops.
 //! - **Bats** fly: they hover about the player's body and bite. The pipes call them at night in the normal world; the Horizen's cave
 //!   has them as wildlife.
-//! - **The Wild Hunt** is three ghostly warriors: a swordsman that charges, an archer that keeps its distance and shoots (`Game` flies
-//!   its arrows), and a stalker that circles behind the player, dashes in to stab once and runs back (`HuntPhase`).
+//! - **The Wild Hunt** is ghostly: a swordsman that charges, two archers that keep their distance and shoot (`Game` flies their
+//!   arrows), two lancers on horses that charge, strike, gallop off, rest and charge again (`HuntPhase`), and ghostly bears and
+//!   crows, the first few of which split in two when killed.
+//! - **Ravens** circle the player at night, swoop down for one blow and fly away again (`AirPhase`); the Loch Ness Monster calls
+//!   some that behave so by day too. **The Phoenix** hovers over its volcano, throwing fireballs and swooping.
+//! - **Bosses** feel for a free way ahead (`Animal::steer`) and can climb two-block ledges, so they do not get stuck on trees,
+//!   rocks and cliffs. The Yeti smashes the ground and throws ice, and Nessie keeps out of the shallows (`BossEvent`).
 //! - A hurt animal, and a hurt player, are knocked back (`Animal::knock_back`, `Player::knock_back`).
 //!
 //! Animals hop up one-block steps, so hills and logs do not trap them, and turn aside when
@@ -48,15 +53,22 @@ pub enum AnimalKind {
     /// Like a quail, but black, and it always flies west when it can.
     Crow,
     /// The boss that comes for a player who has killed ten quail. It never gives up.
-    MotherOfQuail,
+    IronQuail,
     /// A small flying biter: called by the pipes at night in the normal world, and part of the wildlife of the Horizen's cave.
     Bat,
     /// The Wild Hunt, the last boss, is these three ghostly warriors: one charges with a sword...
     HuntSwordsman,
     /// ...one shoots arrows from afar...
     HuntArcher,
-    /// ...and one gets behind the player, runs in to stab once, and runs back.
-    HuntStalker,
+    /// ...two ride ghostly horses, charge with a lance, gallop away, rest and charge again...
+    HuntLancer,
+    /// ...and ghostly bears and crows come with them.
+    HuntBear,
+    HuntCrow,
+    /// A black bird that circles the player at a distance at night, swoops down for one blow and flies away.
+    Raven,
+    /// The boss in the volcano of the giant Skylands island.
+    Phoenix,
 }
 
 impl AnimalKind {
@@ -71,29 +83,43 @@ impl AnimalKind {
             AnimalKind::Yeti => YETI_HEALTH,
             AnimalKind::LochNessMonster => LOCH_NESS_HEALTH,
             AnimalKind::Crow => CROW_HEALTH,
-            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_HEALTH,
+            AnimalKind::IronQuail => IRON_QUAIL_HEALTH,
             AnimalKind::Bat => BAT_HEALTH,
             AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_HEALTH,
             AnimalKind::HuntArcher => HUNT_ARCHER_HEALTH,
-            AnimalKind::HuntStalker => HUNT_STALKER_HEALTH,
+            AnimalKind::HuntLancer => HUNT_LANCER_HEALTH,
+            AnimalKind::HuntBear => HUNT_BEAR_HEALTH,
+            AnimalKind::HuntCrow => HUNT_CROW_HEALTH,
+            AnimalKind::Raven => RAVEN_HEALTH,
+            AnimalKind::Phoenix => PHOENIX_HEALTH,
         }
     }
 
-    /// Whether this is one of the three warriors of the Wild Hunt.
+    /// Whether this is one of the creatures of the Wild Hunt: the warriors, and the ghostly bears and crows.
     pub fn is_wild_hunt(self) -> bool {
-        matches!(self, AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker)
+        matches!(self, AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow)
     }
 
-    /// Whether the game keeps this creature alive and moving wherever the player goes: the Mother of Quail and the Wild Hunt hunt
+    /// Whether this creature flies (no gravity, and it is drawn with its wings beating).
+    pub fn flies_always(self) -> bool {
+        matches!(self, AnimalKind::Bat | AnimalKind::HuntCrow | AnimalKind::Raven | AnimalKind::Phoenix)
+    }
+
+    /// Whether this is a bat-like flier: it hovers about the player's body, weaving, and bites.
+    fn is_bat_like(self) -> bool {
+        matches!(self, AnimalKind::Bat | AnimalKind::HuntCrow)
+    }
+
+    /// Whether the game keeps this creature alive and moving wherever the player goes: the Iron Quail and the Wild Hunt hunt
     /// for ever (until the player dies or leaves the world).
     pub fn never_gives_up(self) -> bool {
-        self == AnimalKind::MotherOfQuail || self.is_wild_hunt()
+        self == AnimalKind::IronQuail || self.is_wild_hunt()
     }
 
     /// Whether this is one of the two bosses (they show a health bar, are never spawned as wildlife and are kept
     /// within a leash of where they appeared).
     pub fn is_boss(self) -> bool {
-        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail) || self.is_wild_hunt()
+        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Phoenix) || self.is_wild_hunt()
     }
 
     /// Whether this boss stays near where it appeared and is given up on when far away (the others hunt for ever).
@@ -106,8 +132,9 @@ impl AnimalKind {
         match self {
             AnimalKind::Yeti => "The Yeti",
             AnimalKind::LochNessMonster => "The Loch Ness Monster",
-            AnimalKind::MotherOfQuail => "The Mother of Quail",
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => "The Wild Hunt",
+            AnimalKind::IronQuail => "The Iron Quail",
+            AnimalKind::Phoenix => "The Phoenix",
+            kind if kind.is_wild_hunt() => "The Wild Hunt",
             _ => "",
         }
     }
@@ -117,10 +144,13 @@ impl AnimalKind {
         match self {
             AnimalKind::Yeti => YETI_REACH,
             AnimalKind::LochNessMonster => LOCH_NESS_REACH,
-            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_REACH,
+            AnimalKind::IronQuail => IRON_QUAIL_REACH,
             AnimalKind::Bat => BAT_REACH,
             AnimalKind::HuntSwordsman => HUNT_SWORD_REACH,
-            AnimalKind::HuntStalker => HUNT_STALKER_REACH,
+            AnimalKind::HuntLancer => HUNT_LANCER_REACH,
+            AnimalKind::HuntCrow => HUNT_CROW_REACH,
+            AnimalKind::Raven => RAVEN_REACH,
+            AnimalKind::Phoenix => PHOENIX_SWOOP_REACH,
             _ => BEAR_REACH,
         }
     }
@@ -137,9 +167,14 @@ impl AnimalKind {
             AnimalKind::Yeti => 0.9,
             AnimalKind::LochNessMonster => 1.1,
             AnimalKind::Crow => 0.2,
-            AnimalKind::MotherOfQuail => 1.0,
+            AnimalKind::IronQuail => 1.0,
             AnimalKind::Bat => BAT_HALF_WIDTH,
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => HUNT_HALF_WIDTH,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher => HUNT_HALF_WIDTH,
+            AnimalKind::HuntLancer => HUNT_LANCER_HALF_WIDTH,
+            AnimalKind::HuntBear => 0.55,
+            AnimalKind::HuntCrow => 0.2,
+            AnimalKind::Raven => RAVEN_HALF_WIDTH,
+            AnimalKind::Phoenix => PHOENIX_HALF_WIDTH,
         }
     }
 
@@ -155,9 +190,14 @@ impl AnimalKind {
             AnimalKind::Yeti => 3.2,
             AnimalKind::LochNessMonster => 3.4,
             AnimalKind::Crow => 0.45,
-            AnimalKind::MotherOfQuail => 2.2,
+            AnimalKind::IronQuail => 2.2,
             AnimalKind::Bat => BAT_HEIGHT,
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => HUNT_HEIGHT,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher => HUNT_HEIGHT,
+            AnimalKind::HuntLancer => HUNT_LANCER_HEIGHT,
+            AnimalKind::HuntBear => 1.4,
+            AnimalKind::HuntCrow => 0.45,
+            AnimalKind::Raven => RAVEN_HEIGHT,
+            AnimalKind::Phoenix => PHOENIX_HEIGHT,
         }
     }
 
@@ -172,11 +212,15 @@ impl AnimalKind {
             AnimalKind::Yeti => YETI_WALK_SPEED,
             AnimalKind::LochNessMonster => LOCH_NESS_WALK_SPEED,
             AnimalKind::Crow => CROW_WALK_SPEED,
-            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_RUN_SPEED,
+            AnimalKind::IronQuail => IRON_QUAIL_RUN_SPEED,
             AnimalKind::Bat => BAT_WANDER_SPEED,
             AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_SPEED,
             AnimalKind::HuntArcher => HUNT_ARCHER_STRAFE_SPEED,
-            AnimalKind::HuntStalker => HUNT_STALKER_CIRCLE_SPEED,
+            AnimalKind::HuntLancer => HUNT_LANCER_CHARGE_SPEED,
+            AnimalKind::HuntBear => HUNT_BEAR_SPEED,
+            AnimalKind::HuntCrow => HUNT_CROW_SPEED,
+            AnimalKind::Raven => RAVEN_CIRCLE_SPEED,
+            AnimalKind::Phoenix => PHOENIX_CIRCLE_SPEED,
         }
     }
 
@@ -189,9 +233,10 @@ impl AnimalKind {
             AnimalKind::Rabbit => (1.0, 3.5),
             AnimalKind::Moose => (3.0, 8.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
-            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => (2.0, 5.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail => (2.0, 5.0),
             AnimalKind::Bat => (0.5, 1.5),
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => (1.0, 1.0),
+            AnimalKind::Raven | AnimalKind::Phoenix => (1.0, 1.0),
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
         }
     }
 
@@ -204,9 +249,10 @@ impl AnimalKind {
             AnimalKind::Rabbit => (0.8, 2.0),
             AnimalKind::Moose => (2.0, 5.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
-            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail => (3.0, 6.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail => (3.0, 6.0),
             AnimalKind::Bat => (1.0, 2.5),
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => (1.0, 1.0),
+            AnimalKind::Raven | AnimalKind::Phoenix => (1.0, 1.0),
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
         }
     }
 
@@ -232,10 +278,14 @@ impl AnimalKind {
             AnimalKind::Bear => BEAR_DAMAGE,
             AnimalKind::Yeti => YETI_DAMAGE,
             AnimalKind::LochNessMonster => LOCH_NESS_DAMAGE,
-            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_DAMAGE,
+            AnimalKind::IronQuail => IRON_QUAIL_DAMAGE,
             AnimalKind::Bat => BAT_DAMAGE,
             AnimalKind::HuntSwordsman => HUNT_SWORD_DAMAGE,
-            AnimalKind::HuntStalker => HUNT_STALKER_DAMAGE,
+            AnimalKind::HuntLancer => HUNT_LANCER_DAMAGE,
+            AnimalKind::HuntBear => HUNT_BEAR_DAMAGE,
+            AnimalKind::HuntCrow => HUNT_CROW_DAMAGE,
+            AnimalKind::Raven => RAVEN_DAMAGE,
+            AnimalKind::Phoenix => PHOENIX_SWOOP_DAMAGE,
             _ => 0,
         }
     }
@@ -247,9 +297,11 @@ impl AnimalKind {
             AnimalKind::Bear => "A bear killed you",
             AnimalKind::Yeti => "The Yeti killed you",
             AnimalKind::LochNessMonster => "The Loch Ness Monster killed you",
-            AnimalKind::MotherOfQuail => "The Mother of Quail killed you",
+            AnimalKind::IronQuail => "The Iron Quail killed you",
             AnimalKind::Bat => "A bat killed you",
-            AnimalKind::HuntSwordsman | AnimalKind::HuntStalker => "The Wild Hunt killed you",
+            AnimalKind::Raven => "A raven pecked you to death",
+            AnimalKind::Phoenix => "The Phoenix burned you to death",
+            kind if kind.is_wild_hunt() => "The Wild Hunt killed you",
             _ => "An animal killed you",
         }
     }
@@ -301,9 +353,11 @@ impl AnimalKind {
             }
             // A crow leaves only feathers, no poultry.
             AnimalKind::Crow => add(ItemKind::Feather, CROW_FEATHER_DROP),
-            AnimalKind::MotherOfQuail => add(ItemKind::SilverKey, 1),
-            // Bats and the ghostly warriors leave nothing behind.
-            AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => {}
+            AnimalKind::IronQuail => add(ItemKind::SilverKey, 1),
+            AnimalKind::Raven => add(ItemKind::Feather, RAVEN_FEATHER_DROP),
+            AnimalKind::Phoenix => add(ItemKind::PhoenixFeather, PHOENIX_FEATHER_DROP),
+            // Bats and the ghostly creatures of the Wild Hunt leave nothing behind.
+            AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => {}
         }
         out
     }
@@ -323,19 +377,49 @@ pub enum Mode {
     Charge,
 }
 
-/// What the stalker of the Wild Hunt is doing: working round behind the player, running in at them, or running back.
+/// What a lancer of the Wild Hunt is doing: charging the player, galloping away from them, or resting before the next charge.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HuntPhase {
-    Circle,
     Dash,
     Retreat,
+    Rest,
 }
 
-/// `angle` brought into `-PI..PI`.
-fn wrap_angle(angle: f32) -> f32 {
-    let tau = std::f32::consts::TAU;
-    (angle + std::f32::consts::PI).rem_euclid(tau) - std::f32::consts::PI
+/// What a raven (or the Phoenix) is doing in the air: circling at a distance, swooping at the player, or flying away again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AirPhase {
+    Circle,
+    Dive,
+    Flee,
 }
+
+/// A boss's wind-up for one of its special attacks: it stands still (the Yeti rears up) until the timer runs out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BossAction {
+    None,
+    /// The Yeti raises its fists to hit the ground.
+    Smash,
+    /// The Yeti lifts a lump of ice to throw.
+    IceThrow,
+}
+
+/// Something a boss has done that the game has to carry out (it owns the player, the projectiles and the other creatures).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BossEvent {
+    /// The Yeti's fists have hit the ground here.
+    Smash { at: Vec3 },
+    /// The Yeti throws ice from here (its hands).
+    IceThrow { from: Vec3 },
+    /// The Phoenix throws a fireball from here.
+    Fireball { from: Vec3 },
+    /// Nessie calls this many ravens against a player far from her.
+    CallRavens { count: usize },
+    /// Nessie taints a line of water from here towards the player.
+    Acid { from: Vec3 },
+}
+
+/// The turns (radians) `Animal::steer` tries, in order, when something is in a boss's way: straight on, then ever wider to either side.
+const STEER_OFFSETS: [f32; 9] = [0.0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.4, -2.4];
 
 #[derive(Clone, Debug)]
 pub struct Animal {
@@ -389,13 +473,68 @@ pub struct Animal {
     pub calm: f32,
     /// A bat called by the pipes: it hunts the player wherever they are, until the dawn.
     pub hunting: bool,
-    /// The Wild Hunt's stalker: what it is doing now, and the seconds left of a dash or a retreat.
+    /// A lancer of the Wild Hunt: what it is doing now, and the seconds left of the charge, the gallop away or the rest.
     pub hunt_phase: HuntPhase,
-    hunt_timer: f32,
+    pub hunt_timer: f32,
     /// The Wild Hunt's archer: which way (1 or -1) it side-steps.
     strafe: f32,
-    /// Set every frame by the game for the Wild Hunt's stalker: the way the player faces (radians, `x = cos`, `z = sin`).
-    pub player_facing: f32,
+    /// A raven or the Phoenix: what it is doing in the air, and the seconds left of it.
+    pub air_phase: AirPhase,
+    air_timer: f32,
+    /// Where on its circle round the player an airborne creature is (radians).
+    circle: f32,
+    /// A raven called by the Loch Ness Monster: it behaves as if it were night, by day as well, and does not leave at dawn.
+    pub summoned: bool,
+    /// A ghostly bear or crow of the Wild Hunt that splits in two when killed.
+    pub splits: bool,
+    /// A bat that lives in the mineshafts: it stays by day, and never goes up into the open air.
+    pub lives_in_mine: bool,
+    /// Seconds until the next arrow (an archer) or iron feather (an Iron Quail) is ready.
+    shoot_timer: f32,
+    /// An Iron Quail that is keeping its distance to shoot feathers instead of closing in, and for how many more seconds.
+    kiting: bool,
+    kite_timer: f32,
+    /// A boss's special attack in its wind-up, the seconds left of it, and the seconds before each special can be used again.
+    pub action: BossAction,
+    action_timer: f32,
+    special_timer: f32,
+    ranged_timer: f32,
+    /// What the boss has done that the game must carry out (see `Animal::take_events`).
+    events: Vec<BossEvent>,
+    /// Steering round obstacles (bosses): the turn applied to the heading, and for how long it is kept.
+    steer_turn: f32,
+    steer_left: f32,
+    steer_force: bool,
+    /// Where the boss was `progress_timer` seconds ago: a boss that has not got anywhere is stuck, and takes a stride the other way.
+    progress_from: Vec3,
+    progress_timer: f32,
+    /// Nessie: seconds left of running to the middle of the lake after a shot, and until she next calls ravens or taints water.
+    flee_timer: f32,
+    raven_timer: f32,
+    /// Where she is heading while she runs (recomputed now and then), and seconds until it is.
+    flee_heading: f32,
+    flee_think: f32,
+    /// How fast a push from a blow dies away (`KNOCKBACK_DECAY`, or `LAUNCH_DECAY` after a hard knock).
+    knock_decay: f32,
+}
+
+/// How many blocks (up to `limit`) lie between the point (x, z) and the nearest column that is not water: how far from any shore
+/// the open water is there. Zero on dry land.
+fn shore_clearance(world: &World, x: f32, z: f32, limit: f32) -> f32 {
+    if !world.is_wet_column(x.floor() as i32, z.floor() as i32) {
+        return 0.0;
+    }
+    let mut r = 1.0;
+    while r <= limit {
+        for i in 0..16 {
+            let a = i as f32 * std::f32::consts::TAU / 16.0;
+            if !world.is_wet_column((x + a.cos() * r).floor() as i32, (z + a.sin() * r).floor() as i32) {
+                return r;
+            }
+        }
+        r += 1.0;
+    }
+    limit
 }
 
 /// What a body bumped into during one step.
@@ -481,14 +620,57 @@ impl Animal {
             lure_target: None,
             calm: 0.0,
             hunting: false,
-            hunt_phase: HuntPhase::Circle,
+            hunt_phase: HuntPhase::Dash,
             hunt_timer: 0.0,
             strafe: 1.0,
-            player_facing: 0.0,
+            air_phase: AirPhase::Circle,
+            air_timer: 0.0,
+            circle: 0.0,
+            summoned: false,
+            splits: false,
+            lives_in_mine: false,
+            shoot_timer: 0.0,
+            kiting: false,
+            kite_timer: 0.0,
+            action: BossAction::None,
+            action_timer: 0.0,
+            special_timer: 0.0,
+            ranged_timer: 0.0,
+            events: Vec::new(),
+            steer_turn: 0.0,
+            steer_left: 0.0,
+            steer_force: false,
+            progress_from: pos,
+            progress_timer: 0.0,
+            flee_timer: 0.0,
+            raven_timer: 0.0,
+            flee_heading: 0.0,
+            flee_think: 0.0,
+            knock_decay: KNOCKBACK_DECAY,
         };
-        // The archer takes a moment to nock its first arrow.
-        if kind == AnimalKind::HuntArcher {
-            a.attack_cooldown = HUNT_ARCHER_INTERVAL / 2.0;
+        a.circle = a.heading;
+        match kind {
+            // The archer takes a moment to nock its first arrow.
+            AnimalKind::HuntArcher => a.shoot_timer = HUNT_ARCHER_INTERVAL / 2.0,
+            // An Iron Quail shoots its first feather a moment after it comes, and each starts at a different point of its cycle.
+            AnimalKind::IronQuail => {
+                a.shoot_timer = IRON_QUAIL_FEATHER_INTERVAL * (0.3 + 0.7 * rng.unit());
+                a.kiting = rng.chance(50);
+                a.kite_timer = 3.0 + 4.0 * rng.unit();
+            }
+            // Lancers start resting for a different moment each, so that two do not always charge together.
+            AnimalKind::HuntLancer => {
+                a.hunt_phase = HuntPhase::Rest;
+                a.hunt_timer = 3.0 * rng.unit();
+            }
+            AnimalKind::Raven => a.air_timer = RAVEN_ATTACK_MIN + (RAVEN_ATTACK_MAX - RAVEN_ATTACK_MIN) * rng.unit(),
+            AnimalKind::Phoenix => a.air_timer = PHOENIX_SWOOP_INTERVAL,
+            AnimalKind::LochNessMonster => a.raven_timer = 1.5,
+            AnimalKind::Yeti => {
+                a.special_timer = 2.0;
+                a.ranged_timer = 1.0;
+            }
+            _ => {}
         }
         // Taken from the random heading, so that each whisp has its own place on the circle.
         a.orbit = a.heading * 1.7;
@@ -528,10 +710,44 @@ impl Animal {
         let flat = vec3(away.x, 0.0, away.z);
         let dir = if flat.length() > 1e-3 { flat.normalize() } else { vec3(self.heading.cos(), 0.0, self.heading.sin()) };
         self.knock = dir * ANIMAL_KNOCKBACK_SPEED;
+        self.knock_decay = KNOCKBACK_DECAY;
         if !matches!(self.kind, AnimalKind::Quail | AnimalKind::Crow) || self.on_ground {
             self.vel.y = KNOCKBACK_HOP;
             self.on_ground = false;
         }
+    }
+
+    /// Throw the animal `blocks` away from whatever hit it (`away` points from the attacker to the animal): a long, hard throw, like
+    /// the Yeti's smash. The push dies away at `LAUNCH_DECAY`, so it carries `blocks` (less what is in the way).
+    pub fn launch(&mut self, away: Vec3, blocks: f32) {
+        let flat = vec3(away.x, 0.0, away.z);
+        let dir = if flat.length() > 1e-3 { flat.normalize() } else { vec3(self.heading.cos(), 0.0, self.heading.sin()) };
+        self.knock = dir * blocks * LAUNCH_DECAY;
+        self.knock_decay = LAUNCH_DECAY;
+        if !self.kind.flies_always() {
+            self.vel.y = KNOCKBACK_HOP;
+            self.on_ground = false;
+        }
+        self.lure_target = None;
+        self.calm = 0.0;
+    }
+
+    /// What the boss has done since this was last called, for the game to carry out.
+    pub fn take_events(&mut self) -> Vec<BossEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Nessie has heard a shot: she runs for the middle of the lake for `seconds`.
+    pub fn startle(&mut self, seconds: f32) {
+        if self.kind == AnimalKind::LochNessMonster {
+            self.flee_timer = seconds;
+            self.flee_think = 0.0;
+        }
+    }
+
+    /// Whether Nessie is running from a shot.
+    pub fn is_fleeing_shot(&self) -> bool {
+        self.flee_timer > 0.0
     }
 
     /// Stop being enraged (the player died): the animal goes back to wandering.
@@ -575,7 +791,7 @@ impl Animal {
         })
     }
 
-    /// Whether the animal is off the ground (drawn with its wings beating, for the Mother of Quail).
+    /// Whether the animal is off the ground (drawn with its wings beating, for the Iron Quail).
     pub fn is_airborne(&self) -> bool {
         !self.on_ground
     }
@@ -623,34 +839,61 @@ impl Animal {
             AnimalKind::Yeti if self.boss_enraged() => YETI_ATTACK_COOLDOWN * YETI_ENRAGED_COOLDOWN_FACTOR,
             AnimalKind::Yeti => YETI_ATTACK_COOLDOWN,
             AnimalKind::LochNessMonster => LOCH_NESS_ATTACK_COOLDOWN,
-            AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_ATTACK_COOLDOWN,
+            AnimalKind::IronQuail => IRON_QUAIL_ATTACK_COOLDOWN,
             AnimalKind::Bat => BAT_ATTACK_COOLDOWN,
             AnimalKind::HuntSwordsman => HUNT_SWORD_COOLDOWN,
-            // The stalker stabs only on a dash, and once.
-            AnimalKind::HuntStalker if self.hunt_phase == HuntPhase::Dash => HUNT_STALKER_COOLDOWN,
+            // A lancer strikes only while charging, and once: then it gallops away.
+            AnimalKind::HuntLancer if self.hunt_phase == HuntPhase::Dash => HUNT_LANCER_COOLDOWN,
+            AnimalKind::HuntBear => HUNT_BEAR_COOLDOWN,
+            AnimalKind::HuntCrow => HUNT_CROW_COOLDOWN,
+            // A raven pecks only on its dive, once: then it flies away.
+            AnimalKind::Raven if self.air_phase == AirPhase::Dive => RAVEN_ATTACK_MIN,
+            // The Phoenix burns only on a swoop.
+            AnimalKind::Phoenix if self.air_phase == AirPhase::Dive => 1.0,
             _ => return false,
         };
-        if self.attack_cooldown > 0.0 || !self.within_reach_of(player) {
+        // A boss winding up a special attack does not also strike.
+        if self.attack_cooldown > 0.0 || self.action != BossAction::None || !self.within_reach_of(player) {
             return false;
         }
         self.attack_cooldown = cooldown;
-        if self.kind == AnimalKind::HuntStalker {
-            self.hunt_phase = HuntPhase::Retreat;
-            self.hunt_timer = HUNT_STALKER_RETREAT_SECONDS;
+        match self.kind {
+            AnimalKind::HuntLancer => {
+                self.hunt_phase = HuntPhase::Retreat;
+                self.hunt_timer = HUNT_LANCER_RETREAT_SECONDS;
+            }
+            AnimalKind::Raven => {
+                self.air_phase = AirPhase::Flee;
+                self.air_timer = RAVEN_FLEE_SECONDS;
+            }
+            AnimalKind::Phoenix => {
+                self.air_phase = AirPhase::Flee;
+                self.air_timer = 2.0;
+            }
+            _ => {}
         }
         true
     }
 
-    /// Whether the Wild Hunt's archer has an arrow ready for a player standing at `player` (feet): it is in range and has nocked
-    /// one. The game then checks it can see the player and calls `shot_fired`.
+    /// Whether this creature has a missile ready for a player standing at `player` (feet): the Wild Hunt's archer has nocked an
+    /// arrow and is in range, or an Iron Quail has an iron feather ready and is between `IRON_QUAIL_FEATHER_MIN_RANGE` and `MAX_RANGE`.
+    /// The game then checks it can see the player and calls `shot_fired`.
     pub fn ready_to_shoot(&self, player: Vec3) -> bool {
-        self.kind == AnimalKind::HuntArcher && self.attack_cooldown <= 0.0 && (self.pos - player).length() <= HUNT_ARCHER_RANGE
+        let gap = (self.pos - player).length();
+        match self.kind {
+            AnimalKind::HuntArcher => self.shoot_timer <= 0.0 && gap <= HUNT_ARCHER_RANGE,
+            AnimalKind::IronQuail => self.shoot_timer <= 0.0 && (IRON_QUAIL_FEATHER_MIN_RANGE..=IRON_QUAIL_FEATHER_MAX_RANGE).contains(&gap),
+            _ => false,
+        }
     }
 
-    /// The archer has shot: it nocks the next arrow after `HUNT_ARCHER_INTERVAL` seconds, times `slowdown` (2 when the player has
-    /// a Rabbit Foot in the hotbar, so that it fires half as often).
+    /// The creature has shot: it is ready again after its interval (`HUNT_ARCHER_INTERVAL` or `IRON_QUAIL_FEATHER_INTERVAL`), times
+    /// `slowdown` (2 when the player has a Rabbit Foot in the hotbar, so that an archer fires half as often).
     pub fn shot_fired(&mut self, slowdown: f32) {
-        self.attack_cooldown = HUNT_ARCHER_INTERVAL * slowdown;
+        self.shoot_timer = match self.kind {
+            AnimalKind::IronQuail => IRON_QUAIL_FEATHER_INTERVAL,
+            _ => HUNT_ARCHER_INTERVAL * slowdown,
+        };
     }
 
     /// Whether a will-o-whisp is drawn to the player who holds a holly rod in their hotbar: it is once it is bonded,
@@ -702,8 +945,17 @@ impl Animal {
         self.alarm = (self.alarm - dt).max(0.0);
         self.detour_left = (self.detour_left - dt).max(0.0);
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        self.shoot_timer = (self.shoot_timer - dt).max(0.0);
+        self.special_timer = (self.special_timer - dt).max(0.0);
+        self.ranged_timer = (self.ranged_timer - dt).max(0.0);
+        self.raven_timer = (self.raven_timer - dt).max(0.0);
+        self.flee_timer = (self.flee_timer - dt).max(0.0);
         self.timer -= dt;
         self.calm = (self.calm - dt).max(0.0);
+        if matches!(self.kind, AnimalKind::Raven | AnimalKind::Phoenix) {
+            self.update_flier(world, threat, dt, rng);
+            return None;
+        }
         // A bird that the pipes have called (or are calming) is not frightened by the player, only by a blow.
         let charmed = self.lure_target.is_some() || self.calm > 0.0;
         let scared = self.alarm > 0.0 || (dist < FLEE_DISTANCE && !charmed);
@@ -789,15 +1041,32 @@ impl Animal {
                     self.heading = towards + detour;
                 }
             }
-            AnimalKind::MotherOfQuail => {
-                // She hunts the player wherever they are, for ever.
+            AnimalKind::IronQuail => {
+                // She hunts the player wherever they are, for ever: closing in to strike for a while, then keeping her distance
+                // (strafing round the player) to shoot iron feathers, and so on.
                 self.mode = Mode::Charge;
+                self.kite_timer -= dt;
+                if self.kite_timer <= 0.0 {
+                    self.kiting = !self.kiting;
+                    self.kite_timer = if self.kiting { 5.0 + 2.0 * rng.unit() } else { 5.0 + 3.0 * rng.unit() };
+                    self.strafe = if rng.chance(50) { 1.0 } else { -1.0 };
+                }
                 if flat_gap > 1e-3 {
-                    self.heading = towards + detour;
+                    self.heading = if !self.kiting {
+                        towards
+                    } else if flat_gap < IRON_QUAIL_KITE_MIN {
+                        away
+                    } else if flat_gap > IRON_QUAIL_KITE_MAX {
+                        towards
+                    } else {
+                        towards + self.strafe * std::f32::consts::FRAC_PI_2
+                    };
                 }
             }
             AnimalKind::Bat => {
-                if self.hunting || flat_gap < BAT_NOTICE_DISTANCE || self.alarm > 0.0 {
+                // A bat of the mines notices only what is near it in all three directions (the rock is thick).
+                let noticed = if self.lives_in_mine { dist < BAT_MINE_NOTICE_DISTANCE } else { flat_gap < BAT_NOTICE_DISTANCE };
+                if self.hunting || noticed || self.alarm > 0.0 {
                     self.mode = Mode::Charge;
                 } else if self.mode == Mode::Charge {
                     self.rest(rng);
@@ -830,58 +1099,107 @@ impl Animal {
                     self.heading = towards + self.strafe * std::f32::consts::FRAC_PI_2;
                 }
             }
-            AnimalKind::HuntStalker => {
+            AnimalKind::HuntLancer => {
+                // Charge straight at the player, gallop away after the blow (or a charge that missed), rest, and charge again.
                 self.mode = Mode::Charge;
                 self.hunt_timer -= dt;
-                if self.hunt_phase == HuntPhase::Circle {
-                    // Work round the player, at a distance, to the point straight behind them.
-                    let theta = (self.pos.z - threat.z).atan2(self.pos.x - threat.x);
-                    let diff = wrap_angle(self.player_facing + std::f32::consts::PI - theta);
-                    if diff.abs() <= HUNT_STALKER_BEHIND_ANGLE && flat_gap <= HUNT_STALKER_CIRCLE_RADIUS * 1.5 {
-                        self.hunt_phase = HuntPhase::Dash;
-                        self.hunt_timer = HUNT_STALKER_DASH_SECONDS;
-                    } else {
-                        let ahead = theta + diff.signum() * diff.abs().min(0.6);
-                        let r = flat_gap + (HUNT_STALKER_CIRCLE_RADIUS - flat_gap).clamp(-3.0, 3.0);
-                        let (gx, gz) = (threat.x + ahead.cos() * r, threat.z + ahead.sin() * r);
-                        self.heading = (gz - self.pos.z).atan2(gx - self.pos.x) + detour;
+                match self.hunt_phase {
+                    HuntPhase::Dash => {
+                        if self.hunt_timer <= 0.0 {
+                            self.hunt_phase = HuntPhase::Retreat;
+                            self.hunt_timer = HUNT_LANCER_RETREAT_SECONDS;
+                        } else if flat_gap > 1e-3 {
+                            self.heading = towards;
+                        }
                     }
-                }
-                if self.hunt_phase == HuntPhase::Dash {
-                    if self.hunt_timer <= 0.0 {
-                        // It found no one to stab: back it goes.
-                        self.hunt_phase = HuntPhase::Retreat;
-                        self.hunt_timer = HUNT_STALKER_RETREAT_SECONDS;
-                    } else if flat_gap > 1e-3 {
-                        self.heading = towards + detour;
+                    HuntPhase::Retreat => {
+                        if self.hunt_timer <= 0.0 {
+                            self.hunt_phase = HuntPhase::Rest;
+                            self.hunt_timer = HUNT_LANCER_REST_SECONDS;
+                        } else if flat_gap > 1e-3 {
+                            self.heading = away;
+                        }
                     }
-                }
-                if self.hunt_phase == HuntPhase::Retreat {
-                    if self.hunt_timer <= 0.0 {
-                        self.hunt_phase = HuntPhase::Circle;
-                    } else if flat_gap > 1e-3 {
-                        self.heading = away + detour;
+                    HuntPhase::Rest => {
+                        if self.hunt_timer <= 0.0 {
+                            self.hunt_phase = HuntPhase::Dash;
+                            self.hunt_timer = HUNT_LANCER_CHARGE_SECONDS;
+                        } else if flat_gap > 1e-3 {
+                            self.heading = towards;
+                        }
                     }
                 }
             }
-            AnimalKind::Yeti | AnimalKind::LochNessMonster => {
-                let (notice, leash) = if self.kind == AnimalKind::Yeti { (YETI_NOTICE_DISTANCE, YETI_LEASH) } else { (LOCH_NESS_NOTICE_DISTANCE, LOCH_NESS_LEASH) };
+            AnimalKind::HuntBear => {
+                self.mode = Mode::Charge;
+                if flat_gap > 1e-3 {
+                    self.heading = towards;
+                }
+            }
+            AnimalKind::HuntCrow => {
+                self.mode = Mode::Charge;
+                if flat_gap > 1e-3 {
+                    self.heading = towards + (self.phase * 3.0).sin() * 0.5;
+                }
+            }
+            AnimalKind::Yeti => {
                 let home_gap = vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length();
-                if home_gap > leash {
+                if home_gap > YETI_LEASH {
                     // Too far from home: give up the chase and go back.
                     self.alarm = 0.0;
                     self.mode = Mode::Wander;
                     self.heading = self.heading_home();
                     self.timer = 1.0;
-                } else if flat_gap < notice || self.alarm > 0.0 {
+                    self.action = BossAction::None;
+                } else if flat_gap < YETI_NOTICE_DISTANCE || self.alarm > 0.0 {
+                    self.mode = Mode::Charge;
+                } else if self.mode == Mode::Charge {
+                    self.rest(rng);
+                    self.action = BossAction::None;
+                }
+                if self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    self.heading = towards;
+                }
+                self.update_yeti_attacks(flat_gap, towards, dt);
+            }
+            AnimalKind::LochNessMonster => {
+                let home_gap = vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length();
+                if self.flee_timer > 0.0 {
+                    // A shot was heard: she runs for the open middle of the lake.
+                    self.mode = Mode::Charge;
+                    self.flee_think -= dt;
+                    if self.flee_think <= 0.0 {
+                        self.flee_think = 0.5;
+                        self.flee_heading = self.open_water_heading(world);
+                    }
+                    self.heading = self.flee_heading;
+                } else if home_gap > LOCH_NESS_LEASH {
+                    self.alarm = 0.0;
+                    self.mode = Mode::Wander;
+                    self.heading = self.heading_home();
+                    self.timer = 1.0;
+                } else if flat_gap < LOCH_NESS_NOTICE_DISTANCE || self.alarm > 0.0 {
                     self.mode = Mode::Charge;
                 } else if self.mode == Mode::Charge {
                     self.rest(rng);
                 }
-                if self.mode == Mode::Charge && flat_gap > 1e-3 {
-                    self.heading = towards + detour;
+                if self.flee_timer <= 0.0 && self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    self.heading = towards;
+                }
+                if self.flee_timer <= 0.0 && flat_gap < LOCH_NESS_RAVEN_DISTANCE {
+                    // Far from her, the player is set on by ravens; and a line of her water is made acid.
+                    if flat_gap > LOCH_NESS_RAVEN_RANGE && self.raven_timer <= 0.0 {
+                        self.events.push(BossEvent::CallRavens { count: LOCH_NESS_RAVENS_PER_CALL });
+                        self.raven_timer = LOCH_NESS_RAVEN_INTERVAL;
+                    }
+                    if flat_gap <= LOCH_NESS_ACID_RANGE && self.ranged_timer <= 0.0 {
+                        self.events.push(BossEvent::Acid { from: self.pos });
+                        self.ranged_timer = LOCH_NESS_ACID_COOLDOWN;
+                    }
                 }
             }
+            // Fliers with their own movement never get here (see `update_flier`).
+            AnimalKind::Raven | AnimalKind::Phoenix => {}
             AnimalKind::WillOWhisp => {
                 if self.lure.is_none() {
                     self.bonded = false;
@@ -943,47 +1261,63 @@ impl Animal {
                 QUAIL_FLY_SPEED.min(vec2(t.x - self.pos.x, t.z - self.pos.z).length() * 4.0)
             }
             Mode::Fly => QUAIL_FLY_SPEED,
+            // A boss winding up a special attack stands still.
+            _ if self.action != BossAction::None => 0.0,
+            // A lancer at rest stands.
+            Mode::Charge if self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Rest => 0.0,
             // A charging bear stops once it stands against the player, instead of running through them.
-            Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH => 0.0,
+            Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH && !(self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Retreat) && self.flee_timer <= 0.0 => 0.0,
             Mode::Charge if self.kind == AnimalKind::Moose => MOOSE_RUN_SPEED,
             Mode::Charge if self.kind == AnimalKind::Yeti => YETI_RUN_SPEED * if self.boss_enraged() { YETI_ENRAGED_SPEED_FACTOR } else { 1.0 },
-            Mode::Charge if self.kind == AnimalKind::LochNessMonster => LOCH_NESS_RUN_SPEED,
-            Mode::Charge if self.kind == AnimalKind::MotherOfQuail => MOTHER_OF_QUAIL_RUN_SPEED,
+            Mode::Charge if self.kind == AnimalKind::LochNessMonster => LOCH_NESS_RUN_SPEED * if self.flee_timer > 0.0 { 1.6 } else { 1.0 },
+            Mode::Charge if self.kind == AnimalKind::IronQuail => IRON_QUAIL_RUN_SPEED,
             Mode::Charge if self.kind == AnimalKind::Bat => BAT_SPEED,
+            Mode::Charge if self.kind == AnimalKind::HuntCrow => HUNT_CROW_SPEED,
+            Mode::Charge if self.kind == AnimalKind::HuntBear => HUNT_BEAR_SPEED,
             Mode::Charge if self.kind == AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_SPEED,
             Mode::Charge if self.kind == AnimalKind::HuntArcher => HUNT_ARCHER_SPEED,
-            Mode::Charge if self.kind == AnimalKind::HuntStalker => match self.hunt_phase {
-                HuntPhase::Circle => HUNT_STALKER_CIRCLE_SPEED,
-                HuntPhase::Dash | HuntPhase::Retreat => HUNT_STALKER_DASH_SPEED,
+            Mode::Charge if self.kind == AnimalKind::HuntLancer => match self.hunt_phase {
+                HuntPhase::Dash => HUNT_LANCER_CHARGE_SPEED,
+                HuntPhase::Retreat => HUNT_LANCER_RETREAT_SPEED,
+                HuntPhase::Rest => 0.0,
             },
             Mode::Charge => BEAR_RUN_SPEED,
         };
         if self.kind == AnimalKind::LochNessMonster {
-            // The monster stays in the water: it turns aside from the shore, and stops against it.
+            // The monster stays in the water, and keeps `LOCH_NESS_SHORE_MARGIN` blocks from the shore: she turns aside from the
+            // shallows and stops against them. (One that finds herself nearer the shore may still move to open water.)
             self.knock = Vec3::ZERO;
             if speed > 0.0 {
-                let reach = speed * dt + self.kind.half_width() + 0.5;
-                let open = [0.0_f32, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6].into_iter().map(|t| self.heading + t).find(|&h| {
+                let reach = speed * dt + self.kind.half_width() + 1.0;
+                let here = shore_clearance(world, self.pos.x, self.pos.z, LOCH_NESS_SHORE_MARGIN);
+                let heading = self.heading;
+                let open = STEER_OFFSETS.into_iter().map(|t| heading + t).find(|&h| {
                     let (x, z) = (self.pos.x + h.cos() * reach, self.pos.z + h.sin() * reach);
-                    world.is_wet_column(x.floor() as i32, z.floor() as i32)
+                    world.is_wet_column(x.floor() as i32, z.floor() as i32) && {
+                        let there = shore_clearance(world, x, z, LOCH_NESS_SHORE_MARGIN);
+                        there >= LOCH_NESS_SHORE_MARGIN || there >= here
+                    }
                 });
                 match open {
                     Some(h) => self.heading = h,
                     None => speed = 0.0,
                 }
             }
+        } else if self.kind.is_boss() && !self.kind.flies_always() && matches!(self.mode, Mode::Charge | Mode::Flee | Mode::Wander) && speed > 0.0 {
+            // A boss feels for a free way ahead instead of walking into a tree, a rock or a cliff.
+            self.heading = self.steer(world, self.heading, dt);
         }
         self.vel.x = self.heading.cos() * speed;
         self.vel.z = self.heading.sin() * speed;
         self.vel.x += self.knock.x;
         self.vel.z += self.knock.z;
-        self.knock *= (1.0 - KNOCKBACK_DECAY * dt).max(0.0);
-        if self.kind == AnimalKind::Bat {
+        self.knock *= (1.0 - self.knock_decay * dt).max(0.0);
+        if self.kind.is_bat_like() {
             // A bat never touches the ground: it flutters up and down about the player's body as it attacks, and about its
             // own height when it wanders.
-            let goal = if self.mode == Mode::Charge { threat.y + 0.9 + 0.4 * (self.phase * 2.3).sin() } else { self.launch_y + 0.5 * (self.phase * 1.7).sin() };
+            let goal = if self.mode == Mode::Charge { threat.y + 0.9 + 0.4 * (self.phase * 2.3).sin() + if self.stuck > 0.0 { 3.0 } else { 0.0 } } else { self.launch_y + 0.5 * (self.phase * 1.7).sin() };
             self.vel.y = ((goal - self.pos.y) * 3.0).clamp(-4.0, 4.0);
-        } else if self.kind == AnimalKind::MotherOfQuail && self.mode == Mode::Charge {
+        } else if self.kind == AnimalKind::IronQuail && self.mode == Mode::Charge {
             // She flies: up to just over the player's head while she is on her way (higher still if something is in the way),
             // and down to their level once she is beside them.
             let goal = threat.y + if flat_gap > 3.0 { 2.0 } else { 0.0 } + if self.stuck > 0.0 { 8.0 } else { 0.0 };
@@ -1006,16 +1340,27 @@ impl Animal {
         self.phase += (self.pos - before).length();
 
         if contact.hit_wall && speed > 0.0 {
-            // Hop up a one-block step; if that does not help, turn aside after a moment.
+            // Hop up a step (a boss, two blocks of it); if that does not help, turn aside after a moment.
             if self.on_ground && self.mode != Mode::Fly {
-                self.vel.y = ANIMAL_JUMP_SPEED;
+                // A boss jumps only at something it can get over (not at a wall that is too high).
+                if !self.kind.is_boss() {
+                    self.vel.y = ANIMAL_JUMP_SPEED;
+                } else if self.can_hop(world, self.heading) {
+                    self.vel.y = BOSS_JUMP_SPEED;
+                }
             }
             self.stuck += dt;
             if self.stuck > 0.5 {
                 self.stuck = 0.0;
                 let sign = if rng.chance(50) { 1.0 } else { -1.0 };
                 let turn = sign * (1.0 + rng.unit() * 0.8);
-                if matches!(self.mode, Mode::Flee | Mode::Charge) {
+                if self.kind.is_boss() {
+                    // Keep going round the way it already was (a new random side each time makes it dither along a wall).
+                    if self.steer_turn == 0.0 {
+                        self.steer_turn = turn;
+                    }
+                    self.steer_left = BOSS_DETOUR_SECONDS;
+                } else if matches!(self.mode, Mode::Flee | Mode::Charge) {
                     self.detour = turn;
                     self.detour_left = 1.5;
                 } else {
@@ -1025,7 +1370,257 @@ impl Animal {
         } else {
             self.stuck = (self.stuck - dt).max(0.0);
         }
+        self.check_progress(speed, dt);
         dropped
+    }
+
+    /// A boss that is trying to move but has got nowhere in `BOSS_UNSTICK_SECONDS` (wedged between two things, or in a pit) takes
+    /// a few strides in another direction, with a jump, whatever is ahead.
+    fn check_progress(&mut self, speed: f32, dt: f32) {
+        if !self.kind.is_boss() || speed <= 0.0 {
+            self.progress_timer = 0.0;
+            self.progress_from = self.pos;
+            return;
+        }
+        self.progress_timer += dt;
+        if self.progress_timer < BOSS_UNSTICK_SECONDS {
+            return;
+        }
+        let moved = vec2(self.pos.x - self.progress_from.x, self.pos.z - self.progress_from.z).length();
+        if moved < BOSS_UNSTICK_PROGRESS {
+            self.steer_turn = if self.steer_turn >= 0.0 { -2.0 } else { 2.0 };
+            self.steer_left = 1.5;
+            self.steer_force = true;
+            if self.on_ground {
+                self.vel.y = BOSS_JUMP_SPEED;
+            }
+        }
+        self.progress_from = self.pos;
+        self.progress_timer = 0.0;
+    }
+
+    /// Whether what is ahead along `heading` is a ledge a jump gets over (one block, or two for a boss).
+    fn can_hop(&self, world: &World, heading: f32) -> bool {
+        let (half, height) = (self.kind.half_width(), self.kind.height());
+        let reach = half + 0.6;
+        let p = self.pos + vec3(heading.cos() * reach, 0.0, heading.sin() * reach);
+        let eps = 1e-3;
+        let blocked_at = |lift: f32| world.box_blocked(vec3(p.x - half + eps, p.y + lift + eps, p.z - half + eps), vec3(p.x + half - eps, p.y + lift + height - eps, p.z + half - eps));
+        !blocked_at(1.0) || (self.kind.is_boss() && !blocked_at(2.0))
+    }
+
+    /// Whether a body of this animal's size could go along `heading` for `BOSS_FEEL_DISTANCE` blocks: nothing is in the way, or
+    /// what is in the way is a ledge it can climb (one block for anyone, two for a boss on the ground).
+    fn way_is_free(&self, world: &World, heading: f32) -> bool {
+        let (half, height) = (self.kind.half_width(), self.kind.height());
+        let reach = BOSS_FEEL_DISTANCE + half;
+        let p = self.pos + vec3(heading.cos() * reach, 0.0, heading.sin() * reach);
+        let eps = 1e-3;
+        let blocked_at = |lift: f32| {
+            world.box_blocked(vec3(p.x - half + eps, p.y + lift + eps, p.z - half + eps), vec3(p.x + half - eps, p.y + lift + height - eps, p.z + half - eps))
+        };
+        if !blocked_at(0.0) {
+            return true;
+        }
+        let walker = !self.kind.flies_always() && self.kind != AnimalKind::IronQuail;
+        // (In the air, mid-jump, the ledge counts too: it is no reason to turn back.)
+        walker && (!blocked_at(1.0) || (self.kind.is_boss() && !blocked_at(2.0)))
+    }
+
+    /// The heading a boss should take to get towards `want`: `want` itself if the way is free, otherwise the nearest free heading to
+    /// either side (the side it last went round by, so it does not dither), kept for `BOSS_DETOUR_SECONDS` so that it gets round
+    /// the thing before it tries the straight line again. Boxed in on every side, it turns back.
+    fn steer(&mut self, world: &World, want: f32, dt: f32) -> f32 {
+        self.steer_left = (self.steer_left - dt).max(0.0);
+        if self.steer_left <= 0.0 {
+            self.steer_force = false;
+        }
+        if self.steer_left > 0.0 {
+            let h = want + self.steer_turn;
+            if self.steer_force || self.way_is_free(world, h) {
+                return h;
+            }
+            self.steer_left = 0.0;
+        }
+        if self.way_is_free(world, want) {
+            self.steer_turn = 0.0;
+            return want;
+        }
+        // Stay on the side it went round by (if it has one): nearest turns first, and only if none of that side is free the other.
+        let prefer = if self.steer_turn >= 0.0 { 1.0 } else { -1.0 };
+        for side in [prefer, -prefer] {
+            for off in STEER_OFFSETS.into_iter().filter(|o| *o > 0.0) {
+                let turn = off * side;
+                if self.way_is_free(world, want + turn) {
+                    self.steer_turn = turn;
+                    self.steer_left = BOSS_DETOUR_SECONDS;
+                    return want + turn;
+                }
+            }
+        }
+        self.steer_turn = std::f32::consts::PI * 0.9;
+        self.steer_left = BOSS_DETOUR_SECONDS;
+        want + self.steer_turn
+    }
+
+    /// The Yeti's special attacks. In its charge, within `YETI_SMASH_TRIGGER_RANGE` it rears up and then hits the ground (a smash,
+    /// `BossEvent::Smash`); beyond `YETI_ICE_MIN_RANGE` it lifts a lump of ice and throws it (`BossEvent::IceThrow`). Either one
+    /// holds it still for its wind-up. Below half health the cooldowns are shorter.
+    fn update_yeti_attacks(&mut self, flat_gap: f32, towards: f32, dt: f32) {
+        let quick = if self.boss_enraged() { YETI_ENRAGED_COOLDOWN_FACTOR } else { 1.0 };
+        match self.action {
+            BossAction::None => {
+                if self.mode == Mode::Charge && self.on_ground {
+                    if flat_gap <= YETI_SMASH_TRIGGER_RANGE && self.special_timer <= 0.0 {
+                        self.action = BossAction::Smash;
+                        self.action_timer = YETI_SMASH_WINDUP;
+                    } else if flat_gap > YETI_ICE_MIN_RANGE && flat_gap <= YETI_ICE_MAX_RANGE && self.ranged_timer <= 0.0 {
+                        self.action = BossAction::IceThrow;
+                        self.action_timer = YETI_ICE_WINDUP;
+                    }
+                }
+            }
+            BossAction::Smash => {
+                self.action_timer -= dt;
+                if self.action_timer <= 0.0 {
+                    self.events.push(BossEvent::Smash { at: self.pos });
+                    self.special_timer = YETI_SMASH_COOLDOWN * quick;
+                    self.attack_cooldown = self.attack_cooldown.max(0.9);
+                    self.action = BossAction::None;
+                }
+            }
+            BossAction::IceThrow => {
+                self.action_timer -= dt;
+                if self.action_timer <= 0.0 {
+                    let from = self.pos + vec3(self.heading.cos() * 0.9, 2.4, self.heading.sin() * 0.9);
+                    self.events.push(BossEvent::IceThrow { from });
+                    self.ranged_timer = YETI_ICE_COOLDOWN * quick;
+                    self.action = BossAction::None;
+                }
+            }
+        }
+        if self.action != BossAction::None && flat_gap > 1e-3 {
+            // It faces the player while it winds up.
+            self.heading = towards;
+        }
+    }
+
+    /// The direction from Nessie towards the open middle of her lake: the heading, of twelve round the compass, whose point
+    /// ten blocks off lies farthest from any shore.
+    fn open_water_heading(&self, world: &World) -> f32 {
+        let mut best = (self.heading, -1.0_f32);
+        for i in 0..12 {
+            let h = i as f32 * std::f32::consts::TAU / 12.0;
+            let (x, z) = (self.pos.x + h.cos() * 10.0, self.pos.z + h.sin() * 10.0);
+            let c = shore_clearance(world, x, z, 24.0);
+            if c > best.1 {
+                best = (h, c);
+            }
+        }
+        best.0
+    }
+
+    /// A creature that flies under its own power: a raven (circling the player at a distance, swooping down for one peck and flying
+    /// off again) or the Phoenix (hovering over its volcano, throwing fireballs and swooping now and then).
+    fn update_flier(&mut self, world: &World, threat: Vec3, dt: f32, rng: &mut Rng) {
+        let flat_gap = vec2(threat.x - self.pos.x, threat.z - self.pos.z).length();
+        let away = (self.pos.z - threat.z).atan2(self.pos.x - threat.x);
+        self.air_timer -= dt;
+        let mut goal;
+        let speed;
+        if self.kind == AnimalKind::Raven {
+            match self.air_phase {
+                AirPhase::Circle => {
+                    self.circle += dt * RAVEN_CIRCLE_SPEED / RAVEN_ORBIT_RADIUS;
+                    goal = threat + vec3(self.circle.cos() * RAVEN_ORBIT_RADIUS, RAVEN_ORBIT_HEIGHT, self.circle.sin() * RAVEN_ORBIT_RADIUS);
+                    speed = RAVEN_CIRCLE_SPEED * 1.6;
+                    if self.air_timer <= 0.0 && flat_gap < RAVEN_ORBIT_RADIUS * 2.0 {
+                        self.air_phase = AirPhase::Dive;
+                        self.air_timer = RAVEN_DIVE_SECONDS;
+                    }
+                }
+                AirPhase::Dive => {
+                    goal = threat + vec3(0.0, 1.1, 0.0);
+                    speed = RAVEN_DIVE_SPEED;
+                    if self.air_timer <= 0.0 {
+                        self.air_phase = AirPhase::Flee;
+                        self.air_timer = RAVEN_FLEE_SECONDS;
+                    }
+                }
+                AirPhase::Flee => {
+                    goal = threat + vec3(away.cos() * RAVEN_ORBIT_RADIUS * 1.4, RAVEN_ORBIT_HEIGHT, away.sin() * RAVEN_ORBIT_RADIUS * 1.4);
+                    speed = RAVEN_FLEE_SPEED;
+                    if self.air_timer <= 0.0 {
+                        self.air_phase = AirPhase::Circle;
+                        self.air_timer = RAVEN_ATTACK_MIN + (RAVEN_ATTACK_MAX - RAVEN_ATTACK_MIN) * rng.unit();
+                        self.circle = away;
+                    }
+                }
+            }
+        } else {
+            let quick = if self.boss_enraged() { 0.7 } else { 1.0 };
+            let home_gap = vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length();
+            let hover_y = (threat.y + PHOENIX_HOVER_HEIGHT).max(self.home.y + 8.0);
+            if home_gap > PHOENIX_LEASH {
+                // Too far from its volcano: it goes home.
+                self.air_phase = AirPhase::Circle;
+                goal = self.home + vec3(0.0, 10.0, 0.0);
+                speed = PHOENIX_CIRCLE_SPEED * 1.4;
+            } else {
+                match self.air_phase {
+                    AirPhase::Circle => {
+                        self.circle += dt * PHOENIX_CIRCLE_SPEED / PHOENIX_HOVER_RADIUS;
+                        goal = vec3(threat.x + self.circle.cos() * PHOENIX_HOVER_RADIUS, hover_y, threat.z + self.circle.sin() * PHOENIX_HOVER_RADIUS);
+                        speed = PHOENIX_CIRCLE_SPEED * 1.5;
+                        if self.ranged_timer <= 0.0 && flat_gap <= PHOENIX_FIREBALL_RANGE && (self.pos - threat).length() > 5.0 {
+                            self.events.push(BossEvent::Fireball { from: self.pos + vec3(self.heading.cos() * 1.2, 1.0, self.heading.sin() * 1.2) });
+                            self.ranged_timer = PHOENIX_FIREBALL_INTERVAL * quick;
+                        }
+                        if self.air_timer <= 0.0 && flat_gap <= PHOENIX_FIREBALL_RANGE {
+                            self.air_phase = AirPhase::Dive;
+                            self.air_timer = PHOENIX_SWOOP_SECONDS;
+                        }
+                    }
+                    AirPhase::Dive => {
+                        goal = threat + vec3(0.0, 1.0, 0.0);
+                        speed = PHOENIX_SWOOP_SPEED;
+                        if self.air_timer <= 0.0 {
+                            self.air_phase = AirPhase::Flee;
+                            self.air_timer = 1.5;
+                        }
+                    }
+                    AirPhase::Flee => {
+                        goal = vec3(self.pos.x + away.cos() * 8.0, hover_y + 4.0, self.pos.z + away.sin() * 8.0);
+                        speed = PHOENIX_CIRCLE_SPEED * 1.4;
+                        if self.air_timer <= 0.0 {
+                            self.air_phase = AirPhase::Circle;
+                            self.air_timer = PHOENIX_SWOOP_INTERVAL * quick;
+                            self.circle = away;
+                        }
+                    }
+                }
+            }
+        }
+        // Something in the way (a tree, the rim of the crater) sends the flier up and over it.
+        if self.stuck > 0.0 {
+            goal.y += 8.0;
+        }
+        let to = goal - self.pos;
+        let dist = to.length();
+        let v = to.normalize_or_zero() * speed.min(dist * 3.0 + 1.0);
+        self.vel = v + vec3(self.knock.x, 0.0, self.knock.z);
+        self.knock *= (1.0 - self.knock_decay * dt).max(0.0);
+        let before = self.pos;
+        let contact = step_body(world, &mut self.pos, &mut self.vel, self.kind.half_width(), self.kind.height(), dt);
+        self.on_ground = false;
+        self.stuck = if contact.hit_wall { 0.6 } else { (self.stuck - dt).max(0.0) };
+        let moved = self.pos - before;
+        self.phase += moved.length();
+        if moved.x.abs() + moved.z.abs() > 1e-4 {
+            self.heading = moved.z.atan2(moved.x);
+        } else if flat_gap > 1e-3 {
+            self.heading = (threat.z - self.pos.z).atan2(threat.x - self.pos.x);
+        }
     }
 }
 

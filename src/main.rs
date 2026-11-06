@@ -60,6 +60,7 @@ mod terrain;
 mod stonehenge;
 mod temple;
 mod tower;
+mod hazard;
 mod tornado;
 mod ui;
 mod world;

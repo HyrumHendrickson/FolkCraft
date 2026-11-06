@@ -2,7 +2,7 @@
 
 use macroquad::prelude::*;
 
-use crate::animal::{Animal, AnimalKind, Mode};
+use crate::animal::{Animal, AnimalKind, BossAction, HuntPhase, Mode};
 use crate::arrow::Arrow;
 use crate::config::*;
 use crate::dropped::{draw_box, draw_box_tilted};
@@ -233,8 +233,8 @@ fn crow_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     })
 }
 
-/// The Mother of Quail: a quail more than five times the size, rust-brown, with a crest of gold.
-fn mother_of_quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+/// The Iron Quail: a quail more than five times the size, rust-brown, with a crest of gold.
+fn iron_quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     const SCALE: f32 = 5.5;
     let mut parts = bird_parts(a, time, night, Plumage {
         feathers: col(0.50, 0.36, 0.24),
@@ -251,6 +251,58 @@ fn mother_of_quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     parts
 }
 
+/// The boxes of a model, all `k` times the size.
+fn scaled(mut parts: Vec<Piece>, k: f32) -> Vec<Piece> {
+    for ((off, half, _), _) in parts.iter_mut() {
+        *off = (off.0 * k, off.1 * k, off.2 * k);
+        *half = (half.0 * k, half.1 * k, half.2 * k);
+    }
+    parts
+}
+
+/// A raven: a crow half as big again, black with a blue sheen, always on the wing.
+fn raven_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    scaled(
+        bird_parts(a, time, night, Plumage {
+            feathers: col(0.06, 0.06, 0.09),
+            speckle: col(0.03, 0.03, 0.05),
+            belly: col(0.10, 0.11, 0.17),
+            face: col(0.04, 0.04, 0.06),
+            beak: col(0.16, 0.15, 0.16),
+            legs: col(0.09, 0.08, 0.08),
+        }),
+        1.6,
+    )
+}
+
+/// The Phoenix: a bird of fire many times the size of a quail, orange and gold, with long trailing tail plumes that wave and a
+/// crest of flame, its wings beating.
+fn phoenix_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let mut parts = scaled(
+        bird_parts(a, time, night, Plumage {
+            feathers: col(0.96, 0.38, 0.08),
+            speckle: col(0.80, 0.16, 0.05),
+            belly: col(1.0, 0.74, 0.20),
+            face: col(0.92, 0.30, 0.06),
+            beak: col(1.0, 0.86, 0.30),
+            legs: col(0.92, 0.62, 0.12),
+        }),
+        6.0,
+    );
+    // Tail plumes streaming out behind, fading from red to gold, and a crest of flame on the head.
+    for i in 0..5 {
+        let t = i as f32;
+        let sway = (time * 3.0 + t * 0.9).sin() * 0.25;
+        let c = if i % 2 == 0 { col(1.0, 0.55 + 0.08 * t, 0.10) } else { col(0.95, 0.25, 0.06) };
+        parts.push(tilted((-1.6 - 0.55 * t, 1.1 - 0.12 * t, sway * t * 0.5), (0.7, 0.07, 0.16), c, 0.25 + sway * 0.4));
+    }
+    for i in 0..3 {
+        let t = i as f32;
+        parts.push(tilted((1.05 - 0.1 * t, 2.35 + 0.15 * t, (t - 1.0) * 0.12), (0.06, 0.32, 0.05), col(1.0, 0.85 - 0.2 * t, 0.2), 0.5 + (time * 6.0 + t).sin() * 0.2));
+    }
+    parts
+}
+
 /// The colours of a quail-shaped bird.
 struct Plumage {
     feathers: Color,
@@ -263,7 +315,7 @@ struct Plumage {
 
 fn bird_parts(a: &Animal, time: f32, night: bool, p: Plumage) -> Vec<Piece> {
     let Plumage { feathers, speckle, belly, face, beak, legs } = p;
-    let flying = a.mode == Mode::Fly || (a.kind == AnimalKind::MotherOfQuail && a.is_airborne());
+    let flying = a.mode == Mode::Fly || (a.kind == AnimalKind::IronQuail && a.is_airborne()) || a.kind.flies_always();
     let moving = is_moving(a);
     let breath = (time * 5.0 + a.phase).sin() * 0.006;
     let peck = if a.mode == Mode::Idle { (time * 1.3 + a.phase * 2.0).sin().powi(11).max(0.0) } else { 0.0 };
@@ -379,9 +431,26 @@ fn yeti_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     for (i, side) in [-1.0_f32, 1.0].into_iter().enumerate() {
         let swing = (a.phase * rate + if i == 0 { 0.0 } else { std::f32::consts::PI }).sin() * amp * moving;
         let pound = if charging { 0.9 + (time * 7.0 + i as f32 * 3.1).sin() * 0.35 } else { 0.0 };
-        let angle = swing + pound;
+        // Winding up a smash or a throw it lifts both fists high over its head (a throw: one hand, with a lump of ice in it).
+        let raised = match a.action {
+            BossAction::Smash => -2.6,
+            BossAction::IceThrow if i == 1 => -2.4,
+            _ => 0.0,
+        };
         let shoulder = (0.12, 2.25, 0.98 * side + roll);
-        leg(&mut parts, shoulder, 0.85, 0.80, 0.22, angle, fur, shade);
+        if raised != 0.0 {
+            // Straight up: an upper arm, a forearm and a fist high over the head.
+            parts.push(block((shoulder.0, shoulder.1 + 0.8, shoulder.2), (0.22, 0.85, 0.22), fur));
+            parts.push(block((shoulder.0, shoulder.1 + 1.95, shoulder.2), (0.20, 0.55, 0.20), fur));
+            parts.push(block((shoulder.0, shoulder.1 + 2.6, shoulder.2), (0.28, 0.2, 0.28), shade));
+        } else {
+            leg(&mut parts, shoulder, 0.85, 0.80, 0.22, swing + pound, fur, shade);
+        }
+    }
+    if a.action == BossAction::IceThrow {
+        // The lump of ice held up in the raised hand.
+        parts.push(tilted((0.12, 4.5, 0.98 + roll), (0.32, 0.32, 0.32), ice, 0.3));
+        parts.push(tilted((0.12, 4.5, 0.98 + roll), (0.22, 0.40, 0.22), col(0.85, 0.95, 1.0), -0.3));
     }
     // Legs: short and thick.
     for (i, &(lx, lz)) in [(0.12, 0.34), (0.12, -0.34)].iter().enumerate() {
@@ -466,6 +535,7 @@ fn hunt_tint(kind: AnimalKind) -> (f32, f32, f32) {
     match kind {
         AnimalKind::HuntSwordsman => (0.72, 0.86, 1.0),
         AnimalKind::HuntArcher => (0.66, 1.0, 0.82),
+        AnimalKind::HuntLancer => (1.0, 0.84, 0.62),
         _ => (0.80, 0.68, 1.0),
     }
 }
@@ -474,6 +544,12 @@ fn hunt_tint(kind: AnimalKind) -> (f32, f32, f32) {
 /// a weapon in the hand that shows what it does: a long sword (the swordsman, who holds it forward as it runs), a drawn bow (the
 /// archer) or a dagger (the stalker, who runs bent low). Its legs stride as it moves and the robe streams out and sways.
 pub fn hunt_parts(a: &Animal, time: f32) -> Vec<Piece> {
+    match a.kind {
+        AnimalKind::HuntBear => return ghostly(bear_parts(a, time, false), (0.72, 0.88, 1.0)),
+        AnimalKind::HuntCrow => return ghostly(crow_parts(a, time, false), (0.72, 0.88, 1.0)),
+        AnimalKind::HuntLancer => return lancer_parts(a, time),
+        _ => {}
+    }
     let (r, g, b) = hunt_tint(a.kind);
     let body = ghost(r, g, b, 0.42);
     let dim = ghost(r * 0.6, g * 0.6, b * 0.7, 0.34);
@@ -482,9 +558,8 @@ pub fn hunt_parts(a: &Animal, time: f32) -> Vec<Piece> {
     let moving = is_moving(a);
     let stride = (a.phase * 2.2).sin() * 0.7 * moving;
     let sway = (time * 2.0 + a.phase).sin();
-    let crouch = if a.kind == AnimalKind::HuntStalker { 0.55 } else { 0.0 };
-    let lean = crouch + if a.kind == AnimalKind::HuntSwordsman { 0.15 * moving } else { 0.0 };
-    let low = -0.30 * crouch;
+    let lean = if a.kind == AnimalKind::HuntSwordsman { 0.15 * moving } else { 0.0 };
+    let (crouch, low) = (0.0_f32, 0.0_f32);
     let mut parts: Vec<Piece> = Vec::new();
     for side in [-1.0, 1.0] {
         let angle = if side > 0.0 { stride } else { -stride };
@@ -523,14 +598,70 @@ pub fn hunt_parts(a: &Animal, time: f32) -> Vec<Piece> {
             parts.push(tilted((0.68, 1.34, 0.26), (0.03, 0.46, 0.03), steel, 0.12));
             parts.push(block((0.62, 1.34, 0.26), (0.006, 0.44, 0.006), ghost(1.0, 1.0, 1.0, 0.45)));
         }
-        _ => {
-            let reach = if a.hunt_phase == crate::animal::HuntPhase::Dash { -1.4 } else { -0.5 };
-            parts.push(tilted((0.20, 1.10 + low, 0.28), (0.05, 0.24, 0.05), body, reach));
-            parts.push(tilted((0.10, 1.06 + low, -0.26), (0.05, 0.24, 0.05), body, 0.4));
-            // A short dagger, point forward.
-            parts.push(tilted((0.50, 1.16 + low, 0.28), (0.20, 0.022, 0.035), steel, reach + 1.3));
+        _ => {}
+    }
+    parts
+}
+
+/// A model made translucent and tinted, for the ghostly bears and crows of the Wild Hunt.
+fn ghostly(parts: Vec<Piece>, (r, g, b): (f32, f32, f32)) -> Vec<Piece> {
+    parts.into_iter().map(|((off, half, c), pitch)| ((off, half, ghost(c.r * 0.35 + r * 0.65, c.g * 0.35 + g * 0.65, c.b * 0.35 + b * 0.65, 0.5)), pitch)).collect()
+}
+
+/// A lancer of the Wild Hunt: a ghostly horse that gallops (four jointed legs, a tossing head, a streaming tail) with a helmed rider
+/// on its back couching a long lance at the player. At rest it stands and the lance is raised.
+fn lancer_parts(a: &Animal, time: f32) -> Vec<Piece> {
+    let (r, g, b) = hunt_tint(a.kind);
+    let body = ghost(r, g, b, 0.42);
+    let dim = ghost(r * 0.6, g * 0.6, b * 0.7, 0.34);
+    let bright = ghost((r + 1.0) / 2.0, (g + 1.0) / 2.0, (b + 1.0) / 2.0, 0.85);
+    let steel = ghost(0.92, 0.96, 1.0, 0.80);
+    let moving = is_moving(a);
+    let charging = a.hunt_phase == HuntPhase::Dash;
+    let gallop = (a.phase * 1.6).sin() * 0.9 * moving;
+    let toss = (a.phase * 1.6).sin() * 0.08 * moving;
+    let mut parts: Vec<Piece> = vec![
+        // The horse: barrel, rump, neck and head.
+        tilted((0.0, 1.35, 0.0), (0.85, 0.36, 0.32), body, toss),
+        tilted((-0.65, 1.42, 0.0), (0.34, 0.38, 0.30), body, 0.0),
+        tilted((0.85, 1.75, 0.0), (0.18, 0.55, 0.22), body, -0.7 + toss),
+        tilted((1.25, 2.20, 0.0), (0.34, 0.18, 0.17), body, 0.3 + toss),
+        tilted((1.05, 2.30, 0.0), (0.06, 0.20, 0.03), bright, -0.2),
+    ];
+    // A streaming mane and tail.
+    for i in 1..=3 {
+        let t = i as f32;
+        parts.push(tilted((-1.0 - 0.28 * t, 1.55 - 0.18 * t, 0.07 * t * (time * 3.0 + t).sin()), (0.20, 0.05, 0.08), ghost(r, g, b, 0.30), -0.4));
+        parts.push(tilted((0.95 - 0.1 * t, 2.25 - 0.12 * t, 0.0), (0.05, 0.12, 0.06), dim, 0.0));
+    }
+    // Two bright eyes.
+    for side in [-1.0, 1.0] {
+        parts.push(block((1.52, 2.24, 0.12 * side), (0.02, 0.03, 0.03), bright));
+    }
+    // Four legs, the pairs a half stride apart.
+    for (hip_x, phase) in [(0.6, 0.0), (0.6, std::f32::consts::PI), (-0.6, std::f32::consts::PI), (-0.6, 0.0)] {
+        for side in [-1.0_f32, 1.0] {
+            let swing = (a.phase * 1.6 + phase + if side > 0.0 { 0.0 } else { 0.5 }).sin() * 0.9 * moving;
+            leg(&mut parts, (hip_x, 1.05, 0.2 * side), 0.55, 0.5, 0.07, swing, dim, dim);
         }
     }
+    // The rider: robe, torso, a helm with a crest and bright eyes.
+    parts.push(tilted((-0.05, 2.0, 0.0), (0.2, 0.34, 0.26), body, 0.1 + gallop * 0.03));
+    parts.push(tilted((-0.05, 1.72, 0.0), (0.26, 0.26, 0.30), dim, 0.0));
+    let head = (0.02, 2.62, 0.0);
+    parts.push(tilted(head, (0.12, 0.13, 0.12), body, 0.0));
+    parts.push(tilted((head.0, head.1 + 0.17, 0.0), (0.14, 0.04, 0.03), bright, 0.0));
+    for side in [-1.0, 1.0] {
+        parts.push(block((head.0 + 0.125, head.1 + 0.01, 0.055 * side), (0.012, 0.022, 0.03), bright));
+    }
+    // The lance: long and level at the charge (couched under the arm), raised when resting; a pennon streams from it.
+    let tilt = if charging { -0.05 } else { 0.9 };
+    let (lx, ly) = if charging { (1.6, 2.15) } else { (0.5, 3.0) };
+    parts.push(tilted((lx, ly, 0.38), (1.7, 0.035, 0.035), steel, tilt));
+    parts.push(tilted((lx + if charging { 1.65 } else { 0.9 }, ly + if charging { 0.0 } else { 1.0 }, 0.38), (0.22, 0.05, 0.05), bright, tilt));
+    parts.push(tilted((lx + 0.5, ly - 0.14, 0.38), (0.30, 0.12, 0.01), ghost(0.9, 0.3, 0.3, 0.6), tilt + (time * 9.0).sin() * 0.2));
+    parts.push(tilted((0.35, 1.95, 0.30), (0.05, 0.28, 0.05), body, -1.1));
+    parts.push(tilted((0.2, 1.9, -0.28), (0.05, 0.28, 0.05), body, -0.4));
     parts
 }
 
@@ -575,17 +706,21 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
         }
         let parts = match a.kind {
             // Drawn by `draw_ghosts`, over the water.
-            AnimalKind::WillOWhisp | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => continue,
+            AnimalKind::WillOWhisp => continue,
+            kind if kind.is_wild_hunt() => continue,
             AnimalKind::Deer => deer_parts(a, time, night),
             AnimalKind::Quail => quail_parts(a, time, night),
             AnimalKind::Crow => crow_parts(a, time, night),
-            AnimalKind::MotherOfQuail => mother_of_quail_parts(a, time, night),
+            AnimalKind::IronQuail => iron_quail_parts(a, time, night),
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
             AnimalKind::Yeti => yeti_parts(a, time, night),
             AnimalKind::LochNessMonster => loch_ness_parts(a, time, night),
             AnimalKind::Bat => bat_parts(a, time, night),
+            AnimalKind::Raven => raven_parts(a, time, night),
+            AnimalKind::Phoenix => phoenix_parts(a, time, night),
+            _ => continue,
         };
         let (s, c) = a.heading.sin_cos();
         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
@@ -660,14 +795,17 @@ mod tests {
             AnimalKind::Deer => deer_parts(a, time, night),
             AnimalKind::Quail => quail_parts(a, time, night),
             AnimalKind::Crow => crow_parts(a, time, night),
-            AnimalKind::MotherOfQuail => mother_of_quail_parts(a, time, night),
+            AnimalKind::IronQuail => iron_quail_parts(a, time, night),
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
             AnimalKind::Yeti => yeti_parts(a, time, night),
             AnimalKind::LochNessMonster => loch_ness_parts(a, time, night),
             AnimalKind::Bat => bat_parts(a, time, night),
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => hunt_parts(a, time),
+            AnimalKind::Raven => raven_parts(a, time, night),
+            AnimalKind::Phoenix => phoenix_parts(a, time, night),
+            kind if kind.is_wild_hunt() => hunt_parts(a, time),
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => hunt_parts(a, time),
             AnimalKind::WillOWhisp => unreachable!(),
         }
     }
@@ -777,25 +915,48 @@ mod tests {
     }
 
     #[test]
-    fn the_three_warriors_of_the_wild_hunt_are_see_through_and_each_has_its_own_weapon() {
+    fn the_warriors_of_the_wild_hunt_are_see_through_and_each_has_its_own_weapon() {
         let mut sizes = Vec::new();
-        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntStalker] {
+        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntLancer, AnimalKind::HuntBear, AnimalKind::HuntCrow] {
             let a = creature(kind);
             let parts = hunt_parts(&a, 0.5);
             assert!(parts.iter().all(|((_, _, c), _)| c.a < 0.9), "{kind:?}: every part is translucent");
-            assert!(parts.iter().filter(|((_, _, c), _)| c.a >= 0.8).count() >= 3, "{kind:?}: bright eyes and a gleaming weapon");
+            if matches!(kind, AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer) {
+                assert!(parts.iter().filter(|((_, _, c), _)| c.a >= 0.8).count() >= 3, "{kind:?}: bright eyes and a gleaming weapon");
+            }
             let reach = parts.iter().map(|((o, h, _), _)| o.0 + h.0).fold(0.0_f32, f32::max);
             sizes.push((kind, parts.len(), reach));
-            let top = parts.iter().map(|((o, h, _), _)| o.1 + h.1).fold(0.0_f32, f32::max);
-            assert!(top > 1.5 && top < 2.6, "{kind:?} is man-sized (the stalker crouches): {top}");
         }
         let sword = sizes[0].2;
-        assert!(sword > sizes[2].2 + 0.3, "the sword reaches well past the dagger: {sizes:?}");
-        // The stalker's arm snaps forward when it dashes.
-        let mut stalker = creature(AnimalKind::HuntStalker);
-        let before = hunt_parts(&stalker, 0.0);
-        stalker.hunt_phase = crate::animal::HuntPhase::Dash;
-        assert_ne!(before.iter().map(|((o, _, _), p)| (o.1 * 100.0) as i32 + (p * 100.0) as i32).collect::<Vec<_>>(), hunt_parts(&stalker, 0.0).iter().map(|((o, _, _), p)| (o.1 * 100.0) as i32 + (p * 100.0) as i32).collect::<Vec<_>>());
+        assert!(sizes[2].2 > sword + 0.5, "the lance reaches well past the sword: {sizes:?}");
+        let top = |kind| hunt_parts(&creature(kind), 0.5).iter().map(|((o, h, _), _)| o.1 + h.1).fold(0.0_f32, f32::max);
+        assert!(top(AnimalKind::HuntSwordsman) > 1.5 && top(AnimalKind::HuntSwordsman) < 2.6, "a man-sized warrior");
+        assert!(top(AnimalKind::HuntLancer) > top(AnimalKind::HuntSwordsman) + 0.4, "a rider on a horse stands taller");
+        // The lancer's lance is levelled at the charge and raised at rest.
+        let mut lancer = creature(AnimalKind::HuntLancer);
+        let rest = hunt_parts(&lancer, 0.0);
+        lancer.hunt_phase = crate::animal::HuntPhase::Dash;
+        assert_ne!(rest.iter().map(|((o, _, _), p)| (o.1 * 100.0) as i32 + (p * 100.0) as i32).collect::<Vec<_>>(), hunt_parts(&lancer, 0.0).iter().map(|((o, _, _), p)| (o.1 * 100.0) as i32 + (p * 100.0) as i32).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_raven_and_the_phoenix_are_black_and_fiery_birds_on_the_wing() {
+        let raven = models(&creature(AnimalKind::Raven), 0.3, false);
+        assert!(raven.iter().filter(|((_, _, c), _)| c.r < 0.2 && c.g < 0.2).count() >= 4, "black plumage");
+        let phoenix = models(&creature(AnimalKind::Phoenix), 0.3, false);
+        assert!(phoenix.iter().filter(|((_, _, c), _)| c.r > 0.8 && c.b < 0.4).count() >= 8, "orange and gold plumage");
+        let span = |p: &[Piece]| p.iter().map(|((o, h, _), _)| o.2.abs() + h.2).fold(0.0_f32, f32::max);
+        assert!(span(&phoenix) > 4.0 * span(&raven) / 1.6 * 1.6 / 4.0 * 3.0, "a huge wingspan");
+        assert!(span(&phoenix) > span(&raven) * 3.0);
+    }
+
+    #[test]
+    fn the_yeti_lifts_its_fists_to_smash() {
+        let mut yeti = creature(AnimalKind::Yeti);
+        let top = |a: &Animal| models(a, 0.0, false).iter().map(|((o, h, _), _)| o.1 + h.1).fold(0.0_f32, f32::max);
+        let calm = top(&yeti);
+        yeti.action = crate::animal::BossAction::Smash;
+        assert!(top(&yeti) > calm + 1.0, "its fists go up over its head");
     }
 
     #[test]

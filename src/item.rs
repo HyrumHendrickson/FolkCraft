@@ -129,10 +129,16 @@ pub enum ItemKind {
     /// Leather and leather cord sewn into a pack. Worn in the one worn place (right click it, or the Worn slot of the inventory), it gives
     /// two more rows of inventory slots, for as long as it is worn.
     LeatherBackpack,
+    /// Shot at the player by an Iron Quail; one that misses lies on the ground. Held, a click throws it like a throwing star.
+    IronFeather,
+    /// Dropped by the Phoenix. With a stick and a pebble it makes a Phoenix Arrow.
+    PhoenixFeather,
+    /// An arrow the bow never runs out of: shooting it does not use it up, and it does not land on the ground.
+    PhoenixArrow,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 73] = [
+    pub const ALL: [ItemKind; 76] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -206,6 +212,9 @@ impl ItemKind {
         ItemKind::TinPan,
         ItemKind::Excalibur,
         ItemKind::LeatherBackpack,
+        ItemKind::IronFeather,
+        ItemKind::PhoenixFeather,
+        ItemKind::PhoenixArrow,
     ];
 
     /// Display name.
@@ -284,6 +293,9 @@ impl ItemKind {
             ItemKind::TinPan => "Tin Pan",
             ItemKind::Excalibur => "Excalibur",
             ItemKind::LeatherBackpack => "Leather Backpack",
+            ItemKind::IronFeather => "Iron Feather",
+            ItemKind::PhoenixFeather => "Phoenix Feather",
+            ItemKind::PhoenixArrow => "Phoenix Arrow",
         }
     }
 
@@ -363,6 +375,9 @@ impl ItemKind {
             ItemKind::TinPan => "tin_pan",
             ItemKind::Excalibur => "excalibur",
             ItemKind::LeatherBackpack => "leather_backpack",
+            ItemKind::IronFeather => "iron_feather",
+            ItemKind::PhoenixFeather => "phoenix_feather",
+            ItemKind::PhoenixArrow => "phoenix_arrow",
         }
     }
 
@@ -451,6 +466,9 @@ impl ItemKind {
             ItemKind::TinPan => Color::new(0.72, 0.76, 0.82, 1.0),
             ItemKind::Excalibur => Color::new(0.86, 0.90, 0.98, 1.0),
             ItemKind::LeatherBackpack => Color::new(0.50, 0.32, 0.18, 1.0),
+            ItemKind::IronFeather => Color::new(0.58, 0.60, 0.66, 1.0),
+            ItemKind::PhoenixFeather => Color::new(0.98, 0.52, 0.12, 1.0),
+            ItemKind::PhoenixArrow => Color::new(0.96, 0.46, 0.10, 1.0),
         }
     }
 
@@ -525,6 +543,11 @@ impl ItemKind {
     /// Whether this shoots something when the left button is clicked: a bow (arrows) or a sling (pebbles).
     pub fn is_launcher(self) -> bool {
         matches!(self, ItemKind::Bow | ItemKind::Sling)
+    }
+
+    /// Whether a click throws this item itself (an iron feather, like a throwing star), rather than shooting something else.
+    pub fn is_thrown(self) -> bool {
+        self == ItemKind::IronFeather
     }
 
     /// What a launcher shoots, taken from the inventory (`None` for anything that is not a launcher).
@@ -694,6 +717,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         Block::Wood | Block::PlacedLog => drops.push(ItemKind::Log),
         Block::PlacedPebble | Block::WetPebble => drops.push(ItemKind::Pebble),
         Block::PlacedStone | Block::WetStone => drops.push(ItemKind::Stone),
+        Block::Bones => drops.push(ItemKind::DeerBone),
         Block::WetClay => drops.extend(std::iter::repeat(ItemKind::Clay).take(CLAY_DROP as usize)),
         Block::Boulder => {
             drops.push(ItemKind::Stone);
@@ -748,6 +772,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::SwordHilt
         | Block::PulledStone
         | Block::MayaStone
+        | Block::Magma
         | Block::Water
         | Block::Flower
         | Block::Fire

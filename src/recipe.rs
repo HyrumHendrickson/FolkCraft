@@ -60,6 +60,11 @@ pub const RECIPES: &[Recipe] = &[
         output_count: 1,
         inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1)],
     },
+    Recipe {
+        output: ItemKind::PhoenixArrow,
+        output_count: 1,
+        inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::PhoenixFeather, 1)],
+    },
 ];
 
 /// The recipe that makes `output`, if there is one.

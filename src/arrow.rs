@@ -43,6 +43,27 @@ impl Arrow {
         Arrow { kind: ItemKind::Pebble, pos: origin, vel: dir * SLING_SPEED, age: 0.0 }
     }
 
+    /// A Phoenix Arrow shot from a bow: it flies like an arrow, but is never used up and never lands.
+    pub fn fired_phoenix(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+    }
+
+    /// An iron feather thrown by the player from `origin` along the unit vector `dir`, like a throwing star.
+    pub fn thrown_feather(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::IronFeather, pos: origin, vel: dir * IRON_FEATHER_SPEED, age: 0.0 }
+    }
+
+    /// An iron feather shot by an Iron Quail from `origin` along the unit vector `dir`. It hurts the player, not animals, and lands as an
+    /// item if it misses.
+    pub fn from_iron_quail(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::IronFeather, pos: origin, vel: dir * IRON_FEATHER_SPEED, age: 0.0 }
+    }
+
+    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow), instead of lying there to be picked up again.
+    pub fn vanishes_on_landing(&self) -> bool {
+        self.kind == ItemKind::PhoenixArrow
+    }
+
     /// An arrow shot by the Wild Hunt's archer from `origin` along the unit vector `dir`. It hurts the player, not animals.
     pub fn from_archer(origin: Vec3, dir: Vec3) -> Arrow {
         Arrow { kind: ItemKind::Arrow, pos: origin, vel: dir * HUNT_ARROW_SPEED, age: 0.0 }
@@ -62,7 +83,11 @@ impl Arrow {
 
     /// Life points taken from an animal it hits.
     pub fn damage(&self) -> i32 {
-        if self.kind == ItemKind::Pebble { SLING_DAMAGE } else { ARROW_DAMAGE }
+        match self.kind {
+            ItemKind::Pebble => SLING_DAMAGE,
+            ItemKind::IronFeather => IRON_FEATHER_THROW_DAMAGE,
+            _ => ARROW_DAMAGE,
+        }
     }
 
     /// Advance the arrow by `dt` seconds. The path is checked in short segments, so a fast arrow

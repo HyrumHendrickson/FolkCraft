@@ -96,6 +96,10 @@ pub enum Block {
     PulledStone,
     /// The weathered, pale stone of the jungle temple: a solid cube that cannot be broken or made.
     MayaStone,
+    /// Bones scattered on the ground of an altar island in the Skylands. Walk-through; taking them by hand drops a deer bone.
+    Bones,
+    /// Glowing rock inside the Phoenix's volcano: a solid cube that cannot be broken or made.
+    Magma,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -296,6 +300,28 @@ const TOWER_DOOR_TOP_PARTS: &[Part] = &[
     part([0.0, 0.18, 0.94], [1.0, 0.28, 1.0], (0.62, 0.64, 0.70)),
     part([0.0, 0.76, 0.94], [1.0, 0.86, 1.0], (0.62, 0.64, 0.70)),
 ];
+/// A cluster of pink salt crystals standing on the floor of a mine: a tall six-sided prism with a pale tip, flanked by shorter ones
+/// leaning the same way, on a little crust of salt.
+const SALT_CRYSTAL_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.10, 0.82], (0.86, 0.60, 0.66)),
+    part([0.38, 0.10, 0.38], [0.62, 0.78, 0.62], (0.95, 0.62, 0.72)),
+    part([0.43, 0.78, 0.43], [0.57, 0.95, 0.57], (1.0, 0.84, 0.90)),
+    part([0.20, 0.10, 0.44], [0.36, 0.52, 0.60], (0.90, 0.52, 0.64)),
+    part([0.23, 0.52, 0.48], [0.33, 0.62, 0.56], (1.0, 0.80, 0.88)),
+    part([0.62, 0.10, 0.22], [0.78, 0.42, 0.38], (0.97, 0.70, 0.78)),
+    part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (1.0, 0.86, 0.92)),
+    part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.84, 0.46, 0.60)),
+];
+/// A few bones lying on the ground: a long one, a short one across it and a rib.
+const BONES_PARTS: &[Part] = &[
+    part([0.10, 0.0, 0.40], [0.74, 0.07, 0.50], (0.92, 0.89, 0.80)),
+    part([0.06, 0.0, 0.36], [0.16, 0.10, 0.44], (0.92, 0.89, 0.80)),
+    part([0.06, 0.0, 0.46], [0.16, 0.10, 0.54], (0.92, 0.89, 0.80)),
+    part([0.66, 0.0, 0.36], [0.76, 0.10, 0.44], (0.92, 0.89, 0.80)),
+    part([0.66, 0.0, 0.46], [0.76, 0.10, 0.54], (0.92, 0.89, 0.80)),
+    part([0.42, 0.0, 0.14], [0.50, 0.06, 0.66], (0.86, 0.83, 0.74)),
+    part([0.62, 0.0, 0.64], [0.88, 0.05, 0.70], (0.88, 0.85, 0.76)),
+];
 /// A silver key lying on a small stone stand.
 const KEY_STAND_PARTS: &[Part] = &[
     part([0.28, 0.0, 0.28], [0.72, 0.30, 0.72], (0.46, 0.46, 0.50)),
@@ -387,6 +413,7 @@ impl Block {
                 | Block::GoldPile
                 | Block::ArmorStand
                 | Block::PinkSalt
+                | Block::Bones
                 | Block::KeyStand
                 | Block::StonePlinth
                 | Block::HornPlinth
@@ -439,6 +466,7 @@ impl Block {
             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
             Block::ArmorStand => BREAK_SECONDS_ARMOR,
             Block::PinkSalt => BREAK_SECONDS_SALT,
+            Block::Bones => BREAK_SECONDS_PLACED,
             Block::KeyStand => BREAK_SECONDS_KEY,
             Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth | Block::AltarLoadstone => BREAK_SECONDS_RELIC,
             Block::GoldBoulder => BREAK_SECONDS_GOLD_BOULDER,
@@ -459,6 +487,7 @@ impl Block {
             | Block::AncientAltar
             | Block::PulledStone
             | Block::MayaStone
+            | Block::Magma
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -477,7 +506,7 @@ impl Block {
     /// a filled forge is lit instead of broken, and with a bow or a sling in hand nothing is broken: the button
     /// shoots instead.
     pub fn can_break_with(self, held: Option<ItemKind>) -> bool {
-        if held.map_or(false, ItemKind::is_launcher) {
+        if held.map_or(false, |k| k.is_launcher() || k.is_thrown()) {
             return false;
         }
         match self {
@@ -491,7 +520,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::PinkSalt | Block::MayaStone)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::MayaStone | Block::Magma)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -522,6 +551,7 @@ impl Block {
                 | Block::SwordHilt
                 | Block::PulledStone
                 | Block::MayaStone
+                | Block::Magma
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -574,6 +604,8 @@ impl Block {
             Block::TowerDoor => TOWER_DOOR_PARTS,
             Block::TowerDoorTop => TOWER_DOOR_TOP_PARTS,
             Block::KeyStand => KEY_STAND_PARTS,
+            Block::PinkSalt => SALT_CRYSTAL_PARTS,
+            Block::Bones => BONES_PARTS,
             Block::StonePlinth => STONE_PLINTH_PARTS,
             Block::HornPlinth => HORN_PLINTH_PARTS,
             Block::CrownPlinth => CROWN_PLINTH_PARTS,
@@ -658,6 +690,7 @@ impl Block {
             Block::SilverStone => (0.78, 0.80, 0.86),
             Block::PinkSalt => (0.95, 0.64, 0.70),
             Block::MayaStone => (0.66, 0.62, 0.48),
+            Block::Magma => (1.0, 0.42, 0.08),
             _ => self.parts().first().map_or((0.0, 0.0, 0.0), |p| p.color),
         }
     }
@@ -667,7 +700,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 48] = [
+    const ALL: [Block; 50] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -716,6 +749,8 @@ mod tests {
         Block::SwordHilt,
         Block::PulledStone,
         Block::MayaStone,
+        Block::Bones,
+        Block::Magma,
     ];
 
     #[test]
@@ -956,7 +991,10 @@ mod tests {
         }
         assert!(Block::SilverStone.opaque() && Block::SilverStone.anchors_planks());
         assert!(!Block::TowerDoor.opaque() && !Block::TowerDoor.is_full_cube(), "a door is drawn from boxes");
-        assert!(Block::PinkSalt.is_full_cube() && Block::PinkSalt.opaque() && Block::PinkSalt.hand_breakable() && Block::PinkSalt.id().is_none());
+        assert!(!Block::PinkSalt.is_full_cube() && !Block::PinkSalt.opaque() && Block::PinkSalt.hand_breakable() && Block::PinkSalt.id().is_none(), "salt is a cluster of crystals, not a pink cube");
+        assert!(Block::PinkSalt.parts().len() >= 6, "a tall prism with a tip and shorter ones round it");
+        assert!(Block::Bones.hand_breakable() && !Block::Bones.collides() && !Block::Bones.opaque(), "bones are walked over");
+        assert!(Block::Magma.opaque() && Block::Magma.collides() && !Block::Magma.breakable(), "the volcano's rock is solid and fixed");
         for b in [Block::PinkSalt, Block::KeyStand, Block::StonePlinth, Block::HornPlinth, Block::CrownPlinth] {
             assert!(b.can_break_with(None) && b.collides() && b.break_seconds() > 0.0, "{b:?} is taken by hand");
         }

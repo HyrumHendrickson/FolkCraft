@@ -678,6 +678,43 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_line(p(0.40, 0.60).x, p(0.40, 0.60).y, p(0.58, 0.42).x, p(0.58, 0.42).y, 1.2, lighten(color, 0.28));
             draw_line(p(0.44, 0.64).x, p(0.44, 0.64).y, p(0.62, 0.46).x, p(0.62, 0.46).y, 1.0, darken(color, 0.70));
         }
+        ItemKind::IronFeather | ItemKind::PhoenixFeather => {
+            // A feather like the quail's, but of metal plates (iron) or of fire (phoenix), with a bright quill.
+            let (tip, base) = (p(0.82, 0.14), p(0.20, 0.86));
+            let n = (tip - base).normalize();
+            let perp = vec2(-n.y, n.x);
+            let iron = kind == ItemKind::IronFeather;
+            for i in 0..12 {
+                let t = 0.12 + i as f32 / 12.0 * 0.84;
+                let on = base + (tip - base) * t;
+                let width = (t * (1.0 - t)).sqrt() * 0.55 * r.w * 0.30 * 2.0;
+                let shade = if i % 2 == 0 { 0.0 } else { -0.07 };
+                let c = if iron {
+                    Color::new(color.r + shade, color.g + shade, color.b + shade, 1.0)
+                } else {
+                    Color::new((color.r + shade).clamp(0.0, 1.0), (color.g + shade + 0.30 * t).clamp(0.0, 1.0), (color.b + shade).clamp(0.0, 1.0), 1.0)
+                };
+                draw_line(on.x - perp.x * width * 0.6, on.y - perp.y * width * 0.6 - 1.5 * u, on.x + perp.x * width, on.y + perp.y * width, 3.2 * u, c);
+            }
+            draw_line(base.x, base.y, tip.x, tip.y, 2.6 * u, outline);
+            draw_line(base.x, base.y, tip.x, tip.y, 1.3 * u, if iron { Color::new(0.86, 0.88, 0.92, 1.0) } else { Color::new(1.0, 0.92, 0.50, 1.0) });
+        }
+        ItemKind::PhoenixArrow => {
+            // An arrow with a fiery head and phoenix fletching.
+            let (tail, tip) = (p(0.20, 0.80), p(0.76, 0.24));
+            rod(tail, tip, 3.0 * u, ItemKind::Arrow.color());
+            let dir = (tip - tail).normalize();
+            let perp = vec2(-dir.y, dir.x);
+            let head = Color::new(1.0, 0.62, 0.12, 1.0);
+            tri(tip + dir * 10.0 * u, tip + perp * 5.5 * u - dir * 3.0 * u, tip - perp * 5.5 * u - dir * 3.0 * u, head);
+            tri(tip + dir * 6.0 * u, tip + perp * 2.5 * u - dir * 2.0 * u, tip - perp * 2.5 * u - dir * 2.0 * u, Color::new(1.0, 0.92, 0.45, 1.0));
+            for k in 0..3 {
+                let at = tail + dir * (k as f32 * 4.5 * u);
+                for s in [-1.0_f32, 1.0] {
+                    tri(at, at + perp * s * 6.5 * u - dir * 2.0 * u, at + dir * 6.5 * u + perp * s * 1.0, ItemKind::PhoenixFeather.color());
+                }
+            }
+        }
         ItemKind::LeatherBackpack => {
             // A pack seen from the front: a rounded body, a flap with a buckle, a front pocket and two straps.
             let (tl, br) = (p(0.24, 0.20), p(0.76, 0.84));

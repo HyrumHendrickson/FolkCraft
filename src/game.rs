@@ -3,12 +3,13 @@
 use macroquad::prelude::*;
 use std::fs;
 
-use crate::animal::{Animal, AnimalKind};
+use crate::animal::{Animal, AnimalKind, BossEvent};
 use crate::arrow::{Arrow, Fate};
 use crate::block::Block;
 use crate::config::*;
 use crate::dropped::{collect_nearby, DroppedItem};
 use crate::effects::rainbow_clear_of_view;
+use crate::hazard::{acid_line, AcidCell, Burst, Projectile, ProjectileKind};
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
@@ -22,6 +23,23 @@ use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
 use crate::tornado::{Cyclone, FireTornado};
 use crate::world::{Pot, ray_box, Hit, Pos, World};
+
+/// What kind of flash a `ShownBurst` is (the game draws each its own way).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BurstShape {
+    Ice,
+    Fire,
+    /// The ring that runs out from a smashed patch of ground.
+    Smash,
+}
+
+/// A burst or a smash that is still on the screen, for `BURST_SHOW_SECONDS`.
+#[derive(Clone, Copy, Debug)]
+pub struct ShownBurst {
+    pub pos: Vec3,
+    pub shape: BurstShape,
+    pub age: f32,
+}
 
 /// A block being broken. Progress resets when the target, the block or the held tool changes,
 /// or when the button is released.
@@ -187,18 +205,27 @@ pub struct Game {
     storm_lightning_pos: Vec3,
     /// Fade in progress after the player reaches the bottom of the well.
     pub horizen_transition: Option<f32>,
-    /// Quail the player has killed. A Mother of Quail comes for every `QUAIL_KILLS_PER_MOTHER`.
+    /// Quail the player has killed. An Iron Quail comes for every `QUAIL_KILLS_PER_IRON_QUAIL`.
     pub quail_kills: u32,
     /// What a ghost is saying now, and for how many more seconds (shown as text on the screen: ghosts are not seen).
     pub ghost_text: Option<(String, f32)>,
     /// Whether the player is inside the graveyard (so that its ghost speaks when they walk in, not every frame).
     pub in_graveyard: bool,
-    /// Mothers of Quail that are due but have not yet found a place to appear (or were left behind in another dimension).
-    pub mothers_owed: u32,
+    /// Iron Quails that are due but have not yet found a place to appear (or were left behind in another dimension).
+    pub iron_quails_owed: u32,
     /// Arrows the Wild Hunt's archer has shot, in flight (they hurt the player and nothing else, and are used up on landing).
     pub hostile_arrows: Vec<Arrow>,
     /// Seconds left of the victory message on the screen, once the Wild Hunt has been beaten.
     pub victory: Option<f32>,
+    /// The Yeti's lumps of ice and the Phoenix's fireballs in flight, the flashes where they burst, and the lake water Nessie has
+    /// made acid.
+    pub projectiles: Vec<Projectile>,
+    pub bursts: Vec<ShownBurst>,
+    pub acid: Vec<AcidCell>,
+    /// Seconds the player has stood in acid water since it last burned them.
+    acid_burn: f32,
+    /// The health the Wild Hunt began with, and what its splitting bears and crows have added: the whole of its shared health bar.
+    hunt_total: i32,
 }
 
 /// Whether nothing solid lies on the straight line from `eye` along the unit vector `dir` for `dist` blocks.
@@ -308,9 +335,14 @@ impl Game {
             quail_kills: data.quail_kills,
             ghost_text: None,
             in_graveyard: false,
-            mothers_owed: 0,
+            iron_quails_owed: 0,
             hostile_arrows: Vec::new(),
             victory: None,
+            projectiles: Vec::new(),
+            bursts: Vec::new(),
+            acid: Vec::new(),
+            acid_burn: 0.0,
+            hunt_total: 0,
         };
         // A world saved away from the overworld picks up the dimension it was saved in.
         if in_horizen {
@@ -459,8 +491,12 @@ impl Game {
             self.world.set_rainbow(RainbowState::Spent);
             self.toasts.push("The rainbow fades. There will not be another.".to_string());
         }
-        for &kind in &drops {
-            self.items.push(DroppedItem::spawn(kind, (x, y, z), &mut self.rng));
+        for kind in drops.iter_mut() {
+            // A player who already has a silver key is given a gold bar instead of another (see `key_or_gold`).
+            if *kind == ItemKind::SilverKey {
+                *kind = self.key_or_gold();
+            }
+            self.items.push(DroppedItem::spawn(*kind, (x, y, z), &mut self.rng));
         }
         drops
     }
@@ -575,11 +611,16 @@ impl Game {
             for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Moose) {
                 a.calm();
             }
-            // The fight is over: the Mother of Quail has won.
-            self.animals.retain(|a| a.kind != AnimalKind::MotherOfQuail);
+            // The fight is over: the Iron Quail has won.
+            self.animals.retain(|a| a.kind != AnimalKind::IronQuail);
             // The Wild Hunt has won too: its warriors and their arrows are gone, and the horn can call them again.
             self.animals.retain(|a| !a.kind.is_wild_hunt());
+            // The ravens Nessie called go too, and what the bosses threw.
+            self.animals.retain(|a| !(a.kind == AnimalKind::Raven && a.summoned));
             self.hostile_arrows.clear();
+            self.projectiles.clear();
+            self.acid.clear();
+            self.hunt_total = 0;
             return true;
         }
         false
@@ -1127,7 +1168,14 @@ impl Game {
                 animal.knock_back(away);
             }
         }
+        self.remove_dead(dead);
+    }
+
+    /// Take the animals at these indices out of the world: each drops its loot and the bosses among them do what a boss's death
+    /// does. A ghostly bear or crow of the Wild Hunt that splits is replaced by `HUNT_SPLIT_INTO` of its kind.
+    fn remove_dead(&mut self, mut dead: Vec<usize>) {
         dead.sort_unstable_by(|a, b| b.cmp(a));
+        dead.dedup();
         for i in dead {
             let animal = self.animals.remove(i);
             if animal.kind == AnimalKind::Quail {
@@ -1135,38 +1183,67 @@ impl Game {
             }
             let drops = animal.kind.drops(&mut self.rng);
             for kind in drops {
+                // A player who has a silver key, or one lying on the ground, is given a gold bar instead of another.
+                let kind = if kind == ItemKind::SilverKey { self.key_or_gold() } else { kind };
                 let spot = animal.pos + vec3(0.0, 0.5, 0.0);
                 self.items.push(DroppedItem::spawn_at(kind, spot, &mut self.rng));
             }
+            if animal.splits {
+                for n in 0..HUNT_SPLIT_INTO {
+                    let a = n as f32 * std::f32::consts::TAU / HUNT_SPLIT_INTO as f32 + animal.heading;
+                    let at = animal.pos + vec3(a.cos() * 0.8, 0.3, a.sin() * 0.8);
+                    let mut child = Animal::new(animal.kind, at, &mut self.rng);
+                    child.home = animal.home;
+                    self.hunt_total += child.kind.max_health();
+                    self.animals.push(child);
+                }
+            }
             self.boss_slain(&animal);
         }
-        self.summon_mothers();
+        self.summon_iron_quails();
     }
 
-    /// Count a quail the player has killed: every `QUAIL_KILLS_PER_MOTHER`th one calls a Mother of Quail.
+    /// Whether the player has a silver key: in the inventory, or lying on the ground.
+    pub fn has_silver_key(&self) -> bool {
+        self.inventory.count(ItemKind::SilverKey) > 0 || self.items.iter().any(|i| i.kind == ItemKind::SilverKey)
+    }
+
+    /// What a silver key that is about to drop becomes: itself, or a gold bar if the player already has one (in the inventory, or
+    /// lying on the ground).
+    pub fn key_or_gold(&self) -> ItemKind {
+        if self.has_silver_key() { ItemKind::Gold } else { ItemKind::SilverKey }
+    }
+
+    /// Count a quail the player has killed: every `QUAIL_KILLS_PER_IRON_QUAIL`th one calls an Iron Quail.
     fn note_quail_killed(&mut self) {
         self.quail_kills += 1;
-        if self.quail_kills % QUAIL_KILLS_PER_MOTHER == 0 {
-            self.mothers_owed += 1;
+        if self.quail_kills % QUAIL_KILLS_PER_IRON_QUAIL == 0 {
+            self.iron_quails_owed += IRON_QUAILS_PER_SUMMON;
         }
     }
 
-    /// Bring out the Mothers of Quail that are due, each `MOTHER_OF_QUAIL_SPAWN_DISTANCE` from the player on open ground.
-    /// One that finds no place now is tried again with the next wildlife spawn.
-    fn summon_mothers(&mut self) {
-        while self.mothers_owed > 0 && self.in_overworld() {
+    /// Bring out the Iron Quails that are due (`IRON_QUAILS_PER_SUMMON` for every tenth quail), spread round the player, each
+    /// `IRON_QUAIL_SPAWN_DISTANCE` away on open ground. Any that finds no place now is tried again with the next wildlife spawn.
+    fn summon_iron_quails(&mut self) {
+        let mut came = 0;
+        while self.iron_quails_owed > 0 && self.in_overworld() {
             let p = self.player.pos;
             let first = self.rng.unit() * std::f32::consts::TAU;
+            let share = std::f32::consts::TAU / IRON_QUAILS_PER_SUMMON as f32;
+            let offset = (came % IRON_QUAILS_PER_SUMMON as usize) as f32 * share;
             let placed = (0..24).any(|i| {
-                let a = first + i as f32 * std::f32::consts::TAU / 24.0;
-                let (x, z) = ((p.x + a.cos() * MOTHER_OF_QUAIL_SPAWN_DISTANCE).floor() as i32, (p.z + a.sin() * MOTHER_OF_QUAIL_SPAWN_DISTANCE).floor() as i32);
-                self.spawn_animal(AnimalKind::MotherOfQuail, x, z)
+                let a = first + offset + i as f32 * std::f32::consts::TAU / 24.0;
+                let (x, z) = ((p.x + a.cos() * IRON_QUAIL_SPAWN_DISTANCE).floor() as i32, (p.z + a.sin() * IRON_QUAIL_SPAWN_DISTANCE).floor() as i32);
+                self.spawn_animal(AnimalKind::IronQuail, x, z)
             });
             if !placed {
-                return;
+                break;
             }
-            self.mothers_owed -= 1;
-            self.toasts.push("A great shadow falls: the Mother of Quail comes for you.".to_string());
+            self.iron_quails_owed -= 1;
+            came += 1;
+        }
+        if came > 0 {
+            self.toasts.push("A great shadow falls: the Iron Quails come for you.".to_string());
         }
     }
 
@@ -1197,6 +1274,7 @@ impl Game {
         match self.held_item() {
             Some(ItemKind::Bow) if clicked => self.shoot_bow(eye, dir),
             Some(ItemKind::Sling) if clicked => self.shoot_sling(eye, dir),
+            Some(ItemKind::IronFeather) if clicked => self.throw_feather(eye, dir),
             Some(kind) if kind.melee_damage().is_some() && aimed && held_down => self.swing_melee(eye, dir),
             _ => false,
         }
@@ -1214,11 +1292,45 @@ impl Game {
         self.shoot(ItemKind::Sling, eye, dir)
     }
 
-    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition.
+    /// Throw the iron feather in hand along `dir` from `eye`, like a throwing star: it flies like an arrow and is used up only if it
+    /// hits an animal (one that hits a block lies there to be picked up again). Returns whether it was thrown.
+    pub fn throw_feather(&mut self, eye: Vec3, dir: Vec3) -> bool {
+        if self.held_item() != Some(ItemKind::IronFeather) || self.attack_cooldown > 0.0 || !self.inventory.remove(ItemKind::IronFeather, 1) {
+            return false;
+        }
+        self.attack_cooldown = IRON_FEATHER_THROW_COOLDOWN;
+        self.arrows.push(Arrow::thrown_feather(eye, dir));
+        true
+    }
+
+    /// Nessie hears a bow or a sling: within `LOCH_NESS_SHOT_HEARING` she runs for the middle of the lake and, if she was not
+    /// running already, calls `LOCH_NESS_ALARM_RAVENS` more ravens.
+    fn alarm_nessie(&mut self) {
+        let p = self.player.pos;
+        let mut alarmed = false;
+        for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::LochNessMonster) {
+            if vec2(a.pos.x - p.x, a.pos.z - p.z).length() <= LOCH_NESS_SHOT_HEARING {
+                alarmed |= !a.is_fleeing_shot();
+                a.startle(LOCH_NESS_FLEE_SECONDS);
+            }
+        }
+        if alarmed {
+            self.call_ravens(LOCH_NESS_ALARM_RAVENS, LOCH_NESS_MAX_RAVENS + LOCH_NESS_ALARM_RAVENS);
+        }
+    }
+
+    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a Phoenix Arrow
+    /// in preference when there is one in the inventory, and that is never used up.
     fn shoot(&mut self, launcher: ItemKind, eye: Vec3, dir: Vec3) -> bool {
         let Some(ammo) = launcher.ammo() else { return false };
         if self.held_item() != Some(launcher) || self.attack_cooldown > 0.0 {
             return false;
+        }
+        if launcher == ItemKind::Bow && self.inventory.count(ItemKind::PhoenixArrow) > 0 {
+            self.attack_cooldown = BOW_COOLDOWN;
+            self.arrows.push(Arrow::fired_phoenix(eye, dir));
+            self.alarm_nessie();
+            return true;
         }
         if !self.inventory.remove(ammo, 1) {
             self.attack_cooldown = AXE_COOLDOWN;
@@ -1232,6 +1344,7 @@ impl Game {
             self.attack_cooldown = BOW_COOLDOWN;
             self.arrows.push(Arrow::fired(eye, dir));
         }
+        self.alarm_nessie();
         true
     }
 
@@ -1249,7 +1362,10 @@ impl Game {
                 false
             }
             Fate::HitBlock | Fate::Expired => {
-                landed.push((arrow.kind, arrow.pos - arrow.vel.normalize_or_zero() * ARROW_DROP_BACKOFF));
+                // A Phoenix Arrow is never used up, and never lies on the ground: it is simply gone.
+                if !arrow.vanishes_on_landing() {
+                    landed.push((arrow.kind, arrow.pos - arrow.vel.normalize_or_zero() * ARROW_DROP_BACKOFF));
+                }
                 false
             }
         });
@@ -1412,6 +1528,13 @@ impl Game {
         }
         // In the Skylands a bone totem, by day or night, leads to the silver tower once it has appeared on its island.
         if self.in_skylands() {
+            // A peep stone leads to the giant island and its volcano, until the Phoenix is dead.
+            if self.held_item() == Some(ItemKind::PeepStone) {
+                if self.world.landmarks.phoenix_slain {
+                    return None;
+                }
+                return Some(vec![start, skylands::volcano_foot(self.info.seed)]);
+            }
             if self.held_item() != Some(ItemKind::BoneTotem) {
                 return None;
             }
@@ -1614,7 +1737,8 @@ impl Game {
         if self.in_graveyard_square() && !self.world.landmarks.graveyard_rested {
             self.world.landmarks.graveyard_rested = true;
             let at = self.player.pos;
-            self.give_or_drop(ItemKind::SilverKey, (at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32));
+            let key = self.key_or_gold();
+            self.give_or_drop(key, (at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32));
             self.ghost_says(ghosts::GRAVEYARD_THANKS);
         } else if let Some(line) = self.tower_ghost_here() {
             self.ghost_says(line);
@@ -1764,6 +1888,13 @@ impl Game {
                 }
             }
         }
+        if self.in_skylands() && !self.world.landmarks.phoenix_slain && !self.animals.iter().any(|a| a.kind == AnimalKind::Phoenix) {
+            let crater = skylands::volcano_crater(self.info.seed);
+            let gap = vec2(p.x - crater.x, p.z - crater.z).length();
+            if gap <= PHOENIX_SPAWN_DISTANCE && self.world.chunks.contains_key(&World::chunk_of_pos(crater)) {
+                self.animals.push(Animal::new(AnimalKind::Phoenix, crater + vec3(0.0, 3.0, 0.0), &mut self.rng));
+            }
+        }
         let lakes: Vec<Lake> = self.world.landmarks.lakes.iter().copied().filter(|l| self.world.landmarks.monster_alive(l)).collect();
         for lake in lakes {
             let centre = vec3(lake.x as f32 + 0.5, 0.0, lake.z as f32 + 0.5);
@@ -1803,8 +1934,13 @@ impl Game {
                     self.toasts.push("The Loch Ness Monster is slain.".to_string());
                 }
             }
+            AnimalKind::Phoenix => {
+                self.world.landmarks.phoenix_slain = true;
+                self.tornadoes.clear();
+                self.toasts.push("The Phoenix is slain. The fire tornadoes die away.".to_string());
+            }
             kind if kind.is_wild_hunt() => {
-                // The last of the three to fall wins the game.
+                // The last of the Hunt to fall wins the game.
                 if !self.animals.iter().any(|a| a.kind.is_wild_hunt()) {
                     self.win_the_game();
                 }
@@ -1831,9 +1967,10 @@ impl Game {
             .filter(|a| a.kind.is_boss() && (a.pos - p).length() <= BOSS_BAR_DISTANCE)
             .min_by(|a, b| (a.pos - p).length().partial_cmp(&(b.pos - p).length()).unwrap_or(std::cmp::Ordering::Equal))?;
         if nearest.kind.is_wild_hunt() {
-            // The three warriors share one bar: what is left of all three together.
+            // The whole Hunt shares one bar: what is left of all of it together.
             let left: i32 = self.animals.iter().filter(|a| a.kind.is_wild_hunt()).map(|a| a.health.max(0)).sum();
-            let total = HUNT_SWORDSMAN_HEALTH + HUNT_ARCHER_HEALTH + HUNT_STALKER_HEALTH;
+            let present: i32 = self.animals.iter().filter(|a| a.kind.is_wild_hunt()).map(|a| a.kind.max_health()).sum();
+            let total = if self.hunt_total > 0 { self.hunt_total.max(left) } else { present }.max(1);
             return Some((nearest.kind.boss_name(), (left as f32 / total as f32).clamp(0.0, 1.0)));
         }
         Some((nearest.kind.boss_name(), (nearest.health as f32 / nearest.kind.max_health() as f32).clamp(0.0, 1.0)))
@@ -1847,7 +1984,6 @@ impl Game {
                 let (sx, sz) = self.world.landmarks.summit()?;
                 Some(Cyclone { pos: vec3(sx as f32 + 0.5, (self.world.ground_top(sx, sz) + 1) as f32, sz as f32 + 0.5) })
             }
-            Dimension::Skylands => Some(Cyclone { pos: skylands::home_cyclone() }),
             _ => None,
         }
     }
@@ -2009,8 +2145,8 @@ impl Game {
             self.world.landmarks.yeti_slain = false;
             self.toasts.push("Far below, the Yeti stirs on the summit once more.".to_string());
         }
-        // A Mother of Quail left behind comes again (whole) when the player is back in the overworld.
-        self.mothers_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::MotherOfQuail).count() as u32;
+        // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
+        self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
         self.animals.clear();
         self.arrows.clear();
         self.hostile_arrows.clear();
@@ -2094,6 +2230,13 @@ impl Game {
         if !self.in_overworld() {
             return;
         }
+        if self.player_in_mine() {
+            self.spawn_mine_bats();
+        }
+        // Ravens come out at night.
+        if self.world.night && self.animals.iter().filter(|a| a.kind == AnimalKind::Raven && !a.summoned).count() < MAX_RAVEN && self.rng.next() % 100 < SPAWN_WEIGHT_RAVEN {
+            self.spawn_raven(false);
+        }
         let count = |k: AnimalKind| self.animals.iter().filter(|a| a.kind == k).count();
         let room = |kind: AnimalKind| match kind {
             AnimalKind::Deer => MAX_DEER,
@@ -2104,8 +2247,8 @@ impl Game {
             AnimalKind::WillOWhisp => MAX_WILL_O_WHISP,
             // The bosses are never wildlife, and neither are bats in the normal world (only the pipes call them there).
             AnimalKind::Crow => MAX_CROW,
-            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::MotherOfQuail | AnimalKind::Bat => 0,
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker => 0,
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Bat | AnimalKind::Raven | AnimalKind::Phoenix => 0,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => 0,
         }
         .saturating_sub(count(kind));
         let mut open: Vec<(AnimalKind, u64)> = [
@@ -2156,11 +2299,8 @@ impl Game {
         match self.world.dimension {
             // The cave of the Horizen holds bats and nothing else (see `spawn_cave_bats`).
             Dimension::Horizen => {}
-            // Nothing lives in the Skylands either, but fire tornadoes sweep across them by day.
-            Dimension::Skylands => {
-                self.update_sky_tornado(dt);
-                return;
-            }
+            // Nothing lives in the Skylands but the Phoenix in its volcano, and fire tornadoes sweep across them by day.
+            Dimension::Skylands => self.update_sky_tornado(dt),
             Dimension::Overworld => {}
         }
         let player = self.player.pos;
@@ -2184,7 +2324,9 @@ impl Game {
             a.kind.never_gives_up()
                 || flat(a) < if a.kind.is_boss() { BOSS_DESPAWN_DISTANCE } else { ANIMAL_DESPAWN_DISTANCE }
                     && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
-                    && (self.world.night || !overworld || a.kind != AnimalKind::Bat)
+                    && (self.world.night || !overworld || a.kind != AnimalKind::Bat || a.lives_in_mine)
+                    // Ravens go with the dawn, except the ones Nessie called, which act as if it were night.
+                    && (self.world.night || !overworld || a.kind != AnimalKind::Raven || a.summoned)
         });
         let cloaked = self.worn == Some(ItemKind::PeltCloak);
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Bear) {
@@ -2195,7 +2337,8 @@ impl Game {
         let mut volleys: Vec<Arrow> = Vec::new();
         // A Rabbit Foot in the hotbar makes the Wild Hunt's archer nock its arrows half as fast.
         let slowdown = if self.rabbit_foot_in_hotbar() { HUNT_ARCHER_FOOT_FACTOR } else { 1.0 };
-        let (facing, player_vel) = (self.player.yaw, self.player.vel);
+        let player_vel = self.player.vel;
+        let mut events: Vec<BossEvent> = Vec::new();
         for a in &mut self.animals {
             let near = a.kind.never_gives_up() || vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
             if !near || !self.world.chunks.contains_key(&World::chunk_of_pos(a.pos)) {
@@ -2208,7 +2351,6 @@ impl Game {
                 player
             };
             let before_x = a.pos.x;
-            a.player_facing = facing;
             if let Some(kind) = a.update(&self.world, threat, dt, &mut self.rng) {
                 self.items.push(DroppedItem::spawn_at(kind, a.pos + vec3(0.0, 0.3, 0.0), &mut self.rng));
             }
@@ -2223,18 +2365,21 @@ impl Game {
             if a.try_attack(player) {
                 strikes.push((a.pos, a.kind.attack_damage(), a.kind.death_message()));
             }
+            events.extend(a.take_events());
             if a.ready_to_shoot(player) {
-                // The archer shoots if it can see the player, leading them a little and allowing for the arrow's fall.
-                let origin = a.pos + vec3(a.heading.cos() * 0.5, 1.5, a.heading.sin() * 0.5);
+                // An archer (or an Iron Quail) shoots if it can see the player, leading them a little and allowing for the missile's fall.
+                let quail = a.kind == AnimalKind::IronQuail;
+                let (speed, spread) = if quail { (IRON_FEATHER_SPEED, IRON_FEATHER_SPREAD) } else { (HUNT_ARROW_SPEED, HUNT_ARROW_SPREAD) };
+                let origin = a.pos + vec3(a.heading.cos() * 0.5, if quail { 0.8 } else { 1.5 }, a.heading.sin() * 0.5);
                 let gap = (player + vec3(0.0, 1.0, 0.0) - origin).length();
-                let flight = gap / HUNT_ARROW_SPEED;
+                let flight = gap / speed;
                 let aim = player + vec3(0.0, 1.0 + 0.5 * ARROW_GRAVITY * flight * flight, 0.0) + vec3(player_vel.x, 0.0, player_vel.z) * flight * 0.5;
                 let mut dir = (aim - origin).normalize_or_zero();
                 let (jx, jy, jz) = (self.rng.unit() - 0.5, self.rng.unit() - 0.5, self.rng.unit() - 0.5);
-                dir = (dir + vec3(jx, jy, jz) * 2.0 * HUNT_ARROW_SPREAD).normalize_or_zero();
+                dir = (dir + vec3(jx, jy, jz) * 2.0 * spread).normalize_or_zero();
                 let sight = player + vec3(0.0, 1.0, 0.0) - origin;
                 if dir != Vec3::ZERO && clear_line(&self.world, origin, sight.normalize_or_zero(), sight.length()) {
-                    volleys.push(Arrow::from_archer(origin, dir));
+                    volleys.push(if quail { Arrow::from_iron_quail(origin, dir) } else { Arrow::from_archer(origin, dir) });
                     a.shot_fired(slowdown);
                 }
             }
@@ -2247,12 +2392,16 @@ impl Game {
                 self.knock_player(from);
             }
         }
+        for event in events {
+            self.carry_out(event);
+        }
+        self.update_hazards(dt);
         self.spawn_timer += dt;
         if self.spawn_timer >= ANIMAL_SPAWN_INTERVAL {
             self.spawn_timer = 0.0;
             self.spawn_wildlife();
             self.spawn_bosses();
-            self.summon_mothers();
+            self.summon_iron_quails();
         }
     }
 
@@ -2261,20 +2410,188 @@ impl Game {
     fn update_hostile_arrows(&mut self, dt: f32) {
         let player = self.player.pos;
         let mut hits = Vec::new();
+        let mut landed = Vec::new();
         let world = &self.world;
         self.hostile_arrows.retain_mut(|arrow| {
             let from = arrow.pos;
             let fate = arrow.update(world, &[], dt);
             if arrow.hit_player(from, player) {
-                hits.push(from);
+                hits.push((from, arrow.kind));
                 return false;
+            }
+            if fate != Fate::InFlight && arrow.kind == ItemKind::IronFeather {
+                // An iron feather that missed lies where it fell, to be picked up.
+                landed.push(arrow.pos - arrow.vel.normalize_or_zero() * ARROW_DROP_BACKOFF);
             }
             fate == Fate::InFlight
         });
-        for from in hits {
-            if !self.hurt_player(HUNT_ARROW_DAMAGE, "An arrow of the Wild Hunt killed you") {
+        for spot in landed {
+            self.items.push(DroppedItem::at_rest(ItemKind::IronFeather, spot));
+        }
+        for (from, kind) in hits {
+            let (damage, death) = if kind == ItemKind::IronFeather {
+                (IRON_FEATHER_DAMAGE as u32, "An iron feather pierced you")
+            } else {
+                (HUNT_ARROW_DAMAGE, "An arrow of the Wild Hunt killed you")
+            };
+            if !self.hurt_player(damage, death) {
                 self.knock_player(from);
             }
+        }
+    }
+
+    // --- Boss attacks: the Yeti's smash and ice, Nessie's ravens and acid, the Phoenix's fire -----------
+
+    /// Do what a boss has done (see `BossEvent`).
+    fn carry_out(&mut self, event: BossEvent) {
+        let player = self.player.pos;
+        match event {
+            BossEvent::Smash { at } => {
+                self.bursts.push(ShownBurst { pos: at, shape: BurstShape::Smash, age: 0.0 });
+                let yeti = AnimalKind::Yeti;
+                // Everything within `YETI_SMASH_RADIUS` of the Yeti's body, level with it, is hurt and thrown `YETI_SMASH_KNOCKBACK` away.
+                let near = |p: Vec3, half: f32| vec2(p.x - at.x, p.z - at.z).length() - yeti.half_width() - half <= YETI_SMASH_RADIUS && (p.y - at.y).abs() <= 2.5;
+                if near(player, PLAYER_HALF_WIDTH) && !self.hurt_player(YETI_SMASH_DAMAGE, "The Yeti smashed you flat") {
+                    self.player.launch(player - at, YETI_SMASH_KNOCKBACK);
+                }
+                let mut dead = Vec::new();
+                for (i, a) in self.animals.iter_mut().enumerate() {
+                    if a.kind == yeti || !near(a.pos, a.kind.half_width()) {
+                        continue;
+                    }
+                    if a.damage(YETI_SMASH_DAMAGE as i32) {
+                        dead.push(i);
+                    } else {
+                        a.launch(a.pos - at, YETI_SMASH_KNOCKBACK);
+                    }
+                }
+                self.remove_dead(dead);
+            }
+            BossEvent::IceThrow { from } => {
+                let dir = Projectile::aim(ProjectileKind::IceBall, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                self.projectiles.push(Projectile::launch(ProjectileKind::IceBall, from, dir));
+            }
+            BossEvent::Fireball { from } => {
+                let dir = Projectile::aim(ProjectileKind::Fireball, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                self.projectiles.push(Projectile::launch(ProjectileKind::Fireball, from, dir));
+            }
+            BossEvent::CallRavens { count } => self.call_ravens(count, LOCH_NESS_MAX_RAVENS),
+            BossEvent::Acid { from } => {
+                for (x, z) in acid_line(&|x, z| self.world.is_wet_column(x, z), from, player) {
+                    match self.acid.iter_mut().find(|c| (c.x, c.z) == (x, z)) {
+                        Some(cell) => cell.left = ACID_SECONDS,
+                        None => self.acid.push(AcidCell { x, z, left: ACID_SECONDS }),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fly the projectiles, burst them, burn a player standing in acid water, and fade the flashes.
+    fn update_hazards(&mut self, dt: f32) {
+        let player = self.player.pos;
+        let mut bursts: Vec<Burst> = Vec::new();
+        let world = &self.world;
+        self.projectiles.retain_mut(|p| match p.update(world, player, dt) {
+            Some(burst) => {
+                bursts.push(burst);
+                false
+            }
+            None => true,
+        });
+        for burst in bursts {
+            self.bursts.push(ShownBurst { pos: burst.pos, shape: if burst.kind == ProjectileKind::IceBall { BurstShape::Ice } else { BurstShape::Fire }, age: 0.0 });
+            if burst.reaches(player) && !self.hurt_player(burst.kind.burst_damage(), burst.kind.death_message()) {
+                self.knock_player(burst.pos);
+            }
+        }
+        for b in &mut self.bursts {
+            b.age += dt;
+        }
+        self.bursts.retain(|b| b.age < BURST_SHOW_SECONDS);
+        for c in &mut self.acid {
+            c.left -= dt;
+        }
+        self.acid.retain(|c| c.left > 0.0);
+        if self.standing_in_acid() {
+            self.acid_burn += dt;
+            while self.acid_burn >= ACID_DAMAGE_INTERVAL {
+                self.acid_burn -= ACID_DAMAGE_INTERVAL;
+                self.hurt_player(ACID_DAMAGE, "The acid water dissolved you");
+            }
+        } else {
+            self.acid_burn = 0.0;
+        }
+    }
+
+    /// Whether the player is wading in a column of tainted water.
+    pub fn standing_in_acid(&self) -> bool {
+        let p = self.player.pos;
+        let (x, z) = (p.x.floor() as i32, p.z.floor() as i32);
+        self.player_in_water() && self.acid.iter().any(|c| (c.x, c.z) == (x, z))
+    }
+
+    /// Bring `count` ravens out of the sky round the player (day or night: they are Nessie's, and act as if it were night), unless
+    /// `cap` of hers are about already.
+    fn call_ravens(&mut self, count: usize, cap: usize) {
+        for _ in 0..count {
+            if self.animals.iter().filter(|a| a.kind == AnimalKind::Raven && a.summoned).count() >= cap {
+                return;
+            }
+            self.spawn_raven(true);
+        }
+    }
+
+    /// Put a raven in the air round the player: close by if `summoned` (Nessie's), farther off if it is one of the night's.
+    fn spawn_raven(&mut self, summoned: bool) -> bool {
+        let p = self.player.pos;
+        let (min, max) = if summoned { (14.0, 22.0) } else { (30.0, 46.0) };
+        for _ in 0..12 {
+            let angle = self.rng.unit() * std::f32::consts::TAU;
+            let dist = min + self.rng.unit() * (max - min);
+            let pos = vec3(p.x + angle.cos() * dist, p.y + LOCH_NESS_RAVEN_SPAWN_HEIGHT, p.z + angle.sin() * dist);
+            let half = vec3(RAVEN_HALF_WIDTH, 0.0, RAVEN_HALF_WIDTH);
+            if !self.world.chunks.contains_key(&World::chunk_of_pos(pos)) || self.world.box_blocked(pos - half, pos + half + vec3(0.0, RAVEN_HEIGHT, 0.0)) {
+                continue;
+            }
+            let mut raven = Animal::new(AnimalKind::Raven, pos, &mut self.rng);
+            raven.summoned = summoned;
+            self.animals.push(raven);
+            return true;
+        }
+        false
+    }
+
+    /// Whether the player is inside a mineshaft: under the mountain's slopes and below their surface.
+    pub fn player_in_mine(&self) -> bool {
+        let p = self.player.pos;
+        let (x, z) = (p.x.floor() as i32, p.z.floor() as i32);
+        self.in_overworld() && self.world.landmarks.mountain().map_or(false, |m| m.rise_at(x, z) > 0) && p.y < (self.world.ground_top(x, z) - 1) as f32
+    }
+
+    /// The mineshafts' wildlife: bats, up to `MAX_BAT_MINE`, come out of sight in the open tunnels near the player.
+    fn spawn_mine_bats(&mut self) {
+        if self.animals.iter().filter(|a| a.kind == AnimalKind::Bat && a.lives_in_mine).count() >= MAX_BAT_MINE {
+            return;
+        }
+        let p = self.player.pos;
+        for _ in 0..16 {
+            let angle = self.rng.unit() * std::f32::consts::TAU;
+            let dist = BAT_MINE_MIN_DISTANCE + self.rng.unit() * (BAT_MINE_MAX_DISTANCE - BAT_MINE_MIN_DISTANCE);
+            let pos = vec3((p.x + angle.cos() * dist).floor() + 0.5, p.y + 1.0 + self.rng.unit() * 2.0, (p.z + angle.sin() * dist).floor() + 0.5);
+            if !self.world.chunks.contains_key(&World::chunk_of_pos(pos)) {
+                continue;
+            }
+            let (x, z) = (pos.x.floor() as i32, pos.z.floor() as i32);
+            let half = vec3(BAT_HALF_WIDTH, 0.0, BAT_HALF_WIDTH);
+            // Only in open tunnel under the ground, never in the open air.
+            if pos.y >= (self.world.ground_top(x, z) - 1) as f32 || self.world.box_blocked(pos - half, pos + half + vec3(0.0, BAT_HEIGHT, 0.0)) {
+                continue;
+            }
+            let mut bat = Animal::new(AnimalKind::Bat, pos, &mut self.rng);
+            bat.lives_in_mine = true;
+            self.animals.push(bat);
+            return;
         }
     }
 
@@ -2377,13 +2694,22 @@ impl Game {
         }
         let p = self.player.pos;
         let first = self.rng.unit() * std::f32::consts::TAU;
-        for (n, kind) in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntStalker].into_iter().enumerate() {
-            // One a third of the way round the circle from the next, each on the first open ground that fits.
+        // One swordsman, two archers, two lancers on horses, and the ghostly bears and crows (the first of which split when killed).
+        let mut roster = vec![AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntArcher, AnimalKind::HuntLancer, AnimalKind::HuntLancer];
+        roster.extend(std::iter::repeat(AnimalKind::HuntBear).take(HUNT_GHOST_BEARS));
+        roster.extend(std::iter::repeat(AnimalKind::HuntCrow).take(HUNT_GHOST_CROWS));
+        self.hunt_total = 0;
+        for (n, kind) in roster.iter().copied().enumerate() {
+            // Each a share of the way round the circle from the next, on the first open ground that fits.
             for attempt in 0..40 {
-                let angle = first + n as f32 * std::f32::consts::TAU / 3.0 + (attempt as f32 * 0.37).sin() * 0.5;
+                let angle = first + n as f32 * std::f32::consts::TAU / roster.len() as f32 + (attempt as f32 * 0.37).sin() * 0.5;
                 let dist = HUNT_SPAWN_MIN_DISTANCE + self.rng.unit() * (HUNT_SPAWN_MAX_DISTANCE - HUNT_SPAWN_MIN_DISTANCE);
                 let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
                 if self.spawn_animal(kind, x, z) {
+                    if let Some(a) = self.animals.last_mut() {
+                        a.splits = matches!(kind, AnimalKind::HuntBear | AnimalKind::HuntCrow);
+                    }
+                    self.hunt_total += kind.max_health();
                     break;
                 }
             }
@@ -2518,7 +2844,7 @@ impl Game {
     /// Spawn and advance the Skylands' daytime tornadoes. The target is captured at spawn time, so walking away does not make
     /// a tornado chase the player. One spawns every `SKY_TORNADO_INTERVAL` seconds and each lasts `SKY_TORNADO_LIFETIME`.
     fn update_sky_tornado(&mut self, dt: f32) {
-        if self.world.night {
+        if self.world.night || self.world.landmarks.phoenix_slain {
             self.tornadoes.clear();
             self.tornado_timer = 0.0;
             return;
@@ -5618,8 +5944,9 @@ mod totem_horizen_and_wear_tests {
     }
 
     #[test]
-    fn sky_tornadoes_come_twice_as_often_but_last_as_long_so_there_are_sometimes_two() {
-        assert_eq!(SKY_TORNADO_INTERVAL * 2.0, SKY_TORNADO_LIFETIME);
+    fn sky_tornadoes_come_four_times_as_often_as_one_lasts_so_there_are_sometimes_four() {
+        assert_eq!(SKY_TORNADO_INTERVAL * 4.0, SKY_TORNADO_LIFETIME);
+        assert_eq!(SKY_TORNADO_DAMAGE, 4, "double the damage");
         assert_eq!(SKY_TORNADO_LIFETIME, 30.0, "they last as long as they did");
         let mut g = game(33);
         g.travel_to(Dimension::Skylands);
@@ -5630,11 +5957,11 @@ mod totem_horizen_and_wear_tests {
         for _ in 0..(120.0 / 0.5) as i32 {
             g.update_animals(0.5);
             most = most.max(g.tornadoes.len());
-            seen_two |= g.tornadoes.len() == 2;
+            seen_two |= g.tornadoes.len() == 4;
             assert!(g.tornadoes.iter().all(|t| t.age <= SKY_TORNADO_LIFETIME + 0.5), "none outlives its lifetime");
         }
-        assert!(seen_two && most == 2, "two at once, never three: {most}");
-        // Over two minutes there are about eight spawns, not four.
+        assert!(seen_two && most == 4, "four at once, never five: {most}");
+        // Over two minutes there are about sixteen spawns, not eight.
         let mut g = game(34);
         g.travel_to(Dimension::Skylands);
         g.world.night = false;
@@ -5649,7 +5976,7 @@ mod totem_horizen_and_wear_tests {
             }
             last = g.tornadoes.len();
         }
-        assert!((7..=8).contains(&spawns), "{spawns} spawns in two minutes");
+        assert!((15..=16).contains(&spawns), "{spawns} spawns in two minutes");
     }
 
     #[test]
@@ -6055,27 +6382,28 @@ mod boss_and_skylands_tests {
     }
 
     #[test]
-    fn five_seconds_in_the_cyclone_carry_the_player_to_the_skylands_and_stepping_out_resets_it() {
+    fn two_and_a_half_seconds_in_the_cyclone_carry_the_player_to_the_skylands_and_stepping_out_resets_it() {
         let mut g = on_the_summit();
         in_the_cyclone(&mut g);
         let dt = 0.1;
-        for _ in 0..45 {
+        assert_eq!(CYCLONE_SECONDS, 2.5, "half the time it took");
+        for _ in 0..22 {
             g.update_travel(dt);
         }
-        assert!(g.in_overworld(), "4.5 seconds is not enough");
+        assert!(g.in_overworld(), "2.2 seconds is not enough");
         assert!(g.cyclone_whiteness() > 0.0 && g.cyclone_whiteness() < 1.0, "the screen is going white");
         let inside = g.player.pos;
         g.player.pos += vec3(CYCLONE_RADIUS + 3.0, 0.0, 0.0);
         g.update_travel(dt);
         assert_eq!(g.cyclone_timer, 0.0, "stepping out starts the count again");
         g.player.pos = inside;
-        for _ in 0..49 {
+        for _ in 0..24 {
             g.update_travel(dt);
         }
-        assert!(g.in_overworld(), "4.9 seconds");
+        assert!(g.in_overworld(), "2.4 seconds");
         g.update_travel(dt);
         g.update_travel(dt);
-        assert!(g.in_skylands(), "five seconds");
+        assert!(g.in_skylands(), "two and a half seconds");
         assert!((g.player.pos - skylands::spawn_point()).length() < 1.0, "arrives on the first island");
         assert!(g.whiteout.map_or(false, |w| w.kind == WhiteoutKind::Arrival && w.alpha() > 0.9), "the white clears gradually");
         assert!(g.parked(Dimension::Overworld).is_some());
@@ -6135,21 +6463,22 @@ mod boss_and_skylands_tests {
     }
 
     #[test]
-    fn the_home_cyclone_carries_the_player_back_to_the_summit_and_does_not_take_them_again() {
+    fn there_is_no_cyclone_in_the_skylands_and_the_only_way_out_is_to_fall() {
         let mut g = on_the_summit();
         in_the_cyclone(&mut g);
         g.enter_skylands();
         g.whiteout = None;
-        g.player.pos = skylands::home_cyclone() + vec3(0.3, 0.01, 0.0);
-        for _ in 0..52 {
-            g.update_travel(0.1);
-        }
-        assert!(g.in_overworld(), "back in the overworld");
-        assert!(g.cyclone().is_none(), "the Yeti is back, so the summit cyclone is gone");
+        assert!(g.cyclone().is_none(), "nothing carries the player home");
         for _ in 0..80 {
             g.update_travel(0.1);
         }
-        assert!(g.in_overworld(), "and nothing takes them again");
+        assert!(g.in_skylands(), "and they stay where they are");
+        g.player.pos.y = SKY_VOID_Y - 1.0;
+        g.update_travel(0.1);
+        for _ in 0..30 {
+            g.update_travel(0.1);
+        }
+        assert!(g.in_overworld(), "jumping off takes them down");
     }
 
     #[test]
@@ -6411,7 +6740,11 @@ mod silver_tower_tests {
         hold(&mut g, ItemKind::Stick);
         assert_eq!(g.trail_path(), None, "only the totem points the way");
         hold(&mut g, ItemKind::PeepStone);
-        assert_eq!(g.trail_path(), None, "a peep stone does nothing in the Skylands");
+        let path = g.trail_path().expect("a peep stone in the Skylands leads to the volcano");
+        assert_eq!(*path.last().unwrap(), skylands::volcano_foot(g.info.seed));
+        g.world.landmarks.phoenix_slain = true;
+        assert_eq!(g.trail_path(), None, "and does nothing once the Phoenix is dead");
+        g.world.landmarks.phoenix_slain = false;
         // The wisps float over each island's top, and over the gaps at the height of the player's feet.
         g.world.night = false;
         let over_island = crate::effects::trail_floor(&g.world, island.x, island.z, 77.4);
@@ -6667,7 +7000,7 @@ mod crow_pan_relic_and_mother_tests {
         assert_eq!(crow.west_followed, 0.0);
     }
 
-    // --- The Mother of Quail ---
+    // --- The Iron Quail ---
 
     fn kill_quail(g: &mut Game, n: usize) {
         for _ in 0..n {
@@ -6679,18 +7012,19 @@ mod crow_pan_relic_and_mother_tests {
     }
 
     fn mothers(g: &Game) -> usize {
-        g.animals.iter().filter(|a| a.kind == AnimalKind::MotherOfQuail).count()
+        g.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count()
     }
 
     #[test]
-    fn every_ten_quail_killed_bring_a_mother_of_quail_that_drops_a_silver_key() {
+    fn every_ten_quail_killed_bring_a_iron_quail_that_drops_a_silver_key() {
         let mut g = game();
         clear_sky(&mut g);
         kill_quail(&mut g, 9);
         assert_eq!(mothers(&g), 0, "nine are not enough");
         kill_quail(&mut g, 1);
-        assert_eq!(mothers(&g), 1, "the tenth calls her");
-        let mother = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        assert_eq!(mothers(&g), IRON_QUAILS_PER_SUMMON as usize, "the tenth calls three");
+        assert_eq!(IRON_QUAILS_PER_SUMMON, 3);
+        let mother = g.animals.iter().position(|a| a.kind == AnimalKind::IronQuail).unwrap();
         let gap = (g.animals[mother].pos - g.player.pos).length();
         assert!(gap > 8.0 && gap < 20.0, "she appears near: {gap}");
         // She hunts the player and never gives up, however far they run.
@@ -6698,25 +7032,28 @@ mod crow_pan_relic_and_mother_tests {
         g.world.stream_chunks(g.player.pos);
         clear_sky(&mut g);
         g.update_animals(0.1);
-        assert_eq!(mothers(&g), 1, "she does not despawn");
+        assert_eq!(mothers(&g), 3, "they do not despawn");
         assert!(g.boss_bar().is_some() || (g.animals[mother].pos - g.player.pos).length() > BOSS_BAR_DISTANCE);
         kill_quail(&mut g, 10);
-        assert_eq!(mothers(&g), 2, "ten more, another mother");
+        assert_eq!(mothers(&g), 6, "ten more, three more");
         assert_eq!(g.quail_kills, 20);
-        // Killing her drops the silver key.
-        let i = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
-        let before = count(&g, ItemKind::SilverKey);
-        g.hurt_animals(&[(i, MOTHER_OF_QUAIL_HEALTH)]);
-        assert_eq!(count(&g, ItemKind::SilverKey), before + 1);
-        assert_eq!(mothers(&g), 1);
+        // The first to die drops the silver key; the others, since a key now lies on the ground, drop a gold bar each instead.
+        let (keys, gold) = (count(&g, ItemKind::SilverKey), count(&g, ItemKind::Gold));
+        for _ in 0..3 {
+            let i = g.animals.iter().position(|a| a.kind == AnimalKind::IronQuail).unwrap();
+            g.hurt_animals(&[(i, IRON_QUAIL_HEALTH)]);
+        }
+        assert_eq!(count(&g, ItemKind::SilverKey), keys + 1, "one silver key");
+        assert_eq!(count(&g, ItemKind::Gold), gold + 2, "and two gold bars");
+        assert_eq!(mothers(&g), 3);
     }
 
     #[test]
-    fn the_mother_of_quail_hurts_the_player_and_the_fight_ends_when_the_player_dies() {
+    fn the_iron_quail_hurts_the_player_and_the_fight_ends_when_the_player_dies() {
         let mut g = game();
         clear_sky(&mut g);
         kill_quail(&mut g, 10);
-        let i = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::IronQuail).unwrap();
         g.animals[i].pos = g.player.pos + vec3(1.0, 0.0, 0.0);
         let start = g.health;
         for _ in 0..120 {
@@ -6725,7 +7062,7 @@ mod crow_pan_relic_and_mother_tests {
                 break;
             }
         }
-        assert!(g.health < start, "she strikes for {MOTHER_OF_QUAIL_DAMAGE}");
+        assert!(g.health < start, "she strikes for {IRON_QUAIL_DAMAGE}");
         assert!(g.hurt_player(99, "test"), "the player dies");
         assert_eq!(mothers(&g), 0, "the fight is over");
     }
@@ -6735,14 +7072,14 @@ mod crow_pan_relic_and_mother_tests {
         let mut g = game();
         clear_sky(&mut g);
         kill_quail(&mut g, 12);
-        assert_eq!(mothers(&g), 1);
+        assert_eq!(mothers(&g), 3);
         g.travel_to(Dimension::Skylands);
         assert_eq!(mothers(&g), 0);
-        assert_eq!(g.mothers_owed, 1);
+        assert_eq!(g.iron_quails_owed, 3);
         g.travel_to(Dimension::Overworld);
         g.world.stream_chunks(g.player.pos);
-        g.summon_mothers();
-        assert_eq!(mothers(&g), 1);
+        g.summon_iron_quails();
+        assert_eq!(mothers(&g), 3);
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let again = Game::from_save(info, parse_save(&g.save_text()), 3);
         assert_eq!(again.quail_kills, 12);
@@ -7023,14 +7360,14 @@ mod crow_pan_relic_and_mother_tests {
         assert!(g.world.landmarks.is_unlocked(lake.x, lake.z));
     }
 
-    // --- The Mother of Quail flies ---
+    // --- The Iron Quail flies ---
 
     #[test]
-    fn the_mother_of_quail_flies_up_to_a_player_high_above_the_ground_and_strikes_them() {
+    fn the_iron_quail_flies_up_to_a_player_high_above_the_ground_and_strikes_them() {
         let mut g = game();
         clear_sky(&mut g);
         kill_quail(&mut g, 10);
-        let i = g.animals.iter().position(|a| a.kind == AnimalKind::MotherOfQuail).unwrap();
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::IronQuail).unwrap();
         let high = GROUND_TOP as f32 + 1.0 + 14.0;
         g.player.pos.y = high;
         g.animals[i].pos = g.player.pos + vec3(8.0, -13.0, 0.0);
@@ -7039,7 +7376,7 @@ mod crow_pan_relic_and_mother_tests {
         for _ in 0..600 {
             g.player.pos.y = high;
             g.update_animals(1.0 / 60.0);
-            if let Some(m) = g.animals.iter().find(|a| a.kind == AnimalKind::MotherOfQuail) {
+            if let Some(m) = g.animals.iter().find(|a| a.kind == AnimalKind::IronQuail) {
                 peak = peak.max(m.pos.y);
             }
             if g.health < start {
@@ -7048,7 +7385,7 @@ mod crow_pan_relic_and_mother_tests {
         }
         assert!(peak > GROUND_TOP as f32 + 8.0, "she left the ground and flew up: {peak}");
         assert!(g.health < start, "and she reached the player in the air");
-        assert!(g.animals.iter().find(|a| a.kind == AnimalKind::MotherOfQuail).map_or(false, |m| m.is_airborne()));
+        assert!(g.animals.iter().find(|a| a.kind == AnimalKind::IronQuail).map_or(false, |m| m.is_airborne()));
     }
 
     // --- The pipes ---
@@ -7327,7 +7664,7 @@ mod bat_and_wild_hunt_tests {
             g.update_animals(0.0);
         }
         assert!(!g.animals.is_empty(), "other wildlife does spawn at night");
-        assert!(g.animals.iter().all(|a| !matches!(a.kind, AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntStalker)));
+        assert!(g.animals.iter().all(|a| !matches!(a.kind, AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer)));
         let mut g = game();
         g.enter_horizen();
         for _ in 0..300 {
@@ -7378,7 +7715,7 @@ mod bat_and_wild_hunt_tests {
     }
 
     #[test]
-    fn blowing_the_horn_in_stonehenge_calls_three_separate_warriors_once_and_elsewhere_only_the_wind_answers() {
+    fn blowing_the_horn_in_stonehenge_calls_the_whole_hunt_once_and_elsewhere_only_the_wind_answers() {
         let mut g = game();
         hold(&mut g, ItemKind::HornOfTheHunt);
         assert!(!g.in_stonehenge());
@@ -7391,10 +7728,17 @@ mod bat_and_wild_hunt_tests {
         hold(&mut g, ItemKind::HornOfTheHunt);
         assert!(g.blow_horn());
         let kinds: Vec<AnimalKind> = g.animals.iter().filter(|a| a.kind.is_wild_hunt()).map(|a| a.kind).collect();
-        assert_eq!(kinds.len(), 3);
-        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntStalker] {
-            assert_eq!(kinds.iter().filter(|&&k| k == kind).count(), 1, "{kind:?}");
+        assert_eq!(kinds.len(), 5 + HUNT_GHOST_BEARS + HUNT_GHOST_CROWS);
+        for (kind, n) in [
+            (AnimalKind::HuntSwordsman, 1),
+            (AnimalKind::HuntArcher, 2),
+            (AnimalKind::HuntLancer, 2),
+            (AnimalKind::HuntBear, HUNT_GHOST_BEARS),
+            (AnimalKind::HuntCrow, HUNT_GHOST_CROWS),
+        ] {
+            assert_eq!(kinds.iter().filter(|&&k| k == kind).count(), n, "{kind:?}");
         }
+        assert!(g.animals.iter().filter(|a| matches!(a.kind, AnimalKind::HuntBear | AnimalKind::HuntCrow)).all(|a| a.splits), "the first bears and crows split");
         let p = g.player.pos;
         assert!(g.animals.iter().all(|a| {
             let gap = vec2(a.pos.x - p.x, a.pos.z - p.z).length();
@@ -7403,11 +7747,11 @@ mod bat_and_wild_hunt_tests {
         assert!(g.animals.iter().all(|a| a.kind.is_boss() && a.health == a.kind.max_health()));
         // Blown again while they live, it calls no more.
         assert!(g.blow_horn());
-        assert_eq!(g.animals.iter().filter(|a| a.kind.is_wild_hunt()).count(), 3);
+        assert_eq!(g.animals.iter().filter(|a| a.kind.is_wild_hunt()).count(), 5 + HUNT_GHOST_BEARS + HUNT_GHOST_CROWS);
         // They do not despawn however far away they are, and the horn is not blown in other dimensions.
         g.animals[0].pos += vec3(300.0, 0.0, 0.0);
         g.update_animals(0.01);
-        assert_eq!(g.animals.iter().filter(|a| a.kind.is_wild_hunt()).count(), 3);
+        assert_eq!(g.animals.iter().filter(|a| a.kind.is_wild_hunt()).count(), 5 + HUNT_GHOST_BEARS + HUNT_GHOST_CROWS);
     }
 
     #[test]
@@ -7482,47 +7826,49 @@ mod bat_and_wild_hunt_tests {
     }
 
     #[test]
-    fn the_stalker_circles_behind_the_player_dashes_in_stabs_once_and_runs_back_for_a_second() {
-        assert!(HUNT_STALKER_DASH_SPEED > SPRINT_SPEED);
+    fn a_lancer_charges_straight_in_runs_it_through_once_gallops_away_rests_and_charges_again() {
+        assert!(HUNT_LANCER_CHARGE_SPEED > SPRINT_SPEED);
         let mut g = game();
         open_field(&mut g);
-        g.player.yaw = -std::f32::consts::FRAC_PI_2;
-        let p = g.player.pos;
-        g.animals.push(Animal::new(AnimalKind::HuntStalker, standing(&g, 0.0, -10.0), &mut Rng::new(2)));
-        let (mut phase, mut dashes, mut stabs, mut retreat_frames, mut last_health) = (HuntPhase::Circle, 0, 0, 0, g.health);
-        let mut after_stab = false;
-        let mut retreats = Vec::new();
+        g.animals.push(Animal::new(AnimalKind::HuntLancer, standing(&g, 0.0, -14.0), &mut Rng::new(2)));
+        let (mut phases, mut stabs) = (vec![g.animals[0].hunt_phase], 0);
         for _ in 0..(40.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
             g.update_animals(DT);
             let a = &g.animals[0];
-            if phase == HuntPhase::Circle && a.hunt_phase == HuntPhase::Dash {
-                dashes += 1;
-                let theta = (a.pos.z - p.z).atan2(a.pos.x - p.x);
-                let behind = std::f32::consts::FRAC_PI_2;
-                let diff = (theta - behind + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-                assert!(diff.abs() <= HUNT_STALKER_BEHIND_ANGLE + 0.3, "it dashes from behind the player: {diff}");
-                assert!(a.pos.z > p.z, "on the far side from where the player looks");
-            }
-            if g.health < last_health {
+            if g.health < MAX_HEALTH {
                 stabs += 1;
-                assert_eq!(last_health - g.health, HUNT_STALKER_DAMAGE);
-                assert_eq!(a.hunt_phase, HuntPhase::Retreat, "one stab, then it runs back");
-                after_stab = true;
-                retreat_frames = 0;
+                assert_eq!(MAX_HEALTH - g.health, HUNT_LANCER_DAMAGE);
+                assert_eq!(a.hunt_phase, HuntPhase::Retreat, "one blow, then it gallops away");
             }
-            if after_stab && a.hunt_phase == HuntPhase::Retreat {
-                retreat_frames += 1;
+            if *phases.last().unwrap() != a.hunt_phase {
+                phases.push(a.hunt_phase);
             }
-            if after_stab && a.hunt_phase == HuntPhase::Circle {
-                retreats.push(retreat_frames);
-                after_stab = false;
-            }
-            last_health = g.health;
-            phase = a.hunt_phase;
         }
-        assert!(dashes >= 3 && stabs >= 2 && stabs <= dashes, "{dashes} dashes, {stabs} stabs");
-        assert!(!retreats.is_empty() && retreats.iter().all(|&f| (55..=66).contains(&f)), "it runs back for a second: {retreats:?}");
-        assert_eq!(lost(&g), stabs as u32 * HUNT_STALKER_DAMAGE);
+        assert!(stabs >= 2, "it charged home {stabs} times");
+        assert!(phases.windows(3).any(|w| w == [HuntPhase::Dash, HuntPhase::Retreat, HuntPhase::Rest]), "charge, gallop away, rest: {phases:?}");
+        assert!(phases.contains(&HuntPhase::Rest) && phases.iter().filter(|&&p| p == HuntPhase::Dash).count() >= 2, "and charge again: {phases:?}");
+    }
+
+    #[test]
+    fn a_resting_lancer_stands_still_and_a_charging_one_comes_straight() {
+        let mut g = game();
+        open_field(&mut g);
+        let mut lancer = Animal::new(AnimalKind::HuntLancer, standing(&g, 0.0, -20.0), &mut Rng::new(2));
+        lancer.hunt_phase = HuntPhase::Rest;
+        lancer.hunt_timer = 1.0;
+        g.animals.push(lancer);
+        let start = g.animals[0].pos;
+        for _ in 0..(0.9 / DT) as i32 {
+            g.update_animals(DT);
+        }
+        assert!((g.animals[0].pos - start).length() < 0.2, "it rests: {:?}", g.animals[0].pos);
+        for _ in 0..(1.5 / DT) as i32 {
+            g.update_animals(DT);
+        }
+        let gap = (g.animals[0].pos - g.player.pos).length();
+        assert!(gap < 20.0 - 5.0, "then it charged: {gap}");
+        assert!(g.animals[0].pos.x.abs() < 1.5 + g.player.pos.x.abs(), "straight at the player");
     }
 
     #[test]
@@ -7532,7 +7878,7 @@ mod bat_and_wild_hunt_tests {
         hold(&mut g, ItemKind::Excalibur);
         let eye = g.player.pos + vec3(0.0, 1.6, 0.0);
         let dir = vec3(1.0, 0.0, 0.0);
-        for (kind, factor) in [(AnimalKind::HuntSwordsman, EXCALIBUR_HUNT_FACTOR), (AnimalKind::HuntArcher, EXCALIBUR_HUNT_FACTOR), (AnimalKind::HuntStalker, EXCALIBUR_HUNT_FACTOR), (AnimalKind::Moose, 1)] {
+        for (kind, factor) in [(AnimalKind::HuntSwordsman, EXCALIBUR_HUNT_FACTOR), (AnimalKind::HuntArcher, EXCALIBUR_HUNT_FACTOR), (AnimalKind::HuntLancer, EXCALIBUR_HUNT_FACTOR), (AnimalKind::Moose, 1)] {
             g.animals.clear();
             g.attack_cooldown = 0.0;
             g.animals.push(Animal::new(kind, standing(&g, 2.5, 0.0), &mut Rng::new(2)));
@@ -7550,25 +7896,26 @@ mod bat_and_wild_hunt_tests {
     }
 
     #[test]
-    fn the_three_share_one_health_bar() {
+    fn the_hunt_shares_one_health_bar() {
         let mut g = game();
         open_field(&mut g);
-        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntStalker] {
+        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntLancer] {
             g.animals.push(Animal::new(kind, standing(&g, 30.0, 0.0), &mut Rng::new(2)));
         }
+        g.hunt_total = 0;
         let (name, share) = g.boss_bar().expect("a bar");
         assert_eq!((name, share), ("The Wild Hunt", 1.0));
         g.animals[1].health = 0;
-        let total = (HUNT_SWORDSMAN_HEALTH + HUNT_ARCHER_HEALTH + HUNT_STALKER_HEALTH) as f32;
+        let total = (HUNT_SWORDSMAN_HEALTH + HUNT_ARCHER_HEALTH + HUNT_LANCER_HEALTH) as f32;
         let (_, share) = g.boss_bar().unwrap();
         assert!((share - (total - HUNT_ARCHER_HEALTH as f32) / total).abs() < 1e-5, "{share}");
     }
 
     #[test]
-    fn beating_all_three_wins_the_game_and_play_goes_on() {
+    fn beating_the_whole_hunt_wins_the_game_and_play_goes_on() {
         let mut g = game();
         open_field(&mut g);
-        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntStalker] {
+        for kind in [AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntLancer] {
             g.animals.push(Animal::new(kind, standing(&g, 30.0, 0.0), &mut Rng::new(2)));
         }
         assert!(!g.world.landmarks.game_won);
@@ -7607,5 +7954,734 @@ mod bat_and_wild_hunt_tests {
         hold(&mut g, ItemKind::HornOfTheHunt);
         g.blow_horn();
         assert!(g.hunt_alive());
+    }
+}
+
+#[cfg(test)]
+mod boss_update_tests {
+    use super::*;
+    use crate::animal::HuntPhase;
+    use crate::chunk::idx;
+    use crate::item::ItemStack;
+    use crate::landmarks::MOUNTAIN_MAX_HEIGHT;
+    use crate::player::MoveInput;
+    use std::path::PathBuf;
+
+    const DT: f32 = 1.0 / 60.0;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut g = Game::from_save(info, SaveData::new(), 5);
+        g.world.stream_chunks(g.player.pos);
+        g
+    }
+
+    /// Open sky over the spawn area: every block above the ground is air.
+    fn open_field(g: &mut Game) {
+        for chunk in g.world.chunks.values_mut() {
+            for y in GROUND_TOP + 1..WORLD_HEIGHT {
+                for z in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        chunk.blocks[idx(x, y, z)] = Block::Air;
+                    }
+                }
+            }
+        }
+    }
+
+    fn put(g: &mut Game, (x, y, z): (i32, i32, i32), block: Block) {
+        if let Some(c) = g.world.chunks.get_mut(&World::chunk_of(x, z)) {
+            c.blocks[idx(x.rem_euclid(CHUNK_SIZE), y, z.rem_euclid(CHUNK_SIZE))] = block;
+        }
+    }
+
+    /// A spot on the ground `dx` east and `dz` south of the player.
+    fn standing(g: &Game, dx: f32, dz: f32) -> Vec3 {
+        vec3(g.player.pos.x + dx, (GROUND_TOP + 1) as f32 + 0.01, g.player.pos.z + dz)
+    }
+
+    fn give(g: &mut Game, slot: usize, kind: ItemKind, count: u32) {
+        g.inventory.slots[slot] = Some(ItemStack { kind, count });
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind) {
+        give(g, 0, kind, 1);
+        g.select_slot(0);
+    }
+
+    fn add(g: &mut Game, kind: AnimalKind, at: Vec3) -> usize {
+        g.animals.push(Animal::new(kind, at, &mut Rng::new(2)));
+        g.animals.len() - 1
+    }
+
+    // --- Movement: bosses do not get stuck ---
+
+    #[test]
+    fn a_yeti_goes_round_the_end_of_a_wall_to_reach_the_player() {
+        let mut g = game();
+        open_field(&mut g);
+        let p = g.player.pos;
+        let wall_x = p.x.floor() as i32 + 8;
+        for z in -12..=12 {
+            for y in GROUND_TOP + 1..GROUND_TOP + 5 {
+                put(&mut g, (wall_x, y, p.z.floor() as i32 + z), Block::CastleStone);
+            }
+        }
+        { let at = standing(&g, 14.0, 0.0); add(&mut g, AnimalKind::Yeti, at) };
+        let mut best = f32::MAX;
+        for _ in 0..(40.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            best = best.min(g.animals[0].pos.x);
+        }
+        assert!(best < wall_x as f32 - 0.5, "it got round to the player's side of the wall: {best} vs {wall_x}");
+    }
+
+    #[test]
+    fn a_yeti_climbs_a_ledge_two_blocks_high_that_a_deer_could_not() {
+        let mut g = game();
+        open_field(&mut g);
+        let p = g.player.pos;
+        let ledge = p.x.floor() as i32 + 7;
+        for z in -60..=60 {
+            for y in GROUND_TOP + 1..GROUND_TOP + 3 {
+                put(&mut g, (ledge, y, p.z.floor() as i32 + z), Block::CastleStone);
+            }
+        }
+        { let at = standing(&g, 12.0, 0.0); add(&mut g, AnimalKind::Yeti, at) };
+        let mut best = f32::MAX;
+        for _ in 0..(12.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            best = best.min(g.animals[0].pos.x);
+        }
+        assert!(best < ledge as f32, "it climbed over: {best} vs {ledge}");
+    }
+
+    // --- The Yeti's smash and ice ---
+
+    #[test]
+    fn a_yeti_smash_hurts_four_and_throws_the_player_ten_blocks_but_only_those_within_two_blocks() {
+        let mut g = game();
+        open_field(&mut g);
+        let at = standing(&g, 0.0, 0.0);
+        g.player.pos = at + vec3(2.0, 0.0, 0.0);
+        g.carry_out(BossEvent::Smash { at });
+        assert_eq!(g.health, MAX_HEALTH - YETI_SMASH_DAMAGE, "four damage");
+        let start = g.player.pos;
+        for _ in 0..(4.0 / DT) as i32 {
+            g.player.update(&g.world, DT, &MoveInput::default());
+        }
+        let thrown = vec2(g.player.pos.x - start.x, g.player.pos.z - start.z);
+        assert!(thrown.x > 0.0 && thrown.y.abs() < 1.0, "straight away from the Yeti: {thrown:?}");
+        assert!((thrown.length() - YETI_SMASH_KNOCKBACK).abs() < 1.5, "thrown about ten blocks: {}", thrown.length());
+        // A player three blocks beyond its reach is untouched.
+        let mut g = game();
+        open_field(&mut g);
+        let at = standing(&g, 0.0, 0.0);
+        g.player.pos = at + vec3(YETI_SMASH_RADIUS + AnimalKind::Yeti.half_width() + PLAYER_HALF_WIDTH + 1.0, 0.0, 0.0);
+        g.carry_out(BossEvent::Smash { at });
+        assert_eq!(g.health, MAX_HEALTH);
+        assert_eq!(g.player.knock, Vec3::ZERO);
+        assert!(g.bursts.iter().any(|b| b.shape == BurstShape::Smash), "the ring is shown");
+    }
+
+    #[test]
+    fn a_smash_also_hurts_and_throws_other_creatures_but_not_other_yetis() {
+        let mut g = game();
+        open_field(&mut g);
+        let at = standing(&g, 20.0, 0.0);
+        g.player.pos = standing(&g, -30.0, 0.0);
+        let near = add(&mut g, AnimalKind::Deer, at + vec3(1.5, 0.0, 0.0));
+        let far = add(&mut g, AnimalKind::Deer, at + vec3(12.0, 0.0, 0.0));
+        let other_yeti = add(&mut g, AnimalKind::Yeti, at + vec3(1.0, 0.0, 1.0));
+        g.carry_out(BossEvent::Smash { at });
+        assert_eq!(g.animals[near].health, DEER_HEALTH - YETI_SMASH_DAMAGE as i32);
+        assert!(g.animals[near].knock.length() > 10.0, "thrown hard");
+        assert_eq!(g.animals[far].health, DEER_HEALTH);
+        assert_eq!(g.animals[other_yeti].health, YETI_HEALTH);
+    }
+
+    #[test]
+    fn a_yeti_close_to_the_player_rears_up_and_smashes_and_far_from_them_throws_ice() {
+        let mut g = game();
+        open_field(&mut g);
+        { let at = standing(&g, 4.0, 0.0); add(&mut g, AnimalKind::Yeti, at) };
+        let (mut reared, mut smashed, mut threw) = (false, false, false);
+        for _ in 0..(6.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            reared |= g.animals[0].action == crate::animal::BossAction::Smash;
+            smashed |= g.bursts.iter().any(|b| b.shape == BurstShape::Smash);
+            threw |= !g.projectiles.is_empty();
+        }
+        assert!(reared && smashed, "it rears up and hits the ground when close");
+        assert!(!threw, "and throws no ice at a player within six blocks");
+        let mut g = game();
+        open_field(&mut g);
+        { let at = standing(&g, 22.0, 0.0); add(&mut g, AnimalKind::Yeti, at) };
+        let mut ice = false;
+        for _ in 0..(3.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            ice |= g.projectiles.iter().any(|p| p.kind == ProjectileKind::IceBall);
+        }
+        assert!(ice, "far off it throws a lump of ice");
+    }
+
+    #[test]
+    fn a_lump_of_ice_bursts_where_it_lands_and_hurts_a_player_in_the_burst() {
+        let mut g = game();
+        open_field(&mut g);
+        g.player.pos = standing(&g, 0.0, 0.0);
+        let from = g.player.pos + vec3(14.0, 3.0, 0.0);
+        g.carry_out(BossEvent::IceThrow { from });
+        assert_eq!(g.projectiles.len(), 1);
+        for _ in 0..(3.0 / DT) as i32 {
+            g.update_hazards(DT);
+        }
+        assert!(g.projectiles.is_empty(), "it burst");
+        assert!(g.bursts.iter().any(|b| b.shape == BurstShape::Ice) || g.health < MAX_HEALTH);
+        assert_eq!(g.health, MAX_HEALTH - ICE_BURST_DAMAGE, "it was thrown at the player and hit them for {ICE_BURST_DAMAGE}");
+        // Bursts fade.
+        for _ in 0..(BURST_SHOW_SECONDS / DT) as i32 + 5 {
+            g.update_hazards(DT);
+        }
+        assert!(g.bursts.is_empty());
+    }
+
+    // --- Nessie ---
+
+    fn lake() -> Lake {
+        Lake { x: 60, z: 60, radius: LAKE_RADIUS, phase: 3, from: (10, 10) }
+    }
+
+    /// A game with a lake, the player on its shore and the monster risen.
+    fn at_the_shore() -> Game {
+        let mut g = game();
+        let lake = lake();
+        g.world.add_lake(lake);
+        let shore = (0..40).map(|i| lake.z + 60 + i).find(|&z| !g.world.is_wet_column(lake.x, z) && g.world.is_wet_column(lake.x, z - 1)).unwrap_or(lake.z + 90);
+        g.player.pos = vec3(lake.x as f32 + 0.5, g.world.ground_top(lake.x, shore) as f32 + 1.01, shore as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.world.rebuild_dirty(g.player.pos, usize::MAX);
+        for _ in 0..200 {
+            g.spawn_bosses();
+            if g.animals.iter().any(|a| a.kind == AnimalKind::LochNessMonster) {
+                break;
+            }
+        }
+        assert!(g.animals.iter().any(|a| a.kind == AnimalKind::LochNessMonster), "the monster rises");
+        g
+    }
+
+    fn nessie(g: &Game) -> &Animal {
+        g.animals.iter().find(|a| a.kind == AnimalKind::LochNessMonster).unwrap()
+    }
+
+    /// How many blocks (up to 12) the nearest dry column is from the point (x, z).
+    fn clearance(g: &Game, x: f32, z: f32) -> f32 {
+        let mut r = 0.0;
+        while r <= 12.0 {
+            for i in 0..32 {
+                let a = i as f32 * std::f32::consts::TAU / 32.0;
+                if !g.world.is_wet_column((x + a.cos() * r).floor() as i32, (z + a.sin() * r).floor() as i32) {
+                    return r;
+                }
+            }
+            r += 0.5;
+        }
+        12.0
+    }
+
+    fn stand_on_ground(g: &mut Game) {
+        g.player.pos.y = g.world.ground_top(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32) as f32 + 1.01;
+    }
+
+    #[test]
+    fn nessie_keeps_five_blocks_from_the_shore_however_the_player_tempts_her() {
+        let mut g = at_the_shore();
+        let start = clearance(&g, nessie(&g).pos.x, nessie(&g).pos.z);
+        let floor = start.min(LOCH_NESS_SHORE_MARGIN) - 0.8;
+        let mut closest_to_player = f32::MAX;
+        for frame in 0..(90.0 * 60.0) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            stand_on_ground(&mut g);
+            let m = nessie(&g);
+            let c = clearance(&g, m.pos.x, m.pos.z);
+            assert!(c >= floor, "frame {frame}: {c} blocks from the shore at {:?}", m.pos);
+            closest_to_player = closest_to_player.min((m.pos - g.player.pos).length());
+        }
+        assert!(closest_to_player > AnimalKind::LochNessMonster.half_width() + PLAYER_HALF_WIDTH + LOCH_NESS_REACH, "so her neck can never reach a player on the shore: {closest_to_player}");
+    }
+
+    #[test]
+    fn nessie_calls_ravens_by_day_against_a_player_far_from_her_and_taints_a_line_of_water() {
+        let mut g = at_the_shore();
+        g.world.night = false;
+        let (mut ravens, mut acid) = (0, 0);
+        for _ in 0..(40.0 * 60.0) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            stand_on_ground(&mut g);
+            ravens = ravens.max(g.animals.iter().filter(|a| a.kind == AnimalKind::Raven && a.summoned).count());
+            acid = acid.max(g.acid.len());
+        }
+        assert!(ravens >= LOCH_NESS_RAVENS_PER_CALL, "she called ravens, by day: {ravens}");
+        assert!(ravens <= LOCH_NESS_MAX_RAVENS, "never more than her limit: {ravens}");
+        assert!(acid >= 3, "a line of tainted water: {acid} columns");
+        assert!(g.acid.iter().all(|c| g.world.is_wet_column(c.x, c.z)), "only water is tainted");
+        assert!(g.animals.iter().filter(|a| a.kind == AnimalKind::Raven && a.summoned).all(|a| a.summoned), "they stay by day");
+    }
+
+    #[test]
+    fn acid_water_burns_a_player_wading_in_it_for_ten_seconds_and_then_is_clean_again() {
+        let mut g = at_the_shore();
+        g.animals.clear();
+        let lake = lake();
+        let (x, z) = (lake.x, (0..80).map(|i| lake.z + i).find(|&z| g.world.is_wet_column(lake.x, z)).unwrap());
+        g.player.pos = vec3(x as f32 + 0.5, g.world.ground_top(x, z) as f32 + 1.01, z as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        assert!(g.player_in_water());
+        g.update_hazards(1.1);
+        assert_eq!(g.health, MAX_HEALTH, "clean water is harmless");
+        g.acid.push(AcidCell { x, z, left: ACID_SECONDS });
+        assert!(g.standing_in_acid());
+        for _ in 0..(3.05 / DT) as i32 {
+            g.update_hazards(DT);
+        }
+        assert_eq!(g.health, MAX_HEALTH - 3 * ACID_DAMAGE, "a life a second");
+        for _ in 0..(8.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_hazards(DT);
+        }
+        assert!(g.acid.is_empty() && !g.standing_in_acid(), "after {ACID_SECONDS} seconds it is clean");
+    }
+
+    #[test]
+    fn a_bow_or_a_sling_shot_sends_nessie_to_the_middle_of_the_lake_and_calls_more_ravens() {
+        let mut g = at_the_shore();
+        g.world.night = false;
+        give(&mut g, 1, ItemKind::Arrow, 5);
+        hold(&mut g, ItemKind::Bow);
+        let before = clearance(&g, nessie(&g).pos.x, nessie(&g).pos.z);
+        assert!(g.shoot_bow(g.player.eye(), vec3(0.0, 0.0, -1.0)));
+        assert!(nessie(&g).is_fleeing_shot());
+        let ravens = g.animals.iter().filter(|a| a.kind == AnimalKind::Raven && a.summoned).count();
+        assert_eq!(ravens, LOCH_NESS_ALARM_RAVENS, "more ravens come");
+        // A second shot while she is running calls no more.
+        g.attack_cooldown = 0.0;
+        g.shoot_bow(g.player.eye(), vec3(0.0, 0.0, -1.0));
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Raven && a.summoned).count(), ravens);
+        for _ in 0..(LOCH_NESS_FLEE_SECONDS * 60.0) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            stand_on_ground(&mut g);
+        }
+        let after = clearance(&g, nessie(&g).pos.x, nessie(&g).pos.z);
+        assert!(after >= before.max(LOCH_NESS_SHORE_MARGIN), "she ran out to open water: {before} -> {after}");
+        assert!(after >= 9.0, "far from the shore: {after}");
+    }
+
+    // --- Ravens ---
+
+    #[test]
+    fn at_night_a_raven_keeps_its_distance_swoops_down_for_one_life_and_flies_away_again() {
+        let mut g = game();
+        open_field(&mut g);
+        g.world.night = true;
+        { let at = standing(&g, 12.0, 0.0) + vec3(0.0, 9.0, 0.0); add(&mut g, AnimalKind::Raven, at) };
+        let (mut strikes, mut last_strike, mut nearest) = (0, -100.0_f32, f32::MAX);
+        let mut far_after: Vec<f32> = Vec::new();
+        let mut t = 0.0;
+        for _ in 0..(60.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.spawn_timer = 0.0; // no other ravens come out of the night
+            g.update_animals(DT);
+            t += DT;
+            let gap = (g.animals[0].pos - g.player.pos).length();
+            nearest = nearest.min(gap);
+            if g.health < MAX_HEALTH {
+                assert_eq!(MAX_HEALTH - g.health, RAVEN_DAMAGE, "one life a swoop");
+                assert!(t - last_strike >= RAVEN_ATTACK_MIN - 0.1, "not every moment");
+                strikes += 1;
+                last_strike = t;
+                far_after.push(0.0);
+            } else if let Some(f) = far_after.last_mut() {
+                *f = f.max(gap);
+            }
+        }
+        assert!(strikes >= 3, "it swooped {strikes} times in a minute");
+        assert!(far_after.iter().filter(|&&f| f > 8.0).count() >= strikes as usize - 1, "and flew well away after each: {far_after:?}");
+        assert!(nearest < 3.0, "it came down to the player's head: {nearest}");
+        assert_eq!(g.animals[0].kind, AnimalKind::Raven);
+    }
+
+    #[test]
+    fn ravens_come_out_at_night_and_go_at_dawn_except_the_ones_nessie_called() {
+        let mut g = game();
+        open_field(&mut g);
+        g.world.night = true;
+        for _ in 0..400 {
+            g.spawn_timer = ANIMAL_SPAWN_INTERVAL;
+            g.update_animals(0.0);
+        }
+        let ravens = |g: &Game| g.animals.iter().filter(|a| a.kind == AnimalKind::Raven).count();
+        assert!(ravens(&g) >= 1 && ravens(&g) <= MAX_RAVEN, "ravens at night: {}", ravens(&g));
+        g.animals.retain(|a| a.kind == AnimalKind::Raven);
+        g.call_ravens(2, LOCH_NESS_MAX_RAVENS);
+        g.world.night = false;
+        g.update_animals(0.01);
+        assert!(g.animals.iter().all(|a| a.summoned), "the night's ravens are gone at dawn");
+        assert_eq!(ravens(&g), 2, "and Nessie's stay");
+    }
+
+    // --- The Iron Quail's feathers, thrown feathers and Phoenix Arrows ---
+
+    #[test]
+    fn an_iron_quail_shoots_iron_feathers_and_one_that_misses_lies_on_the_ground_to_be_picked_up() {
+        let mut g = game();
+        open_field(&mut g);
+        let q = { let at = standing(&g, 14.0, 0.0) + vec3(0.0, 2.0, 0.0); add(&mut g, AnimalKind::IronQuail, at) };
+        g.animals[q].pos = standing(&g, 14.0, 0.0) + vec3(0.0, 2.0, 0.0);
+        let (mut shot, mut hurt) = (false, false);
+        for _ in 0..(8.0 / DT) as i32 {
+            g.update_animals(DT);
+            shot |= !g.hostile_arrows.is_empty();
+            hurt |= g.health < MAX_HEALTH;
+            g.health = MAX_HEALTH;
+        }
+        assert!(shot, "feathers fly at the player");
+        // A feather aimed at the ground falls short and lies there.
+        g.hostile_arrows.clear();
+        g.items.clear();
+        g.hostile_arrows.push(Arrow::from_iron_quail(g.player.pos + vec3(6.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0)));
+        for _ in 0..60 {
+            g.update_hostile_arrows(DT);
+        }
+        assert!(g.hostile_arrows.is_empty());
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::IronFeather).count(), 1, "the feather lies where it fell");
+        assert!(hurt || shot);
+        // One that hits the player hurts for its damage and is gone.
+        g.items.clear();
+        g.hostile_arrows.push(Arrow::from_iron_quail(g.player.pos + vec3(3.0, 1.0, 0.0), vec3(-1.0, 0.0, 0.0)));
+        for _ in 0..30 {
+            g.update_hostile_arrows(DT);
+        }
+        assert_eq!(g.health, MAX_HEALTH - IRON_FEATHER_DAMAGE as u32);
+        assert!(g.items.iter().all(|i| i.kind != ItemKind::IronFeather));
+    }
+
+    #[test]
+    fn a_held_iron_feather_is_thrown_like_a_star_and_is_used_up_only_when_it_hits_an_animal() {
+        let mut g = game();
+        open_field(&mut g);
+        give(&mut g, 0, ItemKind::IronFeather, 3);
+        g.select_slot(0);
+        assert!(!Block::Dirt.can_break_with(g.held_item()), "a feather digs nothing");
+        let eye = g.player.eye();
+        // Thrown into the ground, it lands as an item again.
+        assert!(g.attack(eye, vec3(1.0, -0.3, 0.0), true, true, false));
+        assert_eq!(g.inventory.count(ItemKind::IronFeather), 2);
+        for _ in 0..120 {
+            g.update_arrows(DT);
+        }
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::IronFeather).count(), 1, "it lies on the ground");
+        // Thrown at a deer, it hurts it and is used up.
+        g.items.clear();
+        let deer = { let at = standing(&g, 6.0, 0.0); add(&mut g, AnimalKind::Deer, at) };
+        g.animals[deer].pos.y = eye.y - 0.5;
+        g.attack_cooldown = 0.0;
+        assert!(g.throw_feather(eye, vec3(1.0, -0.05, 0.0)));
+        for _ in 0..60 {
+            g.update_arrows(DT);
+        }
+        assert!(g.animals.is_empty() || g.animals[0].health < DEER_HEALTH, "the deer was hit");
+        assert!(g.items.iter().all(|i| i.kind != ItemKind::IronFeather), "and the feather is used up");
+        assert_eq!(g.inventory.count(ItemKind::IronFeather), 1);
+        // Not before the throw is over.
+        assert!(!g.throw_feather(eye, vec3(1.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn a_phoenix_arrow_is_never_used_up_and_never_lands_on_the_ground() {
+        let mut g = game();
+        open_field(&mut g);
+        give(&mut g, 1, ItemKind::PhoenixArrow, 1);
+        give(&mut g, 2, ItemKind::Arrow, 3);
+        hold(&mut g, ItemKind::Bow);
+        let eye = g.player.eye();
+        for _ in 0..4 {
+            g.attack_cooldown = 0.0;
+            assert!(g.shoot_bow(eye, vec3(1.0, -0.2, 0.0)));
+        }
+        assert_eq!(g.inventory.count(ItemKind::PhoenixArrow), 1, "never used up");
+        assert_eq!(g.inventory.count(ItemKind::Arrow), 3, "and it is shot before the ordinary arrows");
+        for _ in 0..240 {
+            g.update_arrows(DT);
+        }
+        assert!(g.arrows.is_empty());
+        assert!(g.items.is_empty(), "nothing lies on the ground where they missed");
+        // Without one, the bow uses ordinary arrows and those do land.
+        g.inventory.remove(ItemKind::PhoenixArrow, 1);
+        g.attack_cooldown = 0.0;
+        assert!(g.shoot_bow(eye, vec3(1.0, -0.2, 0.0)));
+        assert_eq!(g.inventory.count(ItemKind::Arrow), 2);
+        for _ in 0..240 {
+            g.update_arrows(DT);
+        }
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::Arrow).count(), 1);
+    }
+
+    // --- The silver key ---
+
+    #[test]
+    fn anything_that_would_drop_a_silver_key_drops_a_gold_bar_if_the_player_has_one_or_one_lies_about() {
+        let mut g = game();
+        open_field(&mut g);
+        let stand = |g: &mut Game, n: i32| {
+            let (x, z) = (g.player.pos.x.floor() as i32 + 3 + n, g.player.pos.z.floor() as i32);
+            put(g, (x, GROUND_TOP + 1, z), Block::KeyStand);
+            (x, GROUND_TOP + 1, z)
+        };
+        let at = stand(&mut g, 0);
+        assert_eq!(g.mine(at.0, at.1, at.2), vec![ItemKind::SilverKey], "the first is a silver key");
+        // It lies on the ground: the next stand gives gold.
+        let at = stand(&mut g, 1);
+        assert_eq!(g.mine(at.0, at.1, at.2), vec![ItemKind::Gold], "a key lies on the ground, so a gold bar");
+        // Picked up, it is in the inventory, and the same holds.
+        g.items.clear();
+        g.inventory.add(ItemKind::SilverKey, 1);
+        let at = stand(&mut g, 2);
+        assert_eq!(g.mine(at.0, at.1, at.2), vec![ItemKind::Gold], "a key in the inventory, so a gold bar");
+        // With none left anywhere, a key drops again.
+        g.items.clear();
+        g.inventory.remove(ItemKind::SilverKey, 1);
+        let at = stand(&mut g, 3);
+        assert_eq!(g.mine(at.0, at.1, at.2), vec![ItemKind::SilverKey]);
+        // Other gold drops and other items are untouched.
+        assert_eq!(g.key_or_gold(), ItemKind::Gold);
+    }
+
+    // --- The Wild Hunt's ghostly bears and crows ---
+
+    #[test]
+    fn the_first_ghostly_crows_and_bears_split_in_two_when_killed_and_their_young_do_not() {
+        let mut g = game();
+        open_field(&mut g);
+        let c = { let at = standing(&g, 30.0, 0.0); add(&mut g, AnimalKind::HuntCrow, at) };
+        g.animals[c].splits = true;
+        let b = { let at = standing(&g, -30.0, 0.0); add(&mut g, AnimalKind::HuntBear, at) };
+        g.animals[b].splits = true;
+        g.hunt_total = HUNT_CROW_HEALTH + HUNT_BEAR_HEALTH;
+        g.hurt_animals(&[(c, 1000)]);
+        let crows = |g: &Game| g.animals.iter().filter(|a| a.kind == AnimalKind::HuntCrow).count();
+        let bears = |g: &Game| g.animals.iter().filter(|a| a.kind == AnimalKind::HuntBear).count();
+        assert_eq!((crows(&g), bears(&g)), (HUNT_SPLIT_INTO, 1), "two more crows come");
+        assert!(g.animals.iter().filter(|a| a.kind == AnimalKind::HuntCrow).all(|a| !a.splits), "and they do not split");
+        assert!(!g.world.landmarks.game_won, "the Hunt is not beaten while there are more");
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::HuntCrow).unwrap();
+        g.hurt_animals(&[(i, 1000)]);
+        assert_eq!(crows(&g), 1, "a killed young crow is simply gone");
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::HuntBear).unwrap();
+        g.hurt_animals(&[(i, 1000)]);
+        assert_eq!((bears(&g), g.animals.iter().filter(|a| a.kind == AnimalKind::HuntBear).filter(|a| !a.splits).count()), (HUNT_SPLIT_INTO, HUNT_SPLIT_INTO));
+        assert!(g.hunt_total > HUNT_CROW_HEALTH + HUNT_BEAR_HEALTH, "the shared bar grows with them");
+        let (_, share) = g.boss_bar().expect("a bar");
+        assert!(share > 0.0 && share <= 1.0);
+        // Kill the lot: now the game is won.
+        while let Some(i) = g.animals.iter().position(|a| a.kind.is_wild_hunt()) {
+            g.hurt_animals(&[(i, 100_000)]);
+        }
+        assert!(g.world.landmarks.game_won);
+    }
+
+    #[test]
+    fn a_ghostly_bear_charges_and_a_ghostly_crow_flies_at_the_player_and_both_strike() {
+        let mut g = game();
+        open_field(&mut g);
+        { let at = standing(&g, 10.0, 0.0); add(&mut g, AnimalKind::HuntBear, at) };
+        { let at = standing(&g, 0.0, 10.0) + vec3(0.0, 3.0, 0.0); add(&mut g, AnimalKind::HuntCrow, at) };
+        let (mut worst, mut closest) = (0, [f32::MAX; 2]);
+        for _ in 0..(8.0 / DT) as i32 {
+            g.spawn_timer = 0.0;
+            g.update_animals(DT);
+            worst = worst.max(MAX_HEALTH - g.health);
+            g.health = MAX_HEALTH;
+            for (i, a) in g.animals.iter().enumerate() {
+                closest[i] = closest[i].min((a.pos - g.player.pos).length());
+            }
+        }
+        assert!(worst >= HUNT_CROW_DAMAGE.min(HUNT_BEAR_DAMAGE), "they struck");
+        assert!(closest.iter().all(|&c| c < 3.0), "both came right in: {closest:?}");
+    }
+
+    // --- Mine bats and salt ---
+
+    #[test]
+    fn bats_live_in_the_mineshafts_and_nowhere_else_in_the_normal_world() {
+        let mut g = game();
+        let m = Mountain { x: 30, z: -500, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT), phase: 7 };
+        g.world.add_mountain(m);
+        let (rx, rz, floor) = crate::mines::network(&m).rooms[MINE_KEY_SHAFTS[0] * 3 + MINE_KEY_RING];
+        g.player.pos = vec3(rx as f32 + 0.5, floor as f32 + 1.01, rz as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.world.rebuild_dirty(g.player.pos, usize::MAX);
+        assert!(g.player_in_mine(), "the player is in a chamber of the mines");
+        g.world.night = false;
+        for _ in 0..80 {
+            g.spawn_mine_bats();
+        }
+        let bats: Vec<&Animal> = g.animals.iter().filter(|a| a.kind == AnimalKind::Bat).collect();
+        assert!(!bats.is_empty() && bats.len() <= MAX_BAT_MINE, "bats in the mines: {}", bats.len());
+        assert!(bats.iter().all(|a| a.lives_in_mine && a.pos.y < (g.world.ground_top(a.pos.x.floor() as i32, a.pos.z.floor() as i32) - 1) as f32), "each in the tunnels under the ground");
+        // They stay by day, and are not despawned with the dawn.
+        let n = bats.len();
+        g.update_animals(0.01);
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Bat).count(), n);
+        // They bite a player who comes near.
+        g.animals.retain(|a| a.kind == AnimalKind::Bat);
+        let mut bat = Animal::new(AnimalKind::Bat, g.player.pos + vec3(0.0, 1.0, 1.0), &mut Rng::new(2));
+        bat.lives_in_mine = true;
+        g.animals.clear();
+        g.animals.push(bat);
+        let mut bitten = false;
+        for _ in 0..(6.0 / DT) as i32 {
+            g.update_animals(DT);
+            bitten |= g.health < MAX_HEALTH;
+        }
+        assert!(bitten);
+        // In the open air, under no mountain, there are none.
+        let mut open = game();
+        open.world.night = false;
+        for _ in 0..80 {
+            open.spawn_mine_bats();
+        }
+        assert!(!open.player_in_mine());
+    }
+
+    // --- The Phoenix ---
+
+    fn on_the_giant_island() -> Game {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.world.night = false;
+        g.whiteout = None;
+        let island = skylands::giant_island(g.info.seed);
+        g.player.pos = vec3(island.x as f32 + 0.5 + 30.0, island.top as f32 + 1.01, island.z as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.world.rebuild_dirty(g.player.pos, usize::MAX);
+        g
+    }
+
+    #[test]
+    fn the_phoenix_rises_from_the_crater_throws_fireballs_and_swoops() {
+        let mut g = on_the_giant_island();
+        for _ in 0..20 {
+            g.spawn_bosses();
+        }
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Phoenix).count(), 1, "one Phoenix");
+        let crater = skylands::volcano_crater(g.info.seed);
+        assert!(vec2(g.animals[0].pos.x - crater.x, g.animals[0].pos.z - crater.z).length() < 1.0, "in the crater");
+        let (mut fire, mut burst, mut swoop, mut nearest) = (false, false, false, f32::MAX);
+        for _ in 0..(40.0 / DT) as i32 {
+            g.update_animals(DT);
+            fire |= g.projectiles.iter().any(|p| p.kind == ProjectileKind::Fireball);
+            burst |= g.bursts.iter().any(|b| b.shape == BurstShape::Fire);
+            if let Some(p) = g.animals.iter().find(|a| a.kind == AnimalKind::Phoenix) {
+                swoop |= p.air_phase == crate::animal::AirPhase::Dive;
+                nearest = nearest.min((p.pos - g.player.pos).length());
+            }
+            g.health = MAX_HEALTH;
+            g.tornadoes.clear();
+        }
+        assert!(fire && burst, "fireballs fly and burst");
+        assert!(swoop && nearest < 3.0, "and it swoops down on the player: {nearest}");
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Phoenix).count(), 1, "still just the one");
+        assert!(g.boss_bar().map_or(false, |(n, _)| n == "The Phoenix"));
+    }
+
+    #[test]
+    fn a_swoop_costs_four_and_a_fireball_three() {
+        let mut g = on_the_giant_island();
+        g.carry_out(BossEvent::Fireball { from: g.player.pos + vec3(8.0, 2.0, 0.0) });
+        for _ in 0..(2.0 / DT) as i32 {
+            g.update_hazards(DT);
+        }
+        assert_eq!(g.health, MAX_HEALTH - FIREBALL_DAMAGE, "the fireball burst on them");
+        g.health = MAX_HEALTH;
+        let mut phoenix = Animal::new(AnimalKind::Phoenix, g.player.pos + vec3(0.0, 1.0, 0.5), &mut Rng::new(2));
+        phoenix.air_phase = crate::animal::AirPhase::Dive;
+        assert!(phoenix.try_attack(g.player.pos));
+        assert_eq!(AnimalKind::Phoenix.attack_damage(), PHOENIX_SWOOP_DAMAGE);
+        assert_eq!(PHOENIX_SWOOP_DAMAGE, 4);
+    }
+
+    #[test]
+    fn killing_the_phoenix_ends_the_fire_tornadoes_for_good_and_drops_a_feather_that_makes_a_phoenix_arrow() {
+        let mut g = on_the_giant_island();
+        for _ in 0..40 {
+            g.update_animals(1.0);
+            g.health = MAX_HEALTH;
+        }
+        assert!(!g.tornadoes.is_empty(), "tornadoes while it lives");
+        for _ in 0..20 {
+            g.spawn_bosses();
+        }
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::Phoenix).unwrap();
+        g.hurt_animals(&[(i, PHOENIX_HEALTH)]);
+        assert!(g.world.landmarks.phoenix_slain);
+        assert!(g.tornadoes.is_empty(), "the tornadoes stop");
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::PhoenixFeather).count(), PHOENIX_FEATHER_DROP as usize);
+        for _ in 0..80 {
+            g.update_animals(1.0);
+            g.spawn_bosses();
+        }
+        assert!(g.tornadoes.is_empty(), "and none comes again, by day");
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::Phoenix), "nor does it");
+        // The feather, a stick and a pebble make the arrow.
+        give(&mut g, 3, ItemKind::PhoenixFeather, 1);
+        give(&mut g, 4, ItemKind::Stick, 1);
+        give(&mut g, 5, ItemKind::Pebble, 1);
+        let recipe = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::PhoenixArrow).expect("a recipe");
+        assert!(crate::recipe::craft(&mut g.inventory, recipe));
+        assert_eq!(g.inventory.count(ItemKind::PhoenixArrow), 1);
+        // The Phoenix stays dead through a save and a load.
+        let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+        let text = g.save_text();
+        assert!(text.lines().any(|l| l.ends_with("phoenixslain")), "it is saved");
+        let mut again = Game::from_save(info, parse_save(&text), 3);
+        assert!(again.in_skylands() && again.world.landmarks.phoenix_slain);
+        again.world.night = false;
+        again.update_animals(30.0);
+        assert!(again.tornadoes.is_empty());
+    }
+
+    #[test]
+    fn a_peep_stone_in_the_skylands_leads_to_the_giant_island() {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        hold(&mut g, ItemKind::PeepStone);
+        let path = g.trail_path().expect("a trail");
+        let (x, z) = *path.last().unwrap();
+        let island = skylands::giant_island(g.info.seed);
+        assert!(vec2(x - island.x as f32, z - island.z as f32).length() < island.radius, "it ends on the giant island");
+        assert!(vec2(x - island.x as f32, z - island.z as f32).length() > 5.0, "at the foot of the volcano");
+    }
+
+    #[test]
+    fn the_hunt_has_lancers_that_rest_between_charges_and_there_is_no_stalker() {
+        let mut g = game();
+        open_field(&mut g);
+        let l = { let at = standing(&g, 12.0, 0.0); add(&mut g, AnimalKind::HuntLancer, at) };
+        let mut phases = std::collections::HashSet::new();
+        for _ in 0..(20.0 / DT) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            phases.insert(format!("{:?}", g.animals[l].hunt_phase));
+        }
+        assert_eq!(phases.len(), 3, "charge, gallop away and rest: {phases:?}");
+        assert!(HuntPhase::Rest != HuntPhase::Dash);
     }
 }

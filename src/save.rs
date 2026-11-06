@@ -63,7 +63,7 @@ pub struct SaveData {
     pub in_skylands: bool,
     /// The Skylands' own edits, items on the ground and the player's place in it, once the player has been there.
     pub skylands: Option<Box<SaveData>>,
-    /// How many quail the player has killed (a Mother of Quail comes for every `QUAIL_KILLS_PER_MOTHER`).
+    /// How many quail the player has killed (an Iron Quail comes for every `QUAIL_KILLS_PER_IRON_QUAIL`).
     pub quail_kills: u32,
 }
 
@@ -123,6 +123,7 @@ impl SaveData {
 ///     "graveyard <x> <z>"       the graveyard, centred on that column
 ///     "ghostrest"               the graveyard's ghost has heard its song and rests
 ///     "won"                     the player has beaten the Wild Hunt and won the game
+///     "phoenixslain"            the Phoenix of the Skylands is dead (written in the Skylands' records, with the `s` prefix)
 ///     "worn <item>"             what the player wears: a cloak, the armour, the crown or a backpack (while it is a backpack,
 ///                               slots 36 to 53 of "inv" belong to the pack)
 ///     "back <item>"             read only: saves made when the backpack had a place of its own; it is worn now
@@ -181,6 +182,9 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
     }
     if landmarks.game_won {
         out.push_str(&format!("{prefix}won\n"));
+    }
+    if landmarks.phoenix_slain {
+        out.push_str(&format!("{prefix}phoenixslain\n"));
     }
     if landmarks.graveyard_rested {
         out.push_str(&format!("{prefix}ghostrest\n"));
@@ -403,6 +407,7 @@ fn apply_line(data: &mut SaveData, line: &str) {
             }
             Some("ghostrest") => data.landmarks.graveyard_rested = true,
             Some("won") => data.landmarks.game_won = true,
+            Some("phoenixslain") => data.landmarks.phoenix_slain = true,
             Some("cavevisit") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {
