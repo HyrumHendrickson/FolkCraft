@@ -196,7 +196,7 @@ impl World {
         match self.dimension {
             Dimension::Horizen => return horizen::ground_top(self.seed, wx, wz),
             // Over the void there is no ground: 0, the world's floor.
-            Dimension::Skylands => return skylands::surface_top(self.seed, wx, wz).unwrap_or(0),
+            Dimension::Skylands => return skylands::surface_top(self.seed, wx, wz, self.night).unwrap_or(0),
             Dimension::Overworld => {}
         }
         ground_top_with(self.seed, &self.landmarks, wx, wz)
@@ -398,8 +398,10 @@ impl World {
         for chunk in self.chunks.values_mut() {
             chunk.dirty = true;
         }
-        // The grand castle is whole by night and a ruin by day: make its chunks again.
-        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| self.landmarks.castle_touches_chunk(cx, cz)).collect();
+        // The grand castle is whole by night and a ruin by day, and the Skylands' bridges are whole by day and broken by night:
+        // make those chunks again.
+        let sky = self.dimension == Dimension::Skylands;
+        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| sky || self.landmarks.castle_touches_chunk(cx, cz)).collect();
         for key in &stale {
             self.chunks.remove(key);
         }
@@ -494,7 +496,7 @@ impl World {
         }
         let mut blocks = match self.dimension {
             Dimension::Horizen => horizen::generate_chunk(self.seed, cx, cz, &self.landmarks),
-            Dimension::Skylands => skylands::generate_chunk(self.seed, cx, cz, &self.landmarks),
+            Dimension::Skylands => skylands::generate_chunk(self.seed, cx, cz, &self.landmarks, self.night),
             Dimension::Overworld => generate_chunk_for(self.seed, cx, cz, &self.landmarks, self.night),
         };
         for &(x, y, z) in &self.removed {

@@ -69,6 +69,16 @@ pub enum AnimalKind {
     Raven,
     /// The boss in the volcano of the giant Skylands island.
     Phoenix,
+    /// The boss that comes out of the dark for every twenty cave bats killed. Its one attack is the swoop.
+    VampireBat,
+    /// A friendly ghost archer the king of the Horizen's castle sends, for gold, to follow the player and shoot what they hit.
+    SpiritArcher,
+    /// The boss on the upper tiers of the jungle temple: it throws rocks and smashes the ground.
+    Orangutan,
+    /// A jungle cat that stalks the player, crouches and pounces.
+    Jaguar,
+    /// A jungle snake that flies, twisting in spirals round the player and swooping down to bite.
+    FlyingSnake,
 }
 
 impl AnimalKind {
@@ -92,6 +102,11 @@ impl AnimalKind {
             AnimalKind::HuntCrow => HUNT_CROW_HEALTH,
             AnimalKind::Raven => RAVEN_HEALTH,
             AnimalKind::Phoenix => PHOENIX_HEALTH,
+            AnimalKind::VampireBat => VAMPIRE_BAT_HEALTH,
+            AnimalKind::SpiritArcher => 1,
+            AnimalKind::Orangutan => ORANGUTAN_HEALTH,
+            AnimalKind::Jaguar => JAGUAR_HEALTH,
+            AnimalKind::FlyingSnake => FLYING_SNAKE_HEALTH,
         }
     }
 
@@ -102,7 +117,7 @@ impl AnimalKind {
 
     /// Whether this creature flies (no gravity, and it is drawn with its wings beating).
     pub fn flies_always(self) -> bool {
-        matches!(self, AnimalKind::Bat | AnimalKind::HuntCrow | AnimalKind::Raven | AnimalKind::Phoenix)
+        matches!(self, AnimalKind::Bat | AnimalKind::HuntCrow | AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake)
     }
 
     /// Whether this is a bat-like flier: it hovers about the player's body, weaving, and bites.
@@ -113,13 +128,13 @@ impl AnimalKind {
     /// Whether the game keeps this creature alive and moving wherever the player goes: the Iron Quail and the Wild Hunt hunt
     /// for ever (until the player dies or leaves the world).
     pub fn never_gives_up(self) -> bool {
-        self == AnimalKind::IronQuail || self.is_wild_hunt()
+        matches!(self, AnimalKind::IronQuail | AnimalKind::VampireBat | AnimalKind::SpiritArcher) || self.is_wild_hunt()
     }
 
     /// Whether this is one of the two bosses (they show a health bar, are never spawned as wildlife and are kept
     /// within a leash of where they appeared).
     pub fn is_boss(self) -> bool {
-        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Phoenix) || self.is_wild_hunt()
+        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::Orangutan) || self.is_wild_hunt()
     }
 
     /// Whether this boss stays near where it appeared and is given up on when far away (the others hunt for ever).
@@ -134,6 +149,8 @@ impl AnimalKind {
             AnimalKind::LochNessMonster => "The Loch Ness Monster",
             AnimalKind::IronQuail => "The Iron Quail",
             AnimalKind::Phoenix => "The Phoenix",
+            AnimalKind::VampireBat => "The Vampire Bat",
+            AnimalKind::Orangutan => "The Orangutan",
             kind if kind.is_wild_hunt() => "The Wild Hunt",
             _ => "",
         }
@@ -151,6 +168,10 @@ impl AnimalKind {
             AnimalKind::HuntCrow => HUNT_CROW_REACH,
             AnimalKind::Raven => RAVEN_REACH,
             AnimalKind::Phoenix => PHOENIX_SWOOP_REACH,
+            AnimalKind::VampireBat => VAMPIRE_BAT_REACH,
+            AnimalKind::Orangutan => ORANGUTAN_REACH,
+            AnimalKind::Jaguar => JAGUAR_REACH,
+            AnimalKind::FlyingSnake => SNAKE_REACH,
             _ => BEAR_REACH,
         }
     }
@@ -175,6 +196,11 @@ impl AnimalKind {
             AnimalKind::HuntCrow => 0.2,
             AnimalKind::Raven => RAVEN_HALF_WIDTH,
             AnimalKind::Phoenix => PHOENIX_HALF_WIDTH,
+            AnimalKind::VampireBat => VAMPIRE_BAT_HALF_WIDTH,
+            AnimalKind::SpiritArcher => SPIRIT_HALF_WIDTH,
+            AnimalKind::Orangutan => ORANGUTAN_HALF_WIDTH,
+            AnimalKind::Jaguar => JAGUAR_HALF_WIDTH,
+            AnimalKind::FlyingSnake => SNAKE_HALF_WIDTH,
         }
     }
 
@@ -198,6 +224,11 @@ impl AnimalKind {
             AnimalKind::HuntCrow => 0.45,
             AnimalKind::Raven => RAVEN_HEIGHT,
             AnimalKind::Phoenix => PHOENIX_HEIGHT,
+            AnimalKind::VampireBat => VAMPIRE_BAT_HEIGHT,
+            AnimalKind::SpiritArcher => SPIRIT_HEIGHT,
+            AnimalKind::Orangutan => ORANGUTAN_HEIGHT,
+            AnimalKind::Jaguar => JAGUAR_HEIGHT,
+            AnimalKind::FlyingSnake => SNAKE_HEIGHT,
         }
     }
 
@@ -221,6 +252,11 @@ impl AnimalKind {
             AnimalKind::HuntCrow => HUNT_CROW_SPEED,
             AnimalKind::Raven => RAVEN_CIRCLE_SPEED,
             AnimalKind::Phoenix => PHOENIX_CIRCLE_SPEED,
+            AnimalKind::VampireBat => VAMPIRE_BAT_CIRCLE_SPEED,
+            AnimalKind::SpiritArcher => SPIRIT_SPEED,
+            AnimalKind::Orangutan => ORANGUTAN_WALK_SPEED,
+            AnimalKind::Jaguar => JAGUAR_STALK_SPEED,
+            AnimalKind::FlyingSnake => SNAKE_SPIRAL_SPEED,
         }
     }
 
@@ -233,9 +269,10 @@ impl AnimalKind {
             AnimalKind::Rabbit => (1.0, 3.5),
             AnimalKind::Moose => (3.0, 8.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
-            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail => (2.0, 5.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Orangutan => (2.0, 5.0),
             AnimalKind::Bat => (0.5, 1.5),
-            AnimalKind::Raven | AnimalKind::Phoenix => (1.0, 1.0),
+            AnimalKind::Jaguar => (2.0, 5.0),
+            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => (1.0, 1.0),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
         }
     }
@@ -249,9 +286,10 @@ impl AnimalKind {
             AnimalKind::Rabbit => (0.8, 2.0),
             AnimalKind::Moose => (2.0, 5.0),
             AnimalKind::WillOWhisp => (1.0, 1.0),
-            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail => (3.0, 6.0),
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Orangutan => (3.0, 6.0),
             AnimalKind::Bat => (1.0, 2.5),
-            AnimalKind::Raven | AnimalKind::Phoenix => (1.0, 1.0),
+            AnimalKind::Jaguar => (2.0, 4.0),
+            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => (1.0, 1.0),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
         }
     }
@@ -286,6 +324,10 @@ impl AnimalKind {
             AnimalKind::HuntCrow => HUNT_CROW_DAMAGE,
             AnimalKind::Raven => RAVEN_DAMAGE,
             AnimalKind::Phoenix => PHOENIX_SWOOP_DAMAGE,
+            AnimalKind::VampireBat => VAMPIRE_BAT_DAMAGE,
+            AnimalKind::Orangutan => ORANGUTAN_DAMAGE,
+            AnimalKind::Jaguar => JAGUAR_DAMAGE,
+            AnimalKind::FlyingSnake => SNAKE_DAMAGE,
             _ => 0,
         }
     }
@@ -301,6 +343,10 @@ impl AnimalKind {
             AnimalKind::Bat => "A bat killed you",
             AnimalKind::Raven => "A raven pecked you to death",
             AnimalKind::Phoenix => "The Phoenix burned you to death",
+            AnimalKind::VampireBat => "The Vampire Bat drained you",
+            AnimalKind::Orangutan => "The Orangutan crushed you",
+            AnimalKind::Jaguar => "A jaguar pounced on you",
+            AnimalKind::FlyingSnake => "A flying snake bit you to death",
             kind if kind.is_wild_hunt() => "The Wild Hunt killed you",
             _ => "An animal killed you",
         }
@@ -308,7 +354,7 @@ impl AnimalKind {
 
     /// Whether weapons can target this kind. Will-o-whisps are scenery and flight behaviour for now.
     pub fn is_huntable(self) -> bool {
-        self != AnimalKind::WillOWhisp
+        !matches!(self, AnimalKind::WillOWhisp | AnimalKind::SpiritArcher)
     }
 
     /// What the animal leaves behind when killed.
@@ -320,7 +366,7 @@ impl AnimalKind {
                 add(ItemKind::Venison, DEER_VENISON_DROP);
                 add(ItemKind::Leather, DEER_LEATHER_DROP);
                 if rng.chance(DEER_BONE_CHANCE) {
-                    add(ItemKind::DeerBone, DEER_BONE_DROP);
+                    add(ItemKind::Bone, DEER_BONE_DROP);
                 }
             }
             AnimalKind::Quail => {
@@ -356,6 +402,10 @@ impl AnimalKind {
             AnimalKind::IronQuail => add(ItemKind::SilverKey, 1),
             AnimalKind::Raven => add(ItemKind::Feather, RAVEN_FEATHER_DROP),
             AnimalKind::Phoenix => add(ItemKind::PhoenixFeather, PHOENIX_FEATHER_DROP),
+            AnimalKind::VampireBat => add(ItemKind::Gold, VAMPIRE_BAT_GOLD_DROP),
+            AnimalKind::Orangutan => add(ItemKind::Gold, ORANGUTAN_GOLD_DROP),
+            AnimalKind::Jaguar => add(ItemKind::Leather, 2),
+            AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => {}
             // Bats and the ghostly creatures of the Wild Hunt leave nothing behind.
             AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => {}
         }
@@ -393,6 +443,15 @@ pub enum AirPhase {
     Flee,
 }
 
+/// What a jaguar is doing: creeping up, crouching to spring, in the air on its leap, or slinking off afterwards.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pounce {
+    Stalk,
+    Crouch,
+    Leap,
+    Retreat,
+}
+
 /// A boss's wind-up for one of its special attacks: it stands still (the Yeti rears up) until the timer runs out.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BossAction {
@@ -401,6 +460,8 @@ pub enum BossAction {
     Smash,
     /// The Yeti lifts a lump of ice to throw.
     IceThrow,
+    /// The Orangutan lifts a rock to hurl.
+    RockThrow,
 }
 
 /// Something a boss has done that the game has to carry out (it owns the player, the projectiles and the other creatures).
@@ -416,6 +477,10 @@ pub enum BossEvent {
     CallRavens { count: usize },
     /// Nessie taints a line of water from here towards the player.
     Acid { from: Vec3 },
+    /// The Orangutan's fists have hit the ground here.
+    OrangutanSmash { at: Vec3 },
+    /// The Orangutan hurls a rock from here.
+    RockThrow { from: Vec3 },
 }
 
 /// The turns (radians) `Animal::steer` tries, in order, when something is in a boss's way: straight on, then ever wider to either side.
@@ -516,6 +581,13 @@ pub struct Animal {
     flee_think: f32,
     /// How fast a push from a blow dies away (`KNOCKBACK_DECAY`, or `LAUNCH_DECAY` after a hard knock).
     knock_decay: f32,
+    /// A spirit archer: shots it has left before it vanishes, and (for any creature) seconds left of being marked as something the player
+    /// has hit, which is what the spirits shoot at.
+    pub shots_left: u32,
+    pub marked: f32,
+    /// A jaguar: what it is doing, and the seconds left of it.
+    pub pounce: Pounce,
+    pounce_timer: f32,
 }
 
 /// How many blocks (up to `limit`) lie between the point (x, z) and the nearest column that is not water: how far from any shore
@@ -647,6 +719,10 @@ impl Animal {
             flee_heading: 0.0,
             flee_think: 0.0,
             knock_decay: KNOCKBACK_DECAY,
+            shots_left: 0,
+            marked: 0.0,
+            pounce: Pounce::Stalk,
+            pounce_timer: 0.0,
         };
         a.circle = a.heading;
         match kind {
@@ -665,6 +741,13 @@ impl Animal {
             }
             AnimalKind::Raven => a.air_timer = RAVEN_ATTACK_MIN + (RAVEN_ATTACK_MAX - RAVEN_ATTACK_MIN) * rng.unit(),
             AnimalKind::Phoenix => a.air_timer = PHOENIX_SWOOP_INTERVAL,
+            AnimalKind::VampireBat => a.air_timer = VAMPIRE_BAT_ATTACK_MIN + (VAMPIRE_BAT_ATTACK_MAX - VAMPIRE_BAT_ATTACK_MIN) * rng.unit(),
+            AnimalKind::FlyingSnake => a.air_timer = SNAKE_ATTACK_MIN + (SNAKE_ATTACK_MAX - SNAKE_ATTACK_MIN) * rng.unit(),
+            AnimalKind::SpiritArcher => a.shots_left = SPIRIT_SHOTS,
+            AnimalKind::Orangutan => {
+                a.special_timer = 2.0;
+                a.ranged_timer = 1.0;
+            }
             AnimalKind::LochNessMonster => a.raven_timer = 1.5,
             AnimalKind::Yeti => {
                 a.special_timer = 2.0;
@@ -850,6 +933,12 @@ impl Animal {
             AnimalKind::Raven if self.air_phase == AirPhase::Dive => RAVEN_ATTACK_MIN,
             // The Phoenix burns only on a swoop.
             AnimalKind::Phoenix if self.air_phase == AirPhase::Dive => 1.0,
+            // The vampire bat and the flying snake bite only on the swoop; the jaguar only in the air on its leap.
+            AnimalKind::VampireBat if self.air_phase == AirPhase::Dive => VAMPIRE_BAT_ATTACK_MIN,
+            AnimalKind::FlyingSnake if self.air_phase == AirPhase::Dive => SNAKE_ATTACK_MIN,
+            AnimalKind::Jaguar if self.pounce == Pounce::Leap => JAGUAR_ATTACK_COOLDOWN,
+            AnimalKind::Orangutan if self.boss_enraged() => ORANGUTAN_ATTACK_COOLDOWN * ORANGUTAN_ENRAGED_FACTOR,
+            AnimalKind::Orangutan => ORANGUTAN_ATTACK_COOLDOWN,
             _ => return false,
         };
         // A boss winding up a special attack does not also strike.
@@ -870,9 +959,38 @@ impl Animal {
                 self.air_phase = AirPhase::Flee;
                 self.air_timer = 2.0;
             }
+            AnimalKind::VampireBat => {
+                self.air_phase = AirPhase::Flee;
+                self.air_timer = VAMPIRE_BAT_FLEE_SECONDS;
+            }
+            AnimalKind::FlyingSnake => {
+                self.air_phase = AirPhase::Flee;
+                self.air_timer = SNAKE_FLEE_SECONDS;
+            }
+            AnimalKind::Jaguar => {
+                self.pounce = Pounce::Retreat;
+                self.pounce_timer = JAGUAR_RETREAT_SECONDS;
+            }
             _ => {}
         }
         true
+    }
+
+    /// Give a spirit archer its own place on the circle it drifts round the player on.
+    pub fn set_orbit(&mut self, angle: f32) {
+        self.orbit = angle;
+    }
+
+    /// Whether a spirit archer has an arrow nocked: it has shots left and its interval is over.
+    pub fn spirit_ready(&self) -> bool {
+        self.kind == AnimalKind::SpiritArcher && self.shots_left > 0 && self.shoot_timer <= 0.0
+    }
+
+    /// A spirit archer has shot: its interval starts, and one of its `SPIRIT_SHOTS` is used. Returns whether that was the last (it then vanishes).
+    pub fn spirit_fired(&mut self) -> bool {
+        self.shoot_timer = SPIRIT_SHOOT_INTERVAL;
+        self.shots_left = self.shots_left.saturating_sub(1);
+        self.shots_left == 0
     }
 
     /// Whether this creature has a missile ready for a player standing at `player` (feet): the Wild Hunt's archer has nocked an
@@ -950,9 +1068,10 @@ impl Animal {
         self.ranged_timer = (self.ranged_timer - dt).max(0.0);
         self.raven_timer = (self.raven_timer - dt).max(0.0);
         self.flee_timer = (self.flee_timer - dt).max(0.0);
+        self.marked = (self.marked - dt).max(0.0);
         self.timer -= dt;
         self.calm = (self.calm - dt).max(0.0);
-        if matches!(self.kind, AnimalKind::Raven | AnimalKind::Phoenix) {
+        if matches!(self.kind, AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::FlyingSnake | AnimalKind::SpiritArcher) {
             self.update_flier(world, threat, dt, rng);
             return None;
         }
@@ -1198,8 +1317,77 @@ impl Animal {
                     }
                 }
             }
+            AnimalKind::Orangutan => {
+                let home_gap = vec2(self.pos.x - self.home.x, self.pos.z - self.home.z).length();
+                if home_gap > ORANGUTAN_LEASH {
+                    // Too far from the temple top: give up the chase and go back.
+                    self.alarm = 0.0;
+                    self.mode = Mode::Wander;
+                    self.heading = self.heading_home();
+                    self.timer = 1.0;
+                    self.action = BossAction::None;
+                } else if flat_gap < ORANGUTAN_NOTICE_DISTANCE || self.alarm > 0.0 {
+                    self.mode = Mode::Charge;
+                } else if self.mode == Mode::Charge {
+                    self.rest(rng);
+                    self.action = BossAction::None;
+                }
+                if self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    self.heading = towards;
+                }
+                self.update_orangutan_attacks(flat_gap, towards, dt);
+            }
+            AnimalKind::Jaguar => {
+                // It creeps up on a player it has noticed, crouches, springs, and slinks off after the leap (hit or miss).
+                self.pounce_timer -= dt;
+                match self.pounce {
+                    Pounce::Stalk => {
+                        if flat_gap < JAGUAR_NOTICE_DISTANCE || self.alarm > 0.0 {
+                            self.mode = Mode::Charge;
+                            if flat_gap > 1e-3 {
+                                self.heading = towards + detour;
+                            }
+                            if flat_gap <= JAGUAR_POUNCE_RANGE && self.on_ground {
+                                self.pounce = Pounce::Crouch;
+                                self.pounce_timer = JAGUAR_CROUCH_SECONDS;
+                            }
+                        } else if self.mode == Mode::Charge {
+                            self.rest(rng);
+                        }
+                    }
+                    Pounce::Crouch => {
+                        self.mode = Mode::Charge;
+                        if flat_gap > 1e-3 {
+                            self.heading = towards;
+                        }
+                        if self.pounce_timer <= 0.0 {
+                            self.pounce = Pounce::Leap;
+                            self.pounce_timer = JAGUAR_LEAP_SECONDS;
+                            self.vel.y = JAGUAR_LEAP_RISE;
+                            self.on_ground = false;
+                        }
+                    }
+                    Pounce::Leap => {
+                        self.mode = Mode::Charge;
+                        if self.pounce_timer <= 0.0 || (self.on_ground && self.pounce_timer < JAGUAR_LEAP_SECONDS - 0.25) {
+                            self.pounce = Pounce::Retreat;
+                            self.pounce_timer = JAGUAR_RETREAT_SECONDS;
+                        }
+                    }
+                    Pounce::Retreat => {
+                        self.mode = Mode::Charge;
+                        if flat_gap > 1e-3 {
+                            self.heading = away + detour;
+                        }
+                        if self.pounce_timer <= 0.0 {
+                            self.pounce = Pounce::Stalk;
+                            self.rest(rng);
+                        }
+                    }
+                }
+            }
             // Fliers with their own movement never get here (see `update_flier`).
-            AnimalKind::Raven | AnimalKind::Phoenix => {}
+            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::FlyingSnake | AnimalKind::SpiritArcher => {}
             AnimalKind::WillOWhisp => {
                 if self.lure.is_none() {
                     self.bonded = false;
@@ -1266,8 +1454,15 @@ impl Animal {
             // A lancer at rest stands.
             Mode::Charge if self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Rest => 0.0,
             // A charging bear stops once it stands against the player, instead of running through them.
-            Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH && !(self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Retreat) && self.flee_timer <= 0.0 => 0.0,
+            Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH && !(self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Retreat) && !(self.kind == AnimalKind::Jaguar && self.pounce == Pounce::Retreat) && self.flee_timer <= 0.0 => 0.0,
             Mode::Charge if self.kind == AnimalKind::Moose => MOOSE_RUN_SPEED,
+            Mode::Charge if self.kind == AnimalKind::Orangutan => ORANGUTAN_RUN_SPEED * if self.boss_enraged() { 1.25 } else { 1.0 },
+            Mode::Charge if self.kind == AnimalKind::Jaguar => match self.pounce {
+                Pounce::Stalk => JAGUAR_STALK_SPEED,
+                Pounce::Crouch => 0.0,
+                Pounce::Leap => JAGUAR_LEAP_SPEED,
+                Pounce::Retreat => JAGUAR_RETREAT_SPEED,
+            },
             Mode::Charge if self.kind == AnimalKind::Yeti => YETI_RUN_SPEED * if self.boss_enraged() { YETI_ENRAGED_SPEED_FACTOR } else { 1.0 },
             Mode::Charge if self.kind == AnimalKind::LochNessMonster => LOCH_NESS_RUN_SPEED * if self.flee_timer > 0.0 { 1.6 } else { 1.0 },
             Mode::Charge if self.kind == AnimalKind::IronQuail => IRON_QUAIL_RUN_SPEED,
@@ -1489,6 +1684,7 @@ impl Animal {
                     self.action = BossAction::None;
                 }
             }
+            BossAction::RockThrow => {}
             BossAction::IceThrow => {
                 self.action_timer -= dt;
                 if self.action_timer <= 0.0 {
@@ -1501,6 +1697,47 @@ impl Animal {
         }
         if self.action != BossAction::None && flat_gap > 1e-3 {
             // It faces the player while it winds up.
+            self.heading = towards;
+        }
+    }
+
+    /// The Orangutan's special attacks. In its charge, within `ORANGUTAN_SMASH_TRIGGER_RANGE` it rears up and then smashes the ground
+    /// (`BossEvent::OrangutanSmash`); between `ORANGUTAN_ROCK_MIN_RANGE` and `MAX_RANGE` it lifts a rock and hurls it (`BossEvent::RockThrow`).
+    /// Either holds it still for its wind-up; below half health the cooldowns are shorter.
+    fn update_orangutan_attacks(&mut self, flat_gap: f32, towards: f32, dt: f32) {
+        let quick = if self.boss_enraged() { ORANGUTAN_ENRAGED_FACTOR } else { 1.0 };
+        match self.action {
+            BossAction::None => {
+                if self.mode == Mode::Charge && self.on_ground {
+                    if flat_gap <= ORANGUTAN_SMASH_TRIGGER_RANGE && self.special_timer <= 0.0 {
+                        self.action = BossAction::Smash;
+                        self.action_timer = ORANGUTAN_SMASH_WINDUP;
+                    } else if flat_gap >= ORANGUTAN_ROCK_MIN_RANGE && flat_gap <= ORANGUTAN_ROCK_MAX_RANGE && self.ranged_timer <= 0.0 {
+                        self.action = BossAction::RockThrow;
+                        self.action_timer = ORANGUTAN_ROCK_WINDUP;
+                    }
+                }
+            }
+            BossAction::Smash => {
+                self.action_timer -= dt;
+                if self.action_timer <= 0.0 {
+                    self.events.push(BossEvent::OrangutanSmash { at: self.pos });
+                    self.special_timer = ORANGUTAN_SMASH_COOLDOWN * quick;
+                    self.attack_cooldown = self.attack_cooldown.max(0.9);
+                    self.action = BossAction::None;
+                }
+            }
+            BossAction::RockThrow | BossAction::IceThrow => {
+                self.action_timer -= dt;
+                if self.action_timer <= 0.0 {
+                    let from = self.pos + vec3(self.heading.cos() * 0.9, 2.4, self.heading.sin() * 0.9);
+                    self.events.push(BossEvent::RockThrow { from });
+                    self.ranged_timer = ORANGUTAN_ROCK_COOLDOWN * quick;
+                    self.action = BossAction::None;
+                }
+            }
+        }
+        if self.action != BossAction::None && flat_gap > 1e-3 {
             self.heading = towards;
         }
     }
@@ -1520,15 +1757,109 @@ impl Animal {
         best.0
     }
 
+    /// A spirit archer keeps company with the player: it drifts round them at `SPIRIT_FOLLOW_RADIUS`, `SPIRIT_FOLLOW_HEIGHT` up, at its own
+    /// angle (so that several do not crowd one spot), passing through anything in its way, and joins them at once if left far behind.
+    fn follow_player(&mut self, player: Vec3, dt: f32) {
+        self.circle += dt * 0.6;
+        let around = self.circle + self.orbit;
+        let goal = player + vec3(around.cos() * SPIRIT_FOLLOW_RADIUS, SPIRIT_FOLLOW_HEIGHT + 0.2 * (self.phase * 0.5).sin(), around.sin() * SPIRIT_FOLLOW_RADIUS);
+        let gap = goal - self.pos;
+        if gap.length() > SPIRIT_TELEPORT_DISTANCE {
+            self.pos = goal;
+        } else {
+            let step = gap.normalize_or_zero() * (gap.length() * 4.0).min(SPIRIT_SPEED) * dt;
+            self.pos += step.clamp_length_max(gap.length());
+        }
+        self.vel = gap;
+        self.phase += dt * 2.0;
+        self.on_ground = false;
+        let to_player = player - self.pos;
+        if to_player.x.abs() + to_player.z.abs() > 1e-3 {
+            self.heading = to_player.z.atan2(to_player.x);
+        }
+    }
+
     /// A creature that flies under its own power: a raven (circling the player at a distance, swooping down for one peck and flying
     /// off again) or the Phoenix (hovering over its volcano, throwing fireballs and swooping now and then).
     fn update_flier(&mut self, world: &World, threat: Vec3, dt: f32, rng: &mut Rng) {
+        if self.kind == AnimalKind::SpiritArcher {
+            self.follow_player(threat, dt);
+            return;
+        }
         let flat_gap = vec2(threat.x - self.pos.x, threat.z - self.pos.z).length();
         let away = (self.pos.z - threat.z).atan2(self.pos.x - threat.x);
         self.air_timer -= dt;
         let mut goal;
         let speed;
-        if self.kind == AnimalKind::Raven {
+        if self.kind == AnimalKind::VampireBat {
+            // Its one attack is the swoop: circle the player at a distance, dive for one bite, fly off, and come again.
+            match self.air_phase {
+                AirPhase::Circle => {
+                    self.circle += dt * VAMPIRE_BAT_CIRCLE_SPEED / VAMPIRE_BAT_ORBIT_RADIUS;
+                    goal = threat + vec3(self.circle.cos() * VAMPIRE_BAT_ORBIT_RADIUS, VAMPIRE_BAT_ORBIT_HEIGHT + 0.6 * (self.phase * 0.7).sin(), self.circle.sin() * VAMPIRE_BAT_ORBIT_RADIUS);
+                    speed = VAMPIRE_BAT_CIRCLE_SPEED * 1.6;
+                    if self.air_timer <= 0.0 && flat_gap < VAMPIRE_BAT_ORBIT_RADIUS * 2.5 {
+                        self.air_phase = AirPhase::Dive;
+                        self.air_timer = VAMPIRE_BAT_DIVE_SECONDS;
+                    }
+                }
+                AirPhase::Dive => {
+                    goal = threat + vec3(0.0, 1.0, 0.0);
+                    speed = VAMPIRE_BAT_DIVE_SPEED;
+                    if self.air_timer <= 0.0 {
+                        self.air_phase = AirPhase::Flee;
+                        self.air_timer = VAMPIRE_BAT_FLEE_SECONDS;
+                    }
+                }
+                AirPhase::Flee => {
+                    goal = threat + vec3(away.cos() * VAMPIRE_BAT_ORBIT_RADIUS * 1.3, VAMPIRE_BAT_ORBIT_HEIGHT + 1.0, away.sin() * VAMPIRE_BAT_ORBIT_RADIUS * 1.3);
+                    speed = VAMPIRE_BAT_CIRCLE_SPEED * 2.0;
+                    if self.air_timer <= 0.0 {
+                        self.air_phase = AirPhase::Circle;
+                        self.air_timer = VAMPIRE_BAT_ATTACK_MIN + (VAMPIRE_BAT_ATTACK_MAX - VAMPIRE_BAT_ATTACK_MIN) * rng.unit();
+                        self.circle = away;
+                    }
+                }
+            }
+        } else if self.kind == AnimalKind::FlyingSnake {
+            // It twists through the air in a helix whose radius and height swell and shrink, round the player if one is near (round its
+            // home otherwise), dives on them in a wriggling swoop, and spirals up and away again.
+            let near = flat_gap < SNAKE_NOTICE_DISTANCE;
+            let centre = if near { threat } else { self.home };
+            self.circle += dt * 2.1;
+            let swirl = |t: f32| {
+                let radius = SNAKE_SPIRAL_RADIUS * (1.0 + 0.45 * (t * 0.7).sin());
+                let height = SNAKE_SPIRAL_HEIGHT + 2.5 * (t * 1.3).sin();
+                vec3(t.cos() * radius, height, t.sin() * radius)
+            };
+            match self.air_phase {
+                AirPhase::Circle => {
+                    goal = centre + swirl(self.circle);
+                    speed = SNAKE_SPIRAL_SPEED * 1.8;
+                    if self.air_timer <= 0.0 && near {
+                        self.air_phase = AirPhase::Dive;
+                        self.air_timer = SNAKE_DIVE_SECONDS;
+                    }
+                }
+                AirPhase::Dive => {
+                    let side = vec3(-(away.sin()), 0.0, away.cos());
+                    goal = threat + vec3(0.0, 1.0, 0.0) + side * (self.circle * 9.0).sin() * 1.2;
+                    speed = SNAKE_DIVE_SPEED;
+                    if self.air_timer <= 0.0 {
+                        self.air_phase = AirPhase::Flee;
+                        self.air_timer = SNAKE_FLEE_SECONDS;
+                    }
+                }
+                AirPhase::Flee => {
+                    goal = self.pos + vec3(away.cos() * 6.0, SNAKE_SPIRAL_HEIGHT, away.sin() * 6.0) + swirl(self.circle) * 0.5;
+                    speed = SNAKE_SPIRAL_SPEED * 2.0;
+                    if self.air_timer <= 0.0 {
+                        self.air_phase = AirPhase::Circle;
+                        self.air_timer = SNAKE_ATTACK_MIN + (SNAKE_ATTACK_MAX - SNAKE_ATTACK_MIN) * rng.unit();
+                    }
+                }
+            }
+        } else if self.kind == AnimalKind::Raven {
             match self.air_phase {
                 AirPhase::Circle => {
                     self.circle += dt * RAVEN_CIRCLE_SPEED / RAVEN_ORBIT_RADIUS;

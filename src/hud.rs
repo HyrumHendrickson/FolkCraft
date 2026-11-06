@@ -637,6 +637,39 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_line(g.x - 3.0 * u, g.y, g.x + 3.0 * u, g.y, 1.2, WHITE);
             draw_line(g.x, g.y - 3.0 * u, g.x, g.y + 3.0 * u, 1.2, WHITE);
         }
+        ItemKind::BootsOfTheSky => {
+            // A pair of boots with a cuff, a heel and a curled toe, a wing of feathers at the ankle and a silver sole.
+            for (dx, tone) in [(0.0, 1.0_f32), (0.30, 0.86)] {
+                let c = darken(color, tone);
+                let (sl, sr) = (p(0.10 + dx * 0.3, 0.16), p(0.34 + dx * 0.3, 0.64));
+                slab(sl.x, sl.y, sr.x - sl.x, sr.y - sl.y, c);
+                let (fl, fr) = (p(0.10 + dx * 0.3, 0.60), p(0.62 + dx * 0.3, 0.78));
+                slab(fl.x, fl.y, fr.x - fl.x, fr.y - fl.y, c);
+                tri(p(0.62 + dx * 0.3, 0.60), p(0.62 + dx * 0.3, 0.78), p(0.72 + dx * 0.3, 0.56), lighten(c, 0.10));
+                draw_rectangle(fl.x, p(0.0, 0.76).y, fr.x - fl.x + 3.0 * u, 3.0 * u, Color::new(0.86, 0.88, 0.94, 1.0));
+                let (cl, cr) = (p(0.08 + dx * 0.3, 0.14), p(0.36 + dx * 0.3, 0.22));
+                slab(cl.x, cl.y, cr.x - cl.x, cr.y - cl.y, lighten(c, 0.12));
+                for k in 0..3 {
+                    tri(p(0.10 + dx * 0.3, 0.32 + 0.07 * k as f32), p(0.10 + dx * 0.3, 0.38 + 0.07 * k as f32), p(0.00 + dx * 0.3, 0.30 + 0.07 * k as f32), Color::new(0.96, 0.97, 1.0, 1.0));
+                }
+            }
+        }
+        ItemKind::CursedIdol => {
+            // A squat stone figure with a heavy brow, glaring red eyes and a wide fanged mouth.
+            let (bl, br) = (p(0.28, 0.46), p(0.72, 0.90));
+            slab(bl.x, bl.y, br.x - bl.x, br.y - bl.y, darken(color, 0.8));
+            let (hl, hr) = (p(0.24, 0.12), p(0.76, 0.50));
+            slab(hl.x, hl.y, hr.x - hl.x, hr.y - hl.y, color);
+            slab(hl.x, p(0.0, 0.22).y, hr.x - hl.x, 4.0 * u, darken(color, 0.6));
+            for ex in [0.38, 0.62] {
+                ball(r.x + r.w * ex, r.y + r.h * 0.32, 4.2 * u, Color::new(0.95, 0.08, 0.06, 1.0));
+            }
+            draw_rectangle(p(0.34, 0.0).x, p(0.0, 0.42).y, 0.32 * r.w, 4.0 * u, Color::new(0.08, 0.08, 0.06, 1.0));
+            for tx in [0.40, 0.50, 0.60] {
+                tri(p(tx - 0.03, 0.42), p(tx + 0.03, 0.42), p(tx, 0.49), Color::new(0.94, 0.92, 0.84, 1.0));
+            }
+            draw_line(bl.x, p(0.0, 0.62).y, br.x, p(0.0, 0.62).y, 2.0, lighten(color, 0.1));
+        }
         ItemKind::AncientCrown => {
             let (bl, br) = (p(0.18, 0.54), p(0.82, 0.80));
             slab(bl.x, bl.y, br.x - bl.x, br.y - bl.y, color);
@@ -666,7 +699,7 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             }
             draw_line(pts[1].x - 4.0 * u, pts[1].y - 4.0 * u, pts[3].x, pts[3].y - 5.0 * u, 1.2, lighten(color, 0.22));
         }
-        ItemKind::DeerBone => {
+        ItemKind::Bone => {
             // A long bone with a knuckle at each end.
             let (a, b) = (p(0.26, 0.74), p(0.74, 0.26));
             rod(a, b, 6.0 * u, color);

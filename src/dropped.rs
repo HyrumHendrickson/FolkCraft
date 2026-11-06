@@ -73,13 +73,15 @@ impl ItemKind {
             ItemKind::PhilosophersStone => 0.09,
             ItemKind::AncientCrown => 0.08,
             ItemKind::HornOfTheHunt => 0.07,
-            ItemKind::DeerBone => 0.04,
+            ItemKind::Bone => 0.04,
             ItemKind::MusicalPipes => 0.05,
             ItemKind::TinPan => 0.03,
             ItemKind::Excalibur => 0.04,
             ItemKind::LeatherBackpack => 0.11,
             ItemKind::IronFeather | ItemKind::PhoenixFeather => 0.02,
             ItemKind::PhoenixArrow => 0.03,
+            ItemKind::BootsOfTheSky => 0.07,
+            ItemKind::CursedIdol => 0.10,
         }
     }
 
@@ -133,13 +135,15 @@ impl ItemKind {
             ItemKind::PhilosophersStone => vec3(0.12, 0.09, 0.12),
             ItemKind::AncientCrown => vec3(0.14, 0.08, 0.14),
             ItemKind::HornOfTheHunt => vec3(0.20, 0.07, 0.10),
-            ItemKind::DeerBone => vec3(0.20, 0.04, 0.05),
+            ItemKind::Bone => vec3(0.20, 0.04, 0.05),
             ItemKind::MusicalPipes => vec3(0.15, 0.05, 0.09),
             ItemKind::TinPan => vec3(0.17, 0.03, 0.17),
             ItemKind::Excalibur => vec3(0.30, 0.04, 0.07),
             ItemKind::LeatherBackpack => vec3(0.15, 0.11, 0.10),
             ItemKind::IronFeather | ItemKind::PhoenixFeather => vec3(0.12, 0.02, 0.04),
             ItemKind::PhoenixArrow => vec3(0.26, 0.03, 0.03),
+            ItemKind::BootsOfTheSky => vec3(0.17, 0.07, 0.09),
+            ItemKind::CursedIdol => vec3(0.10, 0.10, 0.10),
         }
     }
 }

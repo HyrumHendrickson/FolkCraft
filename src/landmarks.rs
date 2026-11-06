@@ -774,6 +774,8 @@ pub struct Landmarks {
     pub graveyard: Option<Graveyard>,
     /// Whether the Yeti on the mountain's summit has been killed (a cyclone then stands there).
     pub yeti_slain: bool,
+    /// Whether the Orangutan on the jungle temple's upper tiers has been killed. It never comes back.
+    pub orangutan_slain: bool,
     /// The lakes (by their centre) whose Loch Ness Monster has been killed.
     pub monsters_slain: Vec<(i32, i32)>,
     /// The silver towers whose door has been unlocked, by the column of their centre (a lake's centre for the tower on its

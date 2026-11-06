@@ -16,11 +16,19 @@ pub struct FireTornado {
     pub damage_timer: f32,
     /// Seconds since it appeared; it is gone after `SKY_TORNADO_LIFETIME`.
     pub age: f32,
+    /// How many times the size of an ordinary tornado this one is (the volcano's is `VOLCANO_TORNADO_SCALE`).
+    pub scale: f32,
 }
 
 impl FireTornado {
     pub fn new(pos: Vec3, target: Vec3) -> Self {
-        FireTornado { pos, target, arrived: false, damage_timer: 0.0, age: 0.0 }
+        FireTornado { pos, target, arrived: false, damage_timer: 0.0, age: 0.0, scale: 1.0 }
+    }
+
+    /// The great tornado that always whirls in the Phoenix's crater by day: it is already where it stays and is
+    /// `VOLCANO_TORNADO_SCALE` times the size of the ones that sweep across the islands.
+    pub fn crater(pos: Vec3) -> Self {
+        FireTornado { pos, target: pos, arrived: true, damage_timer: 0.0, age: 0.0, scale: VOLCANO_TORNADO_SCALE }
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -44,8 +52,8 @@ impl FireTornado {
     pub fn hits(&self, player: Vec3) -> bool {
         let dx = player.x - self.pos.x;
         let dz = player.z - self.pos.z;
-        dx * dx + dz * dz <= (SKY_TORNADO_RADIUS + PLAYER_HALF_WIDTH).powi(2)
-            && player.y < self.pos.y + SKY_TORNADO_HEIGHT
+        dx * dx + dz * dz <= (SKY_TORNADO_RADIUS * self.scale + PLAYER_HALF_WIDTH).powi(2)
+            && player.y < self.pos.y + SKY_TORNADO_HEIGHT * self.scale
             && player.y + PLAYER_HEIGHT > self.pos.y
     }
 }
@@ -98,6 +106,16 @@ mod tests {
         assert!(c.contains(vec3(10.5, 100.0, 10.0)));
         assert!(!c.contains(vec3(10.0 + CYCLONE_RADIUS + PLAYER_HALF_WIDTH + 0.2, 100.0, 10.0)));
         assert!(!c.contains(vec3(10.0, 100.0 + CYCLONE_HEIGHT + 0.1, 10.0)), "not above it");
+    }
+
+    #[test]
+    fn the_crater_tornado_is_already_in_place_and_bigger_than_the_others() {
+        let big = FireTornado::crater(vec3(5.0, 50.0, 5.0));
+        let small = FireTornado::new(vec3(5.0, 50.0, 5.0), vec3(5.0, 50.0, 5.0));
+        assert!(big.arrived && big.scale == VOLCANO_TORNADO_SCALE && VOLCANO_TORNADO_SCALE > 1.5);
+        let off = vec3(5.0 + SKY_TORNADO_RADIUS + PLAYER_HALF_WIDTH + 0.5, 50.0, 5.0);
+        assert!(big.hits(off) && !small.hits(off), "it reaches wider");
+        assert!(big.hits(vec3(5.0, 50.0 + SKY_TORNADO_HEIGHT + 1.0, 5.0)) && !small.hits(vec3(5.0, 50.0 + SKY_TORNADO_HEIGHT + 1.0, 5.0)), "and higher");
     }
 
     #[test]

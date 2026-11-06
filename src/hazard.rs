@@ -17,6 +17,8 @@ pub enum ProjectileKind {
     IceBall,
     /// A ball of fire thrown by the Phoenix: it flies straight.
     Fireball,
+    /// A rock hurled by the Orangutan: it arcs under gravity.
+    Rock,
 }
 
 impl ProjectileKind {
@@ -25,6 +27,7 @@ impl ProjectileKind {
         match self {
             ProjectileKind::IceBall => ICE_BALL_SPEED,
             ProjectileKind::Fireball => FIREBALL_SPEED,
+            ProjectileKind::Rock => ROCK_SPEED,
         }
     }
 
@@ -32,6 +35,7 @@ impl ProjectileKind {
         match self {
             ProjectileKind::IceBall => ICE_BALL_GRAVITY,
             ProjectileKind::Fireball => 0.0,
+            ProjectileKind::Rock => ROCK_GRAVITY,
         }
     }
 
@@ -40,6 +44,7 @@ impl ProjectileKind {
         match self {
             ProjectileKind::IceBall => ICE_BURST_RADIUS,
             ProjectileKind::Fireball => FIREBALL_RADIUS,
+            ProjectileKind::Rock => ROCK_BURST_RADIUS,
         }
     }
 
@@ -47,6 +52,7 @@ impl ProjectileKind {
         match self {
             ProjectileKind::IceBall => ICE_BURST_DAMAGE,
             ProjectileKind::Fireball => FIREBALL_DAMAGE,
+            ProjectileKind::Rock => ROCK_BURST_DAMAGE,
         }
     }
 
@@ -55,6 +61,7 @@ impl ProjectileKind {
         match self {
             ProjectileKind::IceBall => "The Yeti's ice shattered you",
             ProjectileKind::Fireball => "A fireball burned you to death",
+            ProjectileKind::Rock => "The Orangutan's rock crushed you",
         }
     }
 }

@@ -118,9 +118,9 @@ pub enum ItemKind {
     AncientCrown,
     /// The relic at the top of the silver tower in the Skylands. It does nothing yet.
     HornOfTheHunt,
-    /// Sometimes left by a deer (one time in five). Three bones make musical pipes.
-    DeerBone,
-    /// Pipes cut from deer bones. They do nothing yet.
+    /// Sometimes left by a deer (one time in five), and lying on the altar islands of the Skylands. Three bones make musical pipes.
+    Bone,
+    /// Pipes cut from bones. They call birds by day and bats by night, and wake the ghosts of the graveyard, the towers and the king's castle.
     MusicalPipes,
     /// Tin shaped into a pan. Held while breaking river clay it sometimes turns up gold.
     TinPan,
@@ -135,10 +135,15 @@ pub enum ItemKind {
     PhoenixFeather,
     /// An arrow the bow never runs out of: shooting it does not use it up, and it does not land on the ground.
     PhoenixArrow,
+    /// The boots of the sky, from the middle of the king's castle in the Horizen. Worn in the one worn place they give twice the
+    /// jump distance and one and a half times the running speed.
+    BootsOfTheSky,
+    /// The cursed idol from the heart of the jungle temple. While it is in the hotbar the player cannot heal, and deals double damage.
+    CursedIdol,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 76] = [
+    pub const ALL: [ItemKind; 78] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -207,7 +212,7 @@ impl ItemKind {
         ItemKind::PhilosophersStone,
         ItemKind::AncientCrown,
         ItemKind::HornOfTheHunt,
-        ItemKind::DeerBone,
+        ItemKind::Bone,
         ItemKind::MusicalPipes,
         ItemKind::TinPan,
         ItemKind::Excalibur,
@@ -215,6 +220,8 @@ impl ItemKind {
         ItemKind::IronFeather,
         ItemKind::PhoenixFeather,
         ItemKind::PhoenixArrow,
+        ItemKind::BootsOfTheSky,
+        ItemKind::CursedIdol,
     ];
 
     /// Display name.
@@ -288,7 +295,7 @@ impl ItemKind {
             ItemKind::PhilosophersStone => "Philosopher's Stone",
             ItemKind::AncientCrown => "King's Crown",
             ItemKind::HornOfTheHunt => "Horn of the Hunt",
-            ItemKind::DeerBone => "Deer Bone",
+            ItemKind::Bone => "Bone",
             ItemKind::MusicalPipes => "Musical Pipes",
             ItemKind::TinPan => "Tin Pan",
             ItemKind::Excalibur => "Excalibur",
@@ -296,6 +303,8 @@ impl ItemKind {
             ItemKind::IronFeather => "Iron Feather",
             ItemKind::PhoenixFeather => "Phoenix Feather",
             ItemKind::PhoenixArrow => "Phoenix Arrow",
+            ItemKind::BootsOfTheSky => "Boots of the Sky",
+            ItemKind::CursedIdol => "Cursed Idol",
         }
     }
 
@@ -370,7 +379,7 @@ impl ItemKind {
             ItemKind::PhilosophersStone => "philosophers_stone",
             ItemKind::AncientCrown => "ancient_crown",
             ItemKind::HornOfTheHunt => "horn_of_the_hunt",
-            ItemKind::DeerBone => "deer_bone",
+            ItemKind::Bone => "bone",
             ItemKind::MusicalPipes => "musical_pipes",
             ItemKind::TinPan => "tin_pan",
             ItemKind::Excalibur => "excalibur",
@@ -378,6 +387,8 @@ impl ItemKind {
             ItemKind::IronFeather => "iron_feather",
             ItemKind::PhoenixFeather => "phoenix_feather",
             ItemKind::PhoenixArrow => "phoenix_arrow",
+            ItemKind::BootsOfTheSky => "boots_of_the_sky",
+            ItemKind::CursedIdol => "cursed_idol",
         }
     }
 
@@ -387,6 +398,8 @@ impl ItemKind {
         match id {
             "copper_ore" => Some(ItemKind::Stone),
             "tin_ore" => Some(ItemKind::Pebble),
+            // Bones used to be deer bones; the deer's and the sky's are one kind now.
+            "deer_bone" => Some(ItemKind::Bone),
             id => ItemKind::ALL.into_iter().find(|k| k.id() == id),
         }
     }
@@ -461,7 +474,7 @@ impl ItemKind {
             ItemKind::PhilosophersStone => Color::new(0.76, 0.12, 0.16, 1.0),
             ItemKind::AncientCrown => Color::new(0.90, 0.68, 0.16, 1.0),
             ItemKind::HornOfTheHunt => Color::new(0.90, 0.84, 0.68, 1.0),
-            ItemKind::DeerBone => Color::new(0.93, 0.90, 0.82, 1.0),
+            ItemKind::Bone => Color::new(0.93, 0.90, 0.82, 1.0),
             ItemKind::MusicalPipes => Color::new(0.88, 0.82, 0.68, 1.0),
             ItemKind::TinPan => Color::new(0.72, 0.76, 0.82, 1.0),
             ItemKind::Excalibur => Color::new(0.86, 0.90, 0.98, 1.0),
@@ -469,6 +482,8 @@ impl ItemKind {
             ItemKind::IronFeather => Color::new(0.58, 0.60, 0.66, 1.0),
             ItemKind::PhoenixFeather => Color::new(0.98, 0.52, 0.12, 1.0),
             ItemKind::PhoenixArrow => Color::new(0.96, 0.46, 0.10, 1.0),
+            ItemKind::BootsOfTheSky => Color::new(0.52, 0.76, 0.94, 1.0),
+            ItemKind::CursedIdol => Color::new(0.30, 0.42, 0.26, 1.0),
         }
     }
 
@@ -529,9 +544,9 @@ impl ItemKind {
     }
 
     /// Whether this can be worn. A player wears one thing at a time, all in the same place: a pelt cloak, the royal armour,
-    /// the king's crown or a leather backpack.
+    /// the king's crown, a leather backpack or the boots of the sky.
     pub fn is_wearable(self) -> bool {
-        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown | ItemKind::LeatherBackpack)
+        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown | ItemKind::LeatherBackpack | ItemKind::BootsOfTheSky)
     }
 
     /// Whether this is a backpack: it shares the one worn place with the cloak, the armour and the crown, and while it is on
@@ -717,7 +732,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         Block::Wood | Block::PlacedLog => drops.push(ItemKind::Log),
         Block::PlacedPebble | Block::WetPebble => drops.push(ItemKind::Pebble),
         Block::PlacedStone | Block::WetStone => drops.push(ItemKind::Stone),
-        Block::Bones => drops.push(ItemKind::DeerBone),
+        Block::Bones => drops.push(ItemKind::Bone),
         Block::WetClay => drops.extend(std::iter::repeat(ItemKind::Clay).take(CLAY_DROP as usize)),
         Block::Boulder => {
             drops.push(ItemKind::Stone);
@@ -728,13 +743,15 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         }
         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
-        Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(PINK_SALT_DROP as usize)),
+        Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(rng.range(PINK_SALT_DROP_MIN as i32, PINK_SALT_DROP_MAX as i32 + 1) as usize)),
         Block::KeyStand => drops.push(ItemKind::SilverKey),
         Block::GoldBoulder => drops.extend(std::iter::repeat(ItemKind::Gold).take(GOLD_BOULDER_GOLD_DROP as usize)),
         Block::AltarLoadstone => drops.push(ItemKind::Loadstone),
         Block::StonePlinth => drops.push(ItemKind::PhilosophersStone),
         Block::HornPlinth => drops.push(ItemKind::HornOfTheHunt),
         Block::CrownPlinth => drops.push(ItemKind::AncientCrown),
+        Block::BootsPlinth => drops.push(ItemKind::BootsOfTheSky),
+        Block::IdolPlinth => drops.push(ItemKind::CursedIdol),
         Block::ClayForge => drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize)),
         Block::ForgeCharged => {
             drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize));
@@ -772,7 +789,6 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::SwordHilt
         | Block::PulledStone
         | Block::MayaStone
-        | Block::Magma
         | Block::Water
         | Block::Flower
         | Block::Fire

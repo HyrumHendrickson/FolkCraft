@@ -19,12 +19,21 @@ pub const TEMPLE_TOP: i32 = TEMPLE_TIERS * TEMPLE_TIER_HEIGHT;
 ///
 /// - `TEMPLE_TIERS` square tiers, each `TEMPLE_TIER_HEIGHT` high and two blocks narrower on every side than the one below,
 /// - a stair `2 * TEMPLE_STAIR_HALF + 1` wide up the south side (towards +z), a block a step, from the ground to the top,
+/// - inside, at the heart of the pyramid at ground level, a chamber with the cursed idol on a plinth in the middle, reached by a
+///   passage `2 * TEMPLE_PASSAGE_HALF + 1` wide that runs in from the north face (towards -z),
 /// - on the top platform a shrine: walls, a doorway in the south side, a flat roof and a tall roof comb along it, with a pile
 ///   of gold on the floor in the middle.
 pub fn temple_cell(dx: i32, dz: i32, dy: i32) -> Block {
     let (ax, az) = (dx.abs(), dz.abs());
     let edge = ax.max(az);
     if edge > TEMPLE_BASE_HALF || dy < 0 {
+        return Block::Air;
+    }
+    // The chamber at the heart of the temple, its idol, and the passage in from the north face.
+    if az <= TEMPLE_CHAMBER_HALF && ax <= TEMPLE_CHAMBER_HALF && dy < TEMPLE_CHAMBER_HEIGHT {
+        return if (ax, az, dy) == (0, 0, 0) { Block::IdolPlinth } else { Block::Air };
+    }
+    if dz < 0 && ax <= TEMPLE_PASSAGE_HALF && dy < TEMPLE_PASSAGE_HEIGHT {
         return Block::Air;
     }
     let tier = ((TEMPLE_BASE_HALF - edge) / 2).min(TEMPLE_TIERS - 1);
@@ -51,6 +60,11 @@ pub fn temple_cell(dx: i32, dz: i32, dy: i32) -> Block {
         5..=8 if az == 0 => Block::MayaStone,
         _ => Block::Air,
     }
+}
+
+/// Where the Orangutan stands when it appears: on the second tier from the top, east of the shrine, as (dx, dz, dy) from the temple's middle.
+pub const fn orangutan_post() -> (i32, i32, i32) {
+    (5, 0, TEMPLE_TOP - TEMPLE_TIER_HEIGHT)
 }
 
 #[cfg(test)]
@@ -108,6 +122,25 @@ mod tests {
         assert!(seen.contains(&(0, 3, TEMPLE_TOP)), "the doorway");
         assert!(seen.contains(&(0, 1, TEMPLE_TOP)), "inside the shrine, on its floor, is reachable on foot");
         assert!(!seen.iter().any(|&(x, z, y)| y == TEMPLE_TOP && z < -4 && x.abs() < TEMPLE_BASE_HALF), "the platform is only the top tier, with nothing level with it behind");
+    }
+
+    #[test]
+    fn the_cursed_idol_stands_in_a_chamber_at_the_heart_of_the_temple_reached_by_a_passage_from_the_north() {
+        assert_eq!(temple_cell(0, 0, 0), Block::IdolPlinth, "the idol is in the very middle");
+        assert_eq!(temple_cell(0, 0, 1), Block::Air);
+        for dy in 0..TEMPLE_CHAMBER_HEIGHT {
+            assert!(matches!(temple_cell(TEMPLE_CHAMBER_HALF + 1, 0, dy), Block::MayaStone), "solid stone round the chamber");
+        }
+        let free = |x: i32, z: i32, y: i32| (0..2).all(|k| matches!(temple_cell(x, z, y + k), Block::Air));
+        // Walk in from outside the north face along the passage to the foot of the plinth, on the ground.
+        for z in -TEMPLE_BASE_HALF - 2..=-TEMPLE_CHAMBER_HALF - 1 {
+            assert!(free(0, z, 0), "the passage is open at z={z}");
+        }
+        assert!(free(0, 1, 0) && free(1, 0, 0) && free(0, -1, 0), "room round the plinth");
+        assert!(temple_cell(0, TEMPLE_BASE_HALF - 4, 0) == Block::MayaStone, "no way in from the south side");
+        assert!(temple_cell(0, -10, TEMPLE_PASSAGE_HEIGHT) == Block::MayaStone, "the passage is only so high");
+        let (dx, dz, dy) = orangutan_post();
+        assert!(temple_cell(dx, dz, dy - 1) == Block::MayaStone && temple_cell(dx, dz, dy) == Block::Air && temple_cell(dx, dz, dy + 2) == Block::Air, "the post is on a tier of stone");
     }
 
     #[test]

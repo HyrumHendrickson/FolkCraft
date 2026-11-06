@@ -279,10 +279,18 @@ pub struct Deck {
 }
 
 impl Bridge {
-    /// The deck of the bridge in the column (wx, wz), `None` if the bridge does not cross it or the column is on one of
+    /// The deck of the bridge in the column (wx, wz) by day, `None` if the bridge does not cross it or the column is on one of
     /// its two islands (which are drawn instead). The deck runs level with the top of the island at each end and climbs
     /// in between.
+    #[cfg(test)]
     pub fn deck_at(&self, wx: i32, wz: i32) -> Option<Deck> {
+        self.deck_at_time(wx, wz, false)
+    }
+
+    /// `deck_at`, by day or by night. By night the bridge is broken: only a short ragged stub of `SKY_BROKEN_STUB` blocks is left
+    /// at each end, and the middle is gone. A bridge shorter than `SKY_BROKEN_MIN_DECK` has no stubs at all, so that what is left
+    /// can never be jumped across.
+    pub fn deck_at_time(&self, wx: i32, wz: i32, night: bool) -> Option<Deck> {
         if self.from == self.to {
             // Both ends are the giant island: there is no bridge between a cell of its block and another.
             return None;
@@ -300,22 +308,30 @@ impl Bridge {
         // The deck leaves the shore of the first island and arrives at the shore of the second.
         let start = self.from.reach(az.atan2(ax));
         let end = len - self.to.reach((-az).atan2(-ax));
+        if night {
+            let stub = if end - start >= SKY_BROKEN_MIN_DECK { SKY_BROKEN_STUB } else { 0.0 };
+            let from_end = (along - start).min(end - along);
+            let ragged = from_end > stub - 1.0 && (wx.wrapping_mul(7).wrapping_add(wz.wrapping_mul(13))).rem_euclid(2) == 0;
+            if from_end > stub || ragged {
+                return None;
+            }
+        }
         let t = ((along - start) / (end - start).max(1.0)).clamp(0.0, 1.0);
         let y = self.from.top + ((self.to.top - self.from.top) as f32 * t).round() as i32;
         Some(Deck { y, post: across >= SKY_BRIDGE_WIDTH / 2.0 - 0.6 && (along.floor() as i32).rem_euclid(4) == 0 })
     }
 }
 
-/// The deck, if any, that the bridges lay over the column (wx, wz).
-pub fn deck_at(seed: i64, wx: i32, wz: i32) -> Option<Deck> {
+/// The deck, if any, that the bridges lay over the column (wx, wz), whole by day and broken by night.
+pub fn deck_at(seed: i64, wx: i32, wz: i32, night: bool) -> Option<Deck> {
     let (cx, cz) = (cell_of(wx), cell_of(wz));
     for dz in -1..=1 {
         for dx in -1..=1 {
             let (x, z) = (cx + dx, cz + dz);
-            if let Some(deck) = east_bridge(seed, x, z).deck_at(wx, wz) {
+            if let Some(deck) = east_bridge(seed, x, z).deck_at_time(wx, wz, night) {
                 return Some(deck);
             }
-            if let Some(deck) = south_bridge(seed, x, z).and_then(|b| b.deck_at(wx, wz)) {
+            if let Some(deck) = south_bridge(seed, x, z).and_then(|b| b.deck_at_time(wx, wz, night)) {
                 return Some(deck);
             }
         }
@@ -325,8 +341,21 @@ pub fn deck_at(seed: i64, wx: i32, wz: i32) -> Option<Deck> {
 
 /// y of the highest block of the land in the column (wx, wz) (the top of an island, or a bridge's deck), `None` over the
 /// void.
-pub fn surface_top(seed: i64, wx: i32, wz: i32) -> Option<i32> {
-    island_at(seed, wx, wz).map(|i| i.surface_y(wx, wz)).or_else(|| deck_at(seed, wx, wz).map(|d| d.y))
+pub fn surface_top(seed: i64, wx: i32, wz: i32, night: bool) -> Option<i32> {
+    island_at(seed, wx, wz).map(|i| i.surface_y(wx, wz)).or_else(|| deck_at(seed, wx, wz, night).map(|d| d.y))
+}
+
+/// Where a player who stands over the column (wx, wz) can be put when the bridge under them has just broken (nightfall): the
+/// nearest column within `reach` blocks that still has footing, standing on it. `None` if there is none.
+pub fn nearest_footing(seed: i64, wx: i32, wz: i32, night: bool, reach: i32) -> Option<Vec3> {
+    (1..=reach).find_map(|r| {
+        (-r..=r)
+            .flat_map(|dz| (-r..=r).map(move |dx| (dx, dz)))
+            .filter(|&(dx, dz)| dx.abs().max(dz.abs()) == r)
+            .filter_map(|(dx, dz)| surface_top(seed, wx + dx, wz + dz, night).map(|top| (dx * dx + dz * dz, wx + dx, wz + dz, top)))
+            .min_by_key(|c| c.0)
+            .map(|(_, x, z, top)| vec3(x as f32 + 0.5, top as f32 + 1.01, z as f32 + 0.5))
+    })
 }
 
 /// Where the player arrives: the middle of the first island, standing on its grass.
@@ -391,8 +420,8 @@ fn decoration(seed: i64, island: &Island, wx: i32, wz: i32) -> Vec<(i32, Block)>
 }
 
 /// The block of an island's ground at height `y` in the column (wx, wz), whose surface is at `surface`: dirt over rock; on the volcano,
-/// bare rock with glowing magma on the crater floor and in veins on its slopes.
-fn ground_block(seed: i64, island: &Island, wx: i32, wz: i32, y: i32, surface: i32) -> Block {
+/// bare grey rock (no glowing blocks: the fire is the crater's tornado).
+fn ground_block(island: &Island, wx: i32, wz: i32, y: i32, surface: i32) -> Block {
     if y <= surface - SKY_DIRT_LAYERS {
         return Block::Stone;
     }
@@ -400,15 +429,11 @@ fn ground_block(seed: i64, island: &Island, wx: i32, wz: i32, y: i32, surface: i
         return Block::Dirt;
     }
     let d = vec2(wx as f32 + 0.5 - (island.x as f32 + 0.5), wz as f32 + 0.5 - (island.z as f32 + 0.5)).length();
-    if d >= VOLCANO_RADIUS {
-        return Block::Dirt;
-    }
-    let vein = d < VOLCANO_CRATER_RADIUS + 4.0 && hash3(seed, wx, wz, 0x5C32) % 100 < 6;
-    if y >= surface - 1 && (d < VOLCANO_CRATER_RADIUS * 0.6 || vein) { Block::Magma } else { Block::Stone }
+    if d >= VOLCANO_RADIUS { Block::Dirt } else { Block::Stone }
 }
 
 /// The blocks of chunk (cx, cz) of the Skylands: the islands (rock, dirt, a few oaks), and the bridges' decks and posts.
-pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec<Block> {
+pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, night: bool) -> Vec<Block> {
     let mut blocks = vec![Block::Air; (CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE) as usize];
     let mut trees = Vec::new();
     for lz in 0..CHUNK_SIZE {
@@ -418,7 +443,7 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
                 let bottom = island.bottom_at(wx, wz).unwrap_or(island.top);
                 let surface = island.surface_y(wx, wz);
                 for y in bottom..=surface {
-                    blocks[idx(lx, y, lz)] = ground_block(seed, &island, wx, wz, y, surface);
+                    blocks[idx(lx, y, lz)] = ground_block(&island, wx, wz, y, surface);
                 }
                 let tower_island = landmarks.sky_tower == Some((cell_of(island.x), cell_of(island.z)));
                 if !tower_island {
@@ -438,7 +463,7 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
                 if (3..CHUNK_SIZE - 3).contains(&lx) && (3..CHUNK_SIZE - 3).contains(&lz) && tree_site(seed, wx, wz, &island, landmarks) {
                     trees.push((lx, lz, island.top));
                 }
-            } else if let Some(deck) = deck_at(seed, wx, wz) {
+            } else if let Some(deck) = deck_at(seed, wx, wz, night) {
                 blocks[idx(lx, deck.y, lz)] = Block::BridgePlank;
                 if deck.post {
                     blocks[idx(lx, deck.y + 1, lz)] = Block::BridgePost;
@@ -468,12 +493,12 @@ mod tests {
         let first = island_in_cell(7, 0, 0);
         assert_eq!((first.x, first.z, first.top), (SKY_SPAWN_CENTRE.0, SKY_SPAWN_CENTRE.1, SKY_BASE_Y));
         let p = spawn_point();
-        assert_eq!(surface_top(7, p.x.floor() as i32, p.z.floor() as i32), Some(SKY_BASE_Y));
+        assert_eq!(surface_top(7, p.x.floor() as i32, p.z.floor() as i32, false), Some(SKY_BASE_Y));
     }
 
     #[test]
     fn the_land_is_a_pure_function_of_the_seed_and_other_seeds_differ() {
-        let sample = |seed: i64| (-200..200).map(|x| surface_top(seed, x, 11)).collect::<Vec<_>>();
+        let sample = |seed: i64| (-200..200).map(|x| surface_top(seed, x, 11, false)).collect::<Vec<_>>();
         assert_eq!(sample(3), sample(3));
         assert_ne!(sample(3), sample(4));
     }
@@ -502,7 +527,7 @@ mod tests {
 
     #[test]
     fn an_island_is_grass_over_rock_that_tapers_to_the_shore() {
-        let blocks = generate_chunk(5, 0, 0, &Landmarks::default());
+        let blocks = generate_chunk(5, 0, 0, &Landmarks::default(), false);
         let first = island_in_cell(5, 0, 0);
         let (lx, lz) = (first.x, first.z);
         assert_eq!(blocks[idx(lx, first.top, lz)], Block::Dirt);
@@ -525,13 +550,13 @@ mod tests {
             if (x, z) == to {
                 return true;
             }
-            let here = surface_top(seed, x, z).unwrap();
+            let here = surface_top(seed, x, z, false).unwrap();
             for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let next = (x + dx, z + dz);
                 if next.0.abs() > 180 || next.1.abs() > 180 || seen.contains(&next) {
                     continue;
                 }
-                if let Some(top) = surface_top(seed, next.0, next.1) {
+                if let Some(top) = surface_top(seed, next.0, next.1, false) {
                     // A player hops up one block and can drop down a block or two.
                     if top - here <= 1 && here - top <= 2 {
                         seen.insert(next);
@@ -581,7 +606,7 @@ mod tests {
         let (mut planks, mut posts, mut wood) = (0, 0, 0);
         for cz in -3..3 {
             for cx in -3..3 {
-                for &b in generate_chunk(5, cx, cz, &Landmarks::default()).iter() {
+                for &b in generate_chunk(5, cx, cz, &Landmarks::default(), false).iter() {
                     planks += (b == Block::BridgePlank) as i32;
                     posts += (b == Block::BridgePost) as i32;
                     wood += (b == Block::Wood) as i32;
@@ -590,14 +615,14 @@ mod tests {
         }
         assert!(planks > 100 && posts > 4 && wood > 0, "planks {planks}, posts {posts}, wood {wood}");
         // Far from every island and bridge there is nothing.
-        let void_found = (-50..50).any(|x| (-50..50).any(|z| surface_top(5, x * 3, z * 3).is_none()));
+        let void_found = (-50..50).any(|x| (-50..50).any(|z| surface_top(5, x * 3, z * 3, false).is_none()));
         assert!(void_found, "gaps between the islands are open sky");
     }
 
     #[test]
     fn trees_keep_off_the_arrival_spot() {
         for seed in 0..30 {
-            let blocks = generate_chunk(seed, 0, 0, &Landmarks::default());
+            let blocks = generate_chunk(seed, 0, 0, &Landmarks::default(), false);
             for p in [spawn_point()] {
                 for dz in -2..=2 {
                     for dx in -2..=2 {
@@ -649,7 +674,7 @@ mod tests {
         let mut out = Vec::new();
         for cz in (island.z - reach).div_euclid(CHUNK_SIZE)..=(island.z + reach).div_euclid(CHUNK_SIZE) {
             for cx in (island.x - reach).div_euclid(CHUNK_SIZE)..=(island.x + reach).div_euclid(CHUNK_SIZE) {
-                let blocks = generate_chunk(seed, cx, cz, &Landmarks::default());
+                let blocks = generate_chunk(seed, cx, cz, &Landmarks::default(), false);
                 for lz in 0..CHUNK_SIZE {
                     for lx in 0..CHUNK_SIZE {
                         for y in island.top + 1..island.top + 30 {
@@ -722,7 +747,7 @@ mod tests {
             assert!(cx.abs() >= 3 || cz.abs() >= 3, "far from the first island");
             assert_eq!(island_in_cell(seed, cx + 1, cz - 1), g, "it stands in place of the nine cells round it");
             let crater = volcano_crater(seed);
-            assert_eq!(surface_top(seed, crater.x.floor() as i32, crater.z.floor() as i32), Some(g.top + VOLCANO_FLOOR), "the Phoenix's floor");
+            assert_eq!(surface_top(seed, crater.x.floor() as i32, crater.z.floor() as i32, false), Some(g.top + VOLCANO_FLOOR), "the Phoenix's floor");
             let rim = (0..40).map(|d| g.surface_y(g.x + d, g.z)).max().unwrap();
             assert!(rim > g.top + VOLCANO_FLOOR + 4 && rim <= g.top + VOLCANO_HEIGHT, "the cone rises round the crater: {rim}");
             // The cone climbs a block at a time (steps of at most one) from the foot to the rim.
@@ -737,19 +762,19 @@ mod tests {
     }
 
     #[test]
-    fn the_volcano_is_rock_with_magma_on_the_crater_floor() {
+    fn the_volcano_is_plain_grey_rock_with_no_red_blocks() {
         let seed = 5;
         let g = giant_island(seed);
         let (cx, cz) = (g.x.div_euclid(CHUNK_SIZE), g.z.div_euclid(CHUNK_SIZE));
-        let blocks = generate_chunk(seed, cx, cz, &Landmarks::default());
+        let blocks = generate_chunk(seed, cx, cz, &Landmarks::default(), false);
         let (lx, lz) = (g.x.rem_euclid(CHUNK_SIZE), g.z.rem_euclid(CHUNK_SIZE));
-        assert_eq!(blocks[idx(lx, g.top + VOLCANO_FLOOR, lz)], Block::Magma, "the floor of the crater");
+        assert_eq!(blocks[idx(lx, g.top + VOLCANO_FLOOR, lz)], Block::Stone, "the floor of the crater is rock");
         assert_eq!(blocks[idx(lx, g.top + VOLCANO_FLOOR + 1, lz)], Block::Air, "open above it");
         let slope_x = (g.x + (VOLCANO_CRATER_RADIUS as i32 + 3)).rem_euclid(CHUNK_SIZE);
         let slope_chunk = (g.x + VOLCANO_CRATER_RADIUS as i32 + 3).div_euclid(CHUNK_SIZE);
-        let blocks = generate_chunk(seed, slope_chunk, cz, &Landmarks::default());
-        let top = surface_top(seed, g.x + VOLCANO_CRATER_RADIUS as i32 + 3, g.z).unwrap();
-        assert!(matches!(blocks[idx(slope_x, top, lz)], Block::Stone | Block::Magma), "bare rock on the slopes");
+        let blocks = generate_chunk(seed, slope_chunk, cz, &Landmarks::default(), false);
+        let top = surface_top(seed, g.x + VOLCANO_CRATER_RADIUS as i32 + 3, g.z, false).unwrap();
+        assert!(matches!(blocks[idx(slope_x, top, lz)], Block::Stone), "bare rock on the slopes");
     }
 
     #[test]
@@ -759,5 +784,97 @@ mod tests {
                 assert_eq!(island_in_cell(seed, cell.0, cell.1).kind, IslandKind::Wooded);
             }
         }
+    }
+
+    /// The decks of every bridge that leaves the island of cell (cx, cz) to the east or south, by day or night.
+    fn bridges_near(seed: i64) -> Vec<Bridge> {
+        let mut out = Vec::new();
+        for cz in -3..4 {
+            for cx in -3..4 {
+                out.push(east_bridge(seed, cx, cz));
+                out.extend(south_bridge(seed, cx, cz));
+            }
+        }
+        out.into_iter().filter(|b| b.from != b.to).collect()
+    }
+
+    #[test]
+    fn by_night_every_bridge_is_broken_and_cannot_be_crossed() {
+        for seed in 0..4 {
+            for bridge in bridges_near(seed) {
+                let (a, b) = ((bridge.from.x, bridge.from.z), (bridge.to.x, bridge.to.z));
+                let (x0, x1, z0, z1) = (a.0.min(b.0) - 20, a.0.max(b.0) + 20, a.1.min(b.1) - 20, a.1.max(b.1) + 20);
+                // Walk from the first island over deck columns (as a player does, steps of one block) and see whether the second is reached.
+                let mut seen = HashSet::new();
+                let mut queue = VecDeque::new();
+                for z in z0..=z1 {
+                    for x in x0..=x1 {
+                        if bridge.from.contains(x, z) {
+                            seen.insert((x, z));
+                            queue.push_back((x, z));
+                        }
+                    }
+                }
+                let mut crossed = false;
+                while let Some((x, z)) = queue.pop_front() {
+                    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let n = (x + dx, z + dz);
+                        if n.0 < x0 || n.0 > x1 || n.1 < z0 || n.1 > z1 || seen.contains(&n) {
+                            continue;
+                        }
+                        if bridge.to.contains(n.0, n.1) {
+                            crossed = true;
+                        } else if bridge.deck_at_time(n.0, n.1, true).is_some() {
+                            seen.insert(n);
+                            queue.push_back(n);
+                        }
+                    }
+                }
+                assert!(!crossed, "seed {seed}: a bridge can still be crossed by night");
+            }
+        }
+    }
+
+    #[test]
+    fn a_player_over_a_broken_deck_is_set_on_the_nearest_footing() {
+        let seed = 3;
+        let bridge = bridges_near(seed).into_iter().find(|b| (((b.to.x - b.from.x).pow(2) + (b.to.z - b.from.z).pow(2)) as f32).sqrt() > 40.0).unwrap();
+        let mid = ((bridge.from.x + bridge.to.x) / 2, (bridge.from.z + bridge.to.z) / 2);
+        let (x, z) = (mid.0, mid.1);
+        assert!(deck_at(seed, x, z, false).is_some() && deck_at(seed, x, z, true).is_none(), "the middle of the bridge is gone by night");
+        let spot = nearest_footing(seed, x, z, true, 40).expect("some footing");
+        assert!(surface_top(seed, spot.x.floor() as i32, spot.z.floor() as i32, true).is_some());
+    }
+
+    #[test]
+    fn by_night_a_bridge_keeps_only_stubs_at_its_ends_and_by_day_it_is_whole() {
+        let bridge = bridges_near(3).into_iter().find(|b| {
+            let len = (((b.to.x - b.from.x).pow(2) + (b.to.z - b.from.z).pow(2)) as f32).sqrt();
+            len > 40.0
+        }).expect("a long bridge");
+        let (mut day, mut night) = (0, 0);
+        for z in -400..400 {
+            for x in -400..400 {
+                day += bridge.deck_at_time(x, z, false).is_some() as i32;
+                night += bridge.deck_at_time(x, z, true).is_some() as i32;
+                if bridge.deck_at_time(x, z, true).is_some() {
+                    assert!(bridge.deck_at_time(x, z, false).is_some(), "a broken bridge only loses planks");
+                }
+            }
+        }
+        assert!(day > 0 && night > 0 && night * 3 < day, "stubs remain, the rest is gone: day {day}, night {night}");
+    }
+
+    #[test]
+    fn night_chunks_have_no_whole_bridge_and_the_islands_are_unchanged() {
+        let seed = 5;
+        let bridge = bridges_near(seed).into_iter().next().unwrap();
+        let (cx, cz) = ((bridge.from.x + bridge.to.x) / 2 / CHUNK_SIZE, (bridge.from.z + bridge.to.z) / 2 / CHUNK_SIZE);
+        let planks = |night: bool| generate_chunk(seed, cx, cz, &Landmarks::default(), night).iter().filter(|b| **b == Block::BridgePlank).count();
+        assert!(planks(true) <= planks(false));
+        let first = generate_chunk(seed, 0, 0, &Landmarks::default(), false);
+        let first_night = generate_chunk(seed, 0, 0, &Landmarks::default(), true);
+        let ground = |b: &Vec<Block>| b.iter().filter(|x| matches!(x, Block::Dirt | Block::Stone)).count();
+        assert_eq!(ground(&first), ground(&first_night), "islands do not change with the time of day");
     }
 }

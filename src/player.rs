@@ -38,6 +38,10 @@ pub struct Player {
     pub knock: Vec3,
     /// How fast the push dies away (`KNOCKBACK_DECAY`, or `LAUNCH_DECAY` after a hard knock).
     pub knock_decay: f32,
+    /// What the player wears does to their movement: running speed is multiplied by `speed_factor` and the take-off speed of a jump by
+    /// `jump_factor` (both 1 normally; the boots of the sky raise them). Set every frame by `Game::apply_worn_effects`.
+    pub speed_factor: f32,
+    pub jump_factor: f32,
 }
 
 impl Player {
@@ -50,6 +54,8 @@ impl Player {
             on_ground: false,
             knock: Vec3::ZERO,
             knock_decay: KNOCKBACK_DECAY,
+            speed_factor: 1.0,
+            jump_factor: 1.0,
         }
     }
 
@@ -129,14 +135,14 @@ impl Player {
         if input.back { wish -= forward; }
         if input.right { wish += right; }
         if input.left { wish -= right; }
-        let speed = if input.sprint { SPRINT_SPEED } else { WALK_SPEED };
+        let speed = if input.sprint { SPRINT_SPEED } else { WALK_SPEED } * self.speed_factor;
         let wish = if wish.length_squared() > 0.0 { wish.normalize() * speed } else { Vec3::ZERO };
         self.vel.x = wish.x + self.knock.x;
         self.vel.z = wish.z + self.knock.z;
         self.knock *= (1.0 - self.knock_decay * dt).max(0.0);
 
         if input.jump && self.on_ground {
-            self.vel.y = JUMP_SPEED;
+            self.vel.y = JUMP_SPEED * self.jump_factor;
             self.on_ground = false;
         }
         self.vel.y = (self.vel.y - GRAVITY * dt).max(-MAX_FALL_SPEED);

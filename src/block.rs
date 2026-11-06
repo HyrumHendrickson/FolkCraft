@@ -82,6 +82,10 @@ pub enum Block {
     StonePlinth,
     HornPlinth,
     CrownPlinth,
+    /// The plinth in the middle of the king's castle, with the boots of the sky on it, and the plinth in the chamber at the heart of
+    /// the jungle temple, with the cursed idol on it. Taking either by hand gives the item.
+    BootsPlinth,
+    IdolPlinth,
     /// A boulder the Philosopher's Stone has turned to gold. Breaks by hand into gold.
     GoldBoulder,
     /// A small altar of old stone (the loadstone has been taken from it), and the same with a loadstone on it. Taking the
@@ -96,10 +100,8 @@ pub enum Block {
     PulledStone,
     /// The weathered, pale stone of the jungle temple: a solid cube that cannot be broken or made.
     MayaStone,
-    /// Bones scattered on the ground of an altar island in the Skylands. Walk-through; taking them by hand drops a deer bone.
+    /// Bones scattered on the ground of an altar island in the Skylands. Walk-through; taking them by hand drops a bone.
     Bones,
-    /// Glowing rock inside the Phoenix's volcano: a solid cube that cannot be broken or made.
-    Magma,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -364,6 +366,23 @@ const CROWN_PLINTH_PARTS: &[Part] = plinth_parts!(
     part([0.62, 0.68, 0.62], [0.72, 0.86, 0.72], (0.92, 0.72, 0.20)),
     part([0.44, 0.60, 0.70], [0.56, 0.68, 0.74], (0.15, 0.75, 0.40)),
 );
+/// The boots of the sky: a pair of pale blue boots standing side by side, silver at the sole and the cuff.
+const BOOTS_PLINTH_PARTS: &[Part] = plinth_parts!(
+    part([0.22, 0.54, 0.30], [0.44, 0.70, 0.46], (0.52, 0.76, 0.94)),
+    part([0.22, 0.70, 0.30], [0.44, 0.78, 0.46], (0.86, 0.88, 0.94)),
+    part([0.22, 0.54, 0.46], [0.46, 0.60, 0.74], (0.52, 0.76, 0.94)),
+    part([0.56, 0.54, 0.30], [0.78, 0.70, 0.46], (0.46, 0.70, 0.90)),
+    part([0.56, 0.70, 0.30], [0.78, 0.78, 0.46], (0.86, 0.88, 0.94)),
+    part([0.56, 0.54, 0.46], [0.80, 0.60, 0.74], (0.46, 0.70, 0.90)),
+);
+/// The cursed idol: a squat green-black stone figure with a heavy brow and two red eyes.
+const IDOL_PLINTH_PARTS: &[Part] = plinth_parts!(
+    part([0.32, 0.54, 0.32], [0.68, 0.82, 0.68], (0.26, 0.36, 0.24)),
+    part([0.28, 0.82, 0.28], [0.72, 1.00, 0.72], (0.30, 0.42, 0.28)),
+    part([0.26, 0.90, 0.26], [0.74, 0.94, 0.34], (0.12, 0.16, 0.10)),
+    part([0.34, 0.90, 0.28], [0.42, 0.97, 0.34], (0.92, 0.08, 0.06)),
+    part([0.58, 0.90, 0.28], [0.66, 0.97, 0.34], (0.92, 0.08, 0.06)),
+);
 const CHARCOAL_PARTS: &[Part] = &[
     part([0.15, 0.0, 0.20], [0.85, 0.25, 0.75], (0.12, 0.12, 0.13)),
     part([0.30, 0.25, 0.30], [0.65, 0.38, 0.62], (0.17, 0.17, 0.18)),
@@ -418,6 +437,8 @@ impl Block {
                 | Block::StonePlinth
                 | Block::HornPlinth
                 | Block::CrownPlinth
+                | Block::BootsPlinth
+                | Block::IdolPlinth
                 | Block::GoldBoulder
                 | Block::AltarLoadstone
         )
@@ -468,7 +489,7 @@ impl Block {
             Block::PinkSalt => BREAK_SECONDS_SALT,
             Block::Bones => BREAK_SECONDS_PLACED,
             Block::KeyStand => BREAK_SECONDS_KEY,
-            Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth | Block::AltarLoadstone => BREAK_SECONDS_RELIC,
+            Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth | Block::BootsPlinth | Block::IdolPlinth | Block::AltarLoadstone => BREAK_SECONDS_RELIC,
             Block::GoldBoulder => BREAK_SECONDS_GOLD_BOULDER,
             // Never broken (only pulled), but the world's replay of removals needs them to count as breakable.
             Block::SwordInStone | Block::SwordHilt => BREAK_SECONDS_RELIC,
@@ -487,7 +508,6 @@ impl Block {
             | Block::AncientAltar
             | Block::PulledStone
             | Block::MayaStone
-            | Block::Magma
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -520,7 +540,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::MayaStone | Block::Magma)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::MayaStone)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -544,6 +564,8 @@ impl Block {
                 | Block::StonePlinth
                 | Block::HornPlinth
                 | Block::CrownPlinth
+                | Block::BootsPlinth
+                | Block::IdolPlinth
                 | Block::GoldBoulder
                 | Block::AncientAltar
                 | Block::AltarLoadstone
@@ -551,8 +573,7 @@ impl Block {
                 | Block::SwordHilt
                 | Block::PulledStone
                 | Block::MayaStone
-                | Block::Magma
-                | Block::Wood
+                    | Block::Wood
                 | Block::Leaves
                 | Block::Needles
                 | Block::PlacedLog
@@ -609,6 +630,8 @@ impl Block {
             Block::StonePlinth => STONE_PLINTH_PARTS,
             Block::HornPlinth => HORN_PLINTH_PARTS,
             Block::CrownPlinth => CROWN_PLINTH_PARTS,
+            Block::BootsPlinth => BOOTS_PLINTH_PARTS,
+            Block::IdolPlinth => IDOL_PLINTH_PARTS,
             Block::GoldBoulder => GOLD_BOULDER_PARTS,
             Block::AncientAltar => ALTAR_PARTS,
             Block::AltarLoadstone => ALTAR_LOADSTONE_PARTS,
@@ -690,7 +713,6 @@ impl Block {
             Block::SilverStone => (0.78, 0.80, 0.86),
             Block::PinkSalt => (0.95, 0.64, 0.70),
             Block::MayaStone => (0.66, 0.62, 0.48),
-            Block::Magma => (1.0, 0.42, 0.08),
             _ => self.parts().first().map_or((0.0, 0.0, 0.0), |p| p.color),
         }
     }
@@ -700,7 +722,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 50] = [
+    const ALL: [Block; 51] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -742,6 +764,8 @@ mod tests {
         Block::StonePlinth,
         Block::HornPlinth,
         Block::CrownPlinth,
+        Block::BootsPlinth,
+        Block::IdolPlinth,
         Block::GoldBoulder,
         Block::AncientAltar,
         Block::AltarLoadstone,
@@ -750,7 +774,6 @@ mod tests {
         Block::PulledStone,
         Block::MayaStone,
         Block::Bones,
-        Block::Magma,
     ];
 
     #[test]
@@ -994,8 +1017,7 @@ mod tests {
         assert!(!Block::PinkSalt.is_full_cube() && !Block::PinkSalt.opaque() && Block::PinkSalt.hand_breakable() && Block::PinkSalt.id().is_none(), "salt is a cluster of crystals, not a pink cube");
         assert!(Block::PinkSalt.parts().len() >= 6, "a tall prism with a tip and shorter ones round it");
         assert!(Block::Bones.hand_breakable() && !Block::Bones.collides() && !Block::Bones.opaque(), "bones are walked over");
-        assert!(Block::Magma.opaque() && Block::Magma.collides() && !Block::Magma.breakable(), "the volcano's rock is solid and fixed");
-        for b in [Block::PinkSalt, Block::KeyStand, Block::StonePlinth, Block::HornPlinth, Block::CrownPlinth] {
+        for b in [Block::PinkSalt, Block::KeyStand, Block::StonePlinth, Block::HornPlinth, Block::CrownPlinth, Block::BootsPlinth, Block::IdolPlinth] {
             assert!(b.can_break_with(None) && b.collides() && b.break_seconds() > 0.0, "{b:?} is taken by hand");
         }
         // The lock is on the outer (south) face of the door's lower half, and the upper half has none.

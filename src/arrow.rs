@@ -59,6 +59,12 @@ impl Arrow {
         Arrow { kind: ItemKind::IronFeather, pos: origin, vel: dir * IRON_FEATHER_SPEED, age: 0.0 }
     }
 
+    /// An arrow shot by one of the king's spirit archers from `origin` along the unit vector `dir`: it flies like a bow's arrow, hurts
+    /// animals, and (like a Phoenix Arrow) is gone where it lands.
+    pub fn from_spirit(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+    }
+
     /// Whether the arrow is gone for good where it lands (a Phoenix Arrow), instead of lying there to be picked up again.
     pub fn vanishes_on_landing(&self) -> bool {
         self.kind == ItemKind::PhoenixArrow

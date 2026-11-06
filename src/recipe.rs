@@ -54,7 +54,7 @@ pub const RECIPES: &[Recipe] = &[
     Recipe { output: ItemKind::Compass, output_count: 1, inputs: &[(ItemKind::Loadstone, 1), (ItemKind::IronOre, 1)] },
     Recipe { output: ItemKind::BoneTotem, output_count: 1, inputs: &[(ItemKind::Antlers, 1), (ItemKind::Gold, 2)] },
     Recipe { output: ItemKind::PeltCloak, output_count: 1, inputs: &[(ItemKind::BearPelt, 1)] },
-    Recipe { output: ItemKind::MusicalPipes, output_count: 1, inputs: &[(ItemKind::DeerBone, 3)] },
+    Recipe { output: ItemKind::MusicalPipes, output_count: 1, inputs: &[(ItemKind::Bone, 3)] },
     Recipe {
         output: ItemKind::Arrow,
         output_count: 1,
@@ -345,12 +345,12 @@ mod tests {
 
     #[test]
     fn musical_pipes_are_three_deer_bones_and_nothing_else() {
-        assert_eq!(recipe_for(ItemKind::MusicalPipes).inputs, &[(ItemKind::DeerBone, 3)]);
-        let mut inv = inv_with(&[(ItemKind::DeerBone, 2), (ItemKind::Twine, 1)]);
+        assert_eq!(recipe_for(ItemKind::MusicalPipes).inputs, &[(ItemKind::Bone, 3)]);
+        let mut inv = inv_with(&[(ItemKind::Bone, 2), (ItemKind::Twine, 1)]);
         assert!(!craft(&mut inv, recipe_for(ItemKind::MusicalPipes)), "one bone short");
-        assert_eq!((inv.count(ItemKind::DeerBone), inv.count(ItemKind::Twine)), (2, 1));
-        let mut inv = inv_with(&[(ItemKind::DeerBone, 3)]);
+        assert_eq!((inv.count(ItemKind::Bone), inv.count(ItemKind::Twine)), (2, 1));
+        let mut inv = inv_with(&[(ItemKind::Bone, 3)]);
         assert!(craft(&mut inv, recipe_for(ItemKind::MusicalPipes)), "no twine needed");
-        assert_eq!((inv.count(ItemKind::DeerBone), inv.count(ItemKind::MusicalPipes)), (0, 1));
+        assert_eq!((inv.count(ItemKind::Bone), inv.count(ItemKind::MusicalPipes)), (0, 1));
     }
 }

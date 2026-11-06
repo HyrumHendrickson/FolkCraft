@@ -21,6 +21,7 @@ pub fn play_screen(app: &mut App) {
     // Escape closes the inventory if it is open; otherwise it saves and returns to the menu.
     if is_key_pressed(KeyCode::Escape) {
         match app.game.as_mut() {
+            Some(game) if game.king_dialog.is_some() => game.king_dialog = None,
             Some(game) if game.inventory_open => set_inventory_open(game, false),
             _ => app.leave_game(),
         }
@@ -53,27 +54,29 @@ pub fn play_screen(app: &mut App) {
         return;
     }
 
-    if is_key_pressed(KeyCode::E) {
+    if is_key_pressed(KeyCode::E) && game.king_dialog.is_none() {
         let open = !game.inventory_open;
         set_inventory_open(game, open);
     }
 
+    sync_dialog_cursor(game);
     handle_look(game, dt);
     handle_hotbar_selection(game);
 
     game.world.stream_chunks(game.player.pos);
     game.world.rebuild_dirty(game.player.pos, MESH_BUDGET_PER_FRAME);
-    let input = if game.inventory_open || game.horizen_transition.is_some() { MoveInput::default() } else { MoveInput::from_keyboard() };
+    let input = if game.ui_open() || game.horizen_transition.is_some() { MoveInput::default() } else { MoveInput::from_keyboard() };
+    game.apply_worn_effects();
     game.player.update(&game.world, dt, &input);
     game.update_landmarks();
 
     let eye = game.player.eye();
     let dir = game.player.look_dir();
-    let target = if game.inventory_open { None } else { game.world.raycast_hit(eye, dir, REACH) };
+    let target = if game.ui_open() { None } else { game.world.raycast_hit(eye, dir, REACH) };
     // With a stone axe or bronze mallet in hand, an animal under the crosshair is attacked rather than whatever
     // stands behind it.
-    let melee = if game.inventory_open { None } else { game.melee_target(eye, dir) };
-    let rod_strike = if game.inventory_open { None } else { game.holly_rod_strike_point(eye, dir) };
+    let melee = if game.ui_open() { None } else { game.melee_target(eye, dir) };
+    let rod_strike = if game.ui_open() { None } else { game.holly_rod_strike_point(eye, dir) };
     handle_attacking(game, eye, dir, melee.is_some(), rod_strike);
     handle_breaking(game, dt, if melee.is_some() { None } else { target });
     handle_placing(game, eye, dir, target);
@@ -107,9 +110,22 @@ fn set_inventory_open(game: &mut Game, open: bool) {
     game.skip_look_frames = 3;
 }
 
+/// While the king's pop-up is open the mouse cursor is released, as it is for the inventory, and taken again when it closes.
+fn sync_dialog_cursor(game: &mut Game) {
+    let open = game.king_dialog.is_some();
+    if open != game.dialog_cursor_free {
+        game.dialog_cursor_free = open;
+        if !game.inventory_open {
+            set_cursor_grab(!open);
+            show_mouse(open);
+        }
+        game.skip_look_frames = 3;
+    }
+}
+
 /// Mouse look plus arrow-key look. Ignored while the inventory is open.
 fn handle_look(game: &mut Game, dt: f32) {
-    if game.inventory_open {
+    if game.ui_open() {
         return;
     }
     if game.skip_look_frames > 0 {
@@ -131,7 +147,7 @@ fn handle_look(game: &mut Game, dt: f32) {
 /// Number keys 1-9 and the mouse wheel choose which hotbar slot is held.
 /// Ignored while the inventory is open.
 fn handle_hotbar_selection(game: &mut Game) {
-    if game.inventory_open {
+    if game.ui_open() {
         return;
     }
     const KEYS: [KeyCode; HOTBAR_SLOTS] = [
@@ -154,7 +170,7 @@ fn handle_hotbar_selection(game: &mut Game) {
 /// mallet, holding the button strikes the animal under the crosshair (`aimed`), once per swing cooldown
 /// (`ItemKind::melee_cooldown`). The rules live in `Game::attack`.
 fn handle_attacking(game: &mut Game, eye: Vec3, dir: Vec3, aimed: bool, rod_strike: Option<Vec3>) {
-    if game.inventory_open {
+    if game.ui_open() {
         return;
     }
     let (clicked, held_down) = (is_mouse_button_pressed(MouseButton::Left), is_mouse_button_down(MouseButton::Left));
@@ -174,14 +190,14 @@ fn handle_breaking(game: &mut Game, dt: f32, target: Target) {
         game.mining = None;
         return;
     }
-    let holding = !game.inventory_open && is_mouse_button_down(MouseButton::Left);
+    let holding = !game.ui_open() && is_mouse_button_down(MouseButton::Left);
     game.update_mining(target, holding, dt);
 }
 
 /// Right click eats held food when hurt, places the held log, pebble, stone or plank, or works a
 /// fire (add a log, lay raw meat on it, take cooked meat off it).
 fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
-    if game.inventory_open || !is_mouse_button_pressed(MouseButton::Right) {
+    if game.ui_open() || !is_mouse_button_pressed(MouseButton::Right) {
         return;
     }
     if game.fill_jar(eye, dir) {
@@ -265,7 +281,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     draw_flames(&game.world, get_time() as f32, World::chunk_of_pos(eye));
     draw_meat(&game.world, World::chunk_of_pos(eye));
     draw_pots(&game.world, World::chunk_of_pos(eye));
-    for tornado in &game.tornadoes {
+    for tornado in game.tornadoes.iter().chain(game.crater_tornado.iter()) {
         draw_fire_tornado(tornado, get_time() as f32, World::chunk_of_pos(eye));
     }
     if let Some(cyclone) = game.cyclone() {
@@ -357,6 +373,9 @@ fn render_hud(game: &mut Game, drawn: usize) {
             draw_compass(game.player.yaw, game.compass_bearing(), game.treks.compass_progress(), target);
         }
     }
+    if game.king_dialog.is_some() {
+        draw_king_dialog(game);
+    }
     game.toasts.draw();
     let p = game.player.pos;
     draw_text(
@@ -390,6 +409,41 @@ fn render_hud(game: &mut Game, drawn: usize) {
 }
 
 /// A boss's name and health bar across the top of the screen.
+/// The pop-up in which the king's ghost is given gold: choose how many offerings of `GOLD_PER_SPIRIT` gold (one spirit archer each) with
+/// the minus and plus buttons, then give them or leave. The rules live in `Game::give_gold_to_king`.
+fn draw_king_dialog(game: &mut Game) {
+    use crate::ui::{button, small_button, text_centered, ACCENT};
+    let Some(offerings) = game.king_dialog else { return };
+    let (w, h) = (screen_width(), screen_height());
+    let panel = Rect::new(w / 2.0 - 280.0, h / 2.0 - 170.0, 560.0, 340.0);
+    draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.45));
+    draw_rectangle(panel.x, panel.y, panel.w, panel.h, Color::new(0.07, 0.09, 0.15, 0.96));
+    draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, 3.0, Color::new(0.62, 0.78, 1.0, 1.0));
+    let cx = panel.x + panel.w / 2.0;
+    text_centered("The King Eternal", cx, panel.y + 48.0, 40, Color::new(0.80, 0.90, 1.0, 1.0));
+    text_centered("Give me gold and I shall send my spirits to guard you.", cx, panel.y + 86.0, 22, WHITE);
+    text_centered(&format!("Each {GOLD_PER_SPIRIT} gold sends one spirit archer. It shoots {SPIRIT_SHOTS} arrows at what you hit, then fades."), cx, panel.y + 114.0, 19, Color::new(0.75, 0.80, 0.90, 1.0));
+    let gold = game.inventory.count(ItemKind::Gold);
+    text_centered(&format!("You have {gold} gold."), cx, panel.y + 150.0, 24, ItemKind::Gold.color());
+    let ceiling = (gold / GOLD_PER_SPIRIT).min(MAX_SPIRIT_ARCHERS.saturating_sub(game.spirit_count()) as u32).max(1);
+    let row = panel.y + 200.0;
+    if small_button(Rect::new(cx - 190.0, row - 28.0, 44.0, 44.0), "-", ACCENT) {
+        game.king_dialog = Some(offerings.saturating_sub(1).max(1));
+    }
+    text_centered(&format!("{offerings} for {} gold", offerings * GOLD_PER_SPIRIT), cx, row + 2.0, 30, WHITE);
+    if small_button(Rect::new(cx + 146.0, row - 28.0, 44.0, 44.0), "+", ACCENT) {
+        game.king_dialog = Some((offerings + 1).min(ceiling));
+    }
+    if button(Rect::new(cx - 230.0, panel.y + 250.0, 210.0, 56.0), "Give", gold >= GOLD_PER_SPIRIT) {
+        if game.give_gold_to_king(offerings) > 0 {
+            game.king_dialog = None;
+        }
+    }
+    if button(Rect::new(cx + 20.0, panel.y + 250.0, 210.0, 56.0), "Leave", true) {
+        game.king_dialog = None;
+    }
+}
+
 /// A ghost's words, as pale text in the upper part of the screen (ghosts are not seen): they fade in, and out over the last second.
 fn draw_ghost_text(text: &str, left: f32) {
     let (w, h) = (screen_width(), screen_height());

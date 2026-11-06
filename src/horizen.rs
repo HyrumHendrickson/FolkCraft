@@ -175,6 +175,82 @@ pub struct Cave {
     pub height: i32,
     /// The great cavern with the tower (its shape is `cavern_air`, not a plain dome).
     pub great: bool,
+    /// The king's giant cave with the largest castle in the game (its shape is `king_air`).
+    pub king: bool,
+}
+
+// --- The king's cave ------------------------------------------------------------------------
+
+/// The grid square (of `HORIZEN_CAVE_CELL`) that holds the king's cave: one of the squares `KING_CAVE_CELLS` out from the arrival
+/// point (picked by the seed) that leaves room between its cave and the great cavern.
+pub fn king_cell(seed: i64) -> (i32, i32) {
+    let n = KING_CAVE_CELLS;
+    let ring: Vec<(i32, i32)> = (-n..=n).flat_map(|j| (-n..=n).map(move |i| (i, j))).filter(|&(i, j)| i.abs().max(j.abs()) == n).collect();
+    let start = (hash3(seed, 4, 0, 0x4C41) % ring.len() as u64) as usize;
+    let (cx, cz) = cavern_centre(seed);
+    let apart = HORIZEN_CAVERN_RADIUS * (1.0 + HORIZEN_CAVERN_RAGGEDNESS) + KING_CAVE_RADIUS * (1.0 + KING_CAVE_RAGGEDNESS) + 10.0;
+    (0..ring.len())
+        .map(|k| ring[(start + k) % ring.len()])
+        .find(|&(i, j)| {
+            let (x, z) = ((i * HORIZEN_CAVE_CELL + HORIZEN_CAVE_CELL / 2) as f32, (j * HORIZEN_CAVE_CELL + HORIZEN_CAVE_CELL / 2) as f32);
+            ((x - cx as f32).powi(2) + (z - cz as f32).powi(2)).sqrt() >= apart
+        })
+        .unwrap_or(ring[start])
+}
+
+/// The column at the middle of the king's cave, where his castle stands.
+pub fn king_centre(seed: i64) -> (i32, i32) {
+    let (i, j) = king_cell(seed);
+    (i * HORIZEN_CAVE_CELL + HORIZEN_CAVE_CELL / 2, j * HORIZEN_CAVE_CELL + HORIZEN_CAVE_CELL / 2)
+}
+
+/// The radius of the king's cave in the direction `angle` from its middle: ragged, a little.
+fn king_radius(seed: i64, angle: f32) -> f32 {
+    let (p1, p2) = ((hash3(seed, 5, 0, 0x4C41) % 628) as f32 / 100.0, (hash3(seed, 6, 0, 0x4C41) % 628) as f32 / 100.0);
+    KING_CAVE_RADIUS * (1.0 + KING_CAVE_RAGGEDNESS * (0.6 * (3.0 * angle + p1).sin() + 0.4 * (5.0 * angle + p2).sin()))
+}
+
+fn king_air(seed: i64, wx: i32, wz: i32) -> i32 {
+    let (cx, cz) = king_centre(seed);
+    let (dx, dz) = (wx as f32 + 0.5 - (cx as f32 + 0.5), wz as f32 + 0.5 - (cz as f32 + 0.5));
+    // Flat-topped inside the castle's reach so that the cave is high over every tower, domed beyond it.
+    let dist = (dx * dx + dz * dz).sqrt();
+    dome_air(dist, king_radius(seed, dz.atan2(dx)), KING_CAVE_HEIGHT)
+}
+
+/// The corners (x, z) of a trail through the caves to the king's castle for a player standing at `from`: the middles of the caves, along
+/// the grid's tunnels (east or west first, then north or south), from the nearest one to the king's.
+pub fn king_route(seed: i64, from: (f32, f32)) -> Vec<(f32, f32)> {
+    let (ci, cj) = ((from.0.floor() as i32).div_euclid(HORIZEN_CAVE_CELL), (from.1.floor() as i32).div_euclid(HORIZEN_CAVE_CELL));
+    let mut nearest = (ci, cj);
+    let mut best = f32::MAX;
+    for dj in -1..=1 {
+        for di in -1..=1 {
+            let c = cave_in_cell(seed, ci + di, cj + dj);
+            let d = (c.x - from.0).powi(2) + (c.z - from.1).powi(2);
+            if d < best {
+                best = d;
+                nearest = (ci + di, cj + dj);
+            }
+        }
+    }
+    let target = king_cell(seed);
+    let mut path = vec![from];
+    let mut at = nearest;
+    path.push({
+        let c = cave_in_cell(seed, at.0, at.1);
+        (c.x, c.z)
+    });
+    while at != target {
+        if at.0 != target.0 {
+            at.0 += (target.0 - at.0).signum();
+        } else {
+            at.1 += (target.1 - at.1).signum();
+        }
+        let c = cave_in_cell(seed, at.0, at.1);
+        path.push((c.x, c.z));
+    }
+    path
 }
 
 fn cavern_cell(seed: i64) -> (i32, i32) {
@@ -187,11 +263,15 @@ fn cavern_cell(seed: i64) -> (i32, i32) {
 pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
     let (sx, sz) = spawn_centre();
     if (ci, cj) == (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL)) {
-        return Cave { cell: (ci, cj), x: sx, z: sz, radius: HORIZEN_CHAMBER_RADIUS, height: HORIZEN_CHAMBER_HEIGHT, great: false };
+        return Cave { cell: (ci, cj), x: sx, z: sz, radius: HORIZEN_CHAMBER_RADIUS, height: HORIZEN_CHAMBER_HEIGHT, great: false, king: false };
+    }
+    if (ci, cj) == king_cell(seed) {
+        let (x, z) = king_centre(seed);
+        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: KING_CAVE_RADIUS, height: KING_CAVE_HEIGHT, great: false, king: true };
     }
     if (ci, cj) == cavern_cell(seed) {
         let (x, z) = cavern_centre(seed);
-        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: HORIZEN_CAVERN_RADIUS, height: HORIZEN_CAVERN_HEIGHT, great: true };
+        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: HORIZEN_CAVERN_RADIUS, height: HORIZEN_CAVERN_HEIGHT, great: true, king: false };
     }
     let h = hash3(seed, ci, cj, 0x4341);
     let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
@@ -204,6 +284,7 @@ pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
         radius: HORIZEN_CAVE_MIN_RADIUS + unit(32) * (HORIZEN_CAVE_MAX_RADIUS - HORIZEN_CAVE_MIN_RADIUS),
         height: HORIZEN_CAVE_MIN_HEIGHT + (unit(48) * (HORIZEN_CAVE_MAX_HEIGHT - HORIZEN_CAVE_MIN_HEIGHT + 1) as f32) as i32,
         great: false,
+        king: false,
     }
 }
 
@@ -213,7 +294,7 @@ fn network_air(seed: i64, wx: i32, wz: i32) -> i32 {
     let (ci, cj) = (wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL));
     let p = (wx as f32 + 0.5, wz as f32 + 0.5);
     let own = cave_in_cell(seed, ci, cj);
-    let mut air = if own.great { 0 } else { dome_air(((p.0 - own.x).powi(2) + (p.1 - own.z).powi(2)).sqrt(), own.radius, own.height) };
+    let mut air = if own.great || own.king { 0 } else { dome_air(((p.0 - own.x).powi(2) + (p.1 - own.z).powi(2)).sqrt(), own.radius, own.height) };
     for (a, b) in [((ci, cj), (ci + 1, cj)), ((ci, cj), (ci, cj + 1)), ((ci - 1, cj), (ci, cj)), ((ci, cj - 1), (ci, cj))] {
         let (ca, cb) = (cave_in_cell(seed, a.0, a.1), cave_in_cell(seed, b.0, b.1));
         let (ab, ap) = ((cb.x - ca.x, cb.z - ca.z), (p.0 - ca.x, p.1 - ca.z));
@@ -230,7 +311,7 @@ fn network_air(seed: i64, wx: i32, wz: i32) -> i32 {
 /// cavern), if any: what counts as having entered it.
 pub fn cave_at(seed: i64, wx: i32, wz: i32) -> Option<Cave> {
     let cave = cave_in_cell(seed, wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL));
-    let share = if cave.great { HORIZEN_CAVE_ENTER_SHARE / 2.0 } else { HORIZEN_CAVE_ENTER_SHARE };
+    let share = if cave.great || cave.king { HORIZEN_CAVE_ENTER_SHARE / 2.0 } else { HORIZEN_CAVE_ENTER_SHARE };
     let dist = ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt();
     (dist <= cave.radius * share).then_some(cave)
 }
@@ -238,7 +319,7 @@ pub fn cave_at(seed: i64, wx: i32, wz: i32) -> Option<Cave> {
 /// How many blocks of air lie above the floor of the cave in the column (wx, wz): 0 where the rock is solid, otherwise at
 /// least `HORIZEN_MIN_AIR`. The ceiling is rough, so it hangs down a little here and there.
 pub fn air_height(seed: i64, wx: i32, wz: i32) -> i32 {
-    let air = chamber_air(wx, wz).max(tunnel_air(seed, wx, wz)).max(cavern_air(seed, wx, wz)).max(network_air(seed, wx, wz));
+    let air = chamber_air(wx, wz).max(tunnel_air(seed, wx, wz)).max(cavern_air(seed, wx, wz)).max(king_air(seed, wx, wz)).max(network_air(seed, wx, wz));
     if air < HORIZEN_MIN_AIR {
         return 0;
     }
@@ -262,6 +343,10 @@ pub fn is_pond(seed: i64, wx: i32, wz: i32) -> bool {
     let (tx, tz) = cavern_centre(seed);
     let reach = TOWER_REACH + TOWER_POND_MARGIN;
     if (wx - tx).abs() <= reach && (wz - tz).abs() <= reach {
+        return false;
+    }
+    let (kx, kz) = king_centre(seed);
+    if crate::kingcastle::near(wx - kx, wz - kz, TOWER_POND_MARGIN) {
         return false;
     }
     is_open(seed, wx, wz)
@@ -311,6 +396,21 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
             }
             for y in GROUND_TOP + 1 + air..=HORIZEN_ROOF_Y {
                 blocks[idx(lx, y, lz)] = Block::Stone;
+            }
+        }
+    }
+    // The king's castle, on the floor of his cave.
+    let (kx, kz) = king_centre(seed);
+    for lz in 0..CHUNK_SIZE {
+        for lx in 0..CHUNK_SIZE {
+            let (dx, dz) = (cx * CHUNK_SIZE + lx - kx, cz * CHUNK_SIZE + lz - kz);
+            if !crate::kingcastle::near(dx, dz, 0) {
+                continue;
+            }
+            for dy in 0..crate::kingcastle::CASTLE_HEIGHT + 2 {
+                if let Some(block) = crate::kingcastle::castle_cell(dx, dz, dy) {
+                    blocks[idx(lx, GROUND_TOP + 1 + dy, lz)] = block;
+                }
             }
         }
     }
@@ -573,7 +673,7 @@ mod tests {
         assert_eq!(great.len(), 1, "one great cavern");
         let (cx, cz) = cavern_centre(seed);
         assert_eq!((great[0].x.floor() as i32, great[0].z.floor() as i32), (cx, cz));
-        let others: Vec<Cave> = (-4..6).flat_map(|j| (-4..6).map(move |i| cave_in_cell(seed, i, j))).filter(|c| !c.great && c.cell != (0, 0)).collect();
+        let others: Vec<Cave> = (-4..6).flat_map(|j| (-4..6).map(move |i| cave_in_cell(seed, i, j))).filter(|c| !c.great && !c.king && c.cell != (0, 0)).collect();
         let radii: std::collections::HashSet<i32> = others.iter().map(|c| c.radius as i32).collect();
         assert!(radii.len() >= 4, "caves of many sizes: {radii:?}");
         assert!(others.iter().all(|c| c.radius >= HORIZEN_CAVE_MIN_RADIUS && c.radius <= HORIZEN_CAVE_MAX_RADIUS && c.height >= HORIZEN_CAVE_MIN_HEIGHT && c.height <= HORIZEN_CAVE_MAX_HEIGHT));
@@ -588,5 +688,70 @@ mod tests {
         assert_eq!(cave_at(seed, x, z).map(|c| c.cell), Some((2, 1)));
         assert_eq!(cave_at(seed, x + (cave.radius * 0.9) as i32, z), None, "the rim is not the heart");
         assert_eq!(cave_at(seed, HORIZEN_SPAWN.0, HORIZEN_SPAWN.1).map(|c| c.cell), Some((0, 0)), "you arrive in the first cave");
+    }
+
+    #[test]
+    fn the_kings_cave_is_giant_apart_from_the_great_cavern_and_open_with_a_castle_floor() {
+        for seed in 0..12 {
+            let (ci, cj) = king_cell(seed);
+            assert_eq!(ci.abs().max(cj.abs()), KING_CAVE_CELLS);
+            assert_ne!((ci, cj), cavern_cell(seed));
+            let (kx, kz) = king_centre(seed);
+            let (cx, cz) = cavern_centre(seed);
+            let apart = (((kx - cx).pow(2) + (kz - cz).pow(2)) as f32).sqrt();
+            assert!(apart > HORIZEN_CAVERN_RADIUS + KING_CAVE_RADIUS * 0.9, "seed {seed}: the caves do not run into each other: {apart}");
+            let cave = cave_in_cell(seed, ci, cj);
+            assert!(cave.king && !cave.great && cave.radius > HORIZEN_CAVERN_RADIUS, "bigger than the great cavern");
+            // High over the whole castle, open round it.
+            for (dx, dz) in [(0, 0), (KING_REACH, 0), (0, -KING_REACH), (KING_REACH, KING_REACH), (0, KING_WALL_HALF + 8)] {
+                assert!(air_height(seed, kx + dx, kz + dz) >= crate::kingcastle::CASTLE_HEIGHT + 2, "seed {seed}: room for the castle at {dx},{dz}: {}", air_height(seed, kx + dx, kz + dz));
+            }
+            assert!(!is_pond(seed, kx, kz) && !is_pond(seed, kx + KING_REACH, kz + KING_REACH), "no pond in the castle");
+        }
+    }
+
+    #[test]
+    fn the_kings_castle_can_be_reached_on_foot_from_the_arrival_pool_for_every_seed() {
+        for seed in 0..12 {
+            let (kx, kz) = king_centre(seed);
+            let seen = reachable(seed, 460);
+            assert!(seen.contains(&(kx, kz + KING_WALL_HALF + 6)), "seed {seed}: outside the gate");
+            assert!(seen.contains(&(kx + KING_WALL_HALF + 6, kz)));
+        }
+    }
+
+    #[test]
+    fn the_route_to_the_king_runs_cave_to_cave_and_ends_in_his_cave() {
+        for seed in 0..12 {
+            let from = (HORIZEN_SPAWN.0 as f32 + 0.5, HORIZEN_SPAWN.1 as f32 + 0.5);
+            let path = king_route(seed, from);
+            assert_eq!(path[0], from);
+            let (kx, kz) = king_centre(seed);
+            let last = *path.last().unwrap();
+            assert_eq!((last.0.floor() as i32, last.1.floor() as i32), (kx, kz));
+            assert!(path.len() as i32 >= KING_CAVE_CELLS + 1);
+            for w in path[1..].windows(2) {
+                assert!(air_height(seed, w[0].0.floor() as i32, w[0].1.floor() as i32) > 0, "each corner is in open cave");
+                let hop = ((w[1].0 - w[0].0).abs().max((w[1].1 - w[0].1).abs())) as i32;
+                assert!(hop < 2 * HORIZEN_CAVE_CELL, "one cell at a time: {hop}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_chunk_at_the_kings_middle_has_the_castle_and_the_boots_once() {
+        let seed = 4;
+        let (kx, kz) = king_centre(seed);
+        let (cx, cz) = (kx.div_euclid(CHUNK_SIZE), kz.div_euclid(CHUNK_SIZE));
+        let mut plinths = 0;
+        for dz in -4..=4 {
+            for dx in -4..=4 {
+                plinths += generate_chunk(seed, cx + dx, cz + dz, &Landmarks::default()).iter().filter(|b| **b == Block::BootsPlinth).count();
+            }
+        }
+        assert_eq!(plinths, 1, "one pair of boots in the world");
+        let blocks = generate_chunk(seed, cx, cz, &Landmarks::default());
+        let (lx, lz) = (kx.rem_euclid(CHUNK_SIZE), kz.rem_euclid(CHUNK_SIZE));
+        assert_eq!(blocks[idx(lx, GROUND_TOP + 3, lz)], Block::BootsPlinth);
     }
 }

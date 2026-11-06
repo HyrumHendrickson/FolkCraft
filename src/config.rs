@@ -402,6 +402,9 @@ pub const SKY_TORNADO_FOOT_SHARE: f32 = 0.28;
 pub const SKY_TORNADO_RADIUS: f32 = 1.8;
 pub const SKY_TORNADO_HEIGHT: f32 = 6.0;
 pub const SKY_TORNADO_DAMAGE: u32 = 4;
+/// The fire tornado that always whirls in the Phoenix's crater by day (and is gone at night): this many times the size of the
+/// tornadoes that sweep across the islands, and it burns for `SKY_TORNADO_DAMAGE` a second like them.
+pub const VOLCANO_TORNADO_SCALE: f32 = 2.2;
 pub const SKY_TORNADO_DAMAGE_INTERVAL: f32 = 1.0;
 
 // --- Block breaking ---------------------------------------------------------------------
@@ -732,6 +735,12 @@ pub const SKY_ISLAND_MAX_DEPTH: i32 = 15;
 /// Layers of dirt on top of the rock.
 pub const SKY_DIRT_LAYERS: i32 = 3;
 pub const SKY_BRIDGE_WIDTH: f32 = 3.0;
+/// By night the bridges are broken: a ragged stub of `SKY_BROKEN_STUB` blocks is left at each end of a deck at least
+/// `SKY_BROKEN_MIN_DECK` long, and nothing at all of a shorter one, so no bridge can be crossed.
+pub const SKY_BROKEN_STUB: f32 = 3.0;
+pub const SKY_BROKEN_MIN_DECK: f32 = 12.0;
+/// A player on a deck when it breaks is put on the nearest footing within this many blocks.
+pub const SKY_BROKEN_RESCUE_REACH: i32 = 40;
 /// Percent of the south bridges that exist (the east ones, and every south bridge of column 0, always do).
 pub const SKY_SOUTH_BRIDGE_PERCENT: u64 = 60;
 /// The first island: centre, radius and the cyclone that leads home, a few blocks from where the player arrives.
@@ -753,8 +762,9 @@ pub const SKY_TREE_PERCENT: u64 = 3;
 pub const BREAK_SECONDS_SALT: f32 = 1.2;
 pub const BREAK_SECONDS_KEY: f32 = 0.6;
 pub const BREAK_SECONDS_RELIC: f32 = 1.0;
-/// Lumps of pink salt a crystal drops.
-pub const PINK_SALT_DROP: u32 = 2;
+/// Lumps of pink salt a crystal drops: this many to this many, inclusive (a random number each time).
+pub const PINK_SALT_DROP_MIN: u32 = 8;
+pub const PINK_SALT_DROP_MAX: u32 = 16;
 /// A silver key lies on a stand in the middle of the chamber where the middle ring crosses the shafts numbered in
 /// `MINE_KEY_SHAFTS` (one key for each of the three towers).
 pub const MINE_KEY_RING: usize = 1;
@@ -763,8 +773,8 @@ pub const MINE_KEY_SHAFTS: [usize; 3] = [0, 2, 4];
 /// The jungle: a round stretch of the normal world, `JUNGLE_DISTANCE_CHUNKS` chunks from the spawn point (in a direction
 /// the seed decides) and `JUNGLE_RADIUS` blocks across from the middle to the edge, thick with tall trees. Its middle,
 /// `JUNGLE_CLEARING_RADIUS` blocks round, is bare so that whoever falls out of the Skylands lands on the ground.
-pub const JUNGLE_DISTANCE_CHUNKS: i32 = 10;
-pub const JUNGLE_RADIUS: i32 = 90;
+pub const JUNGLE_DISTANCE_CHUNKS: i32 = 20;
+pub const JUNGLE_RADIUS: i32 = 180;
 pub const JUNGLE_CLEARING_RADIUS: i32 = 34;
 /// A jungle tree's trunk is this many blocks tall (inclusive range), and a chunk of jungle tries to grow this many trees.
 /// The jungle temple in the middle of the clearing (`temple.rs`): a stepped pyramid `2 * TEMPLE_BASE_HALF + 1` blocks across at
@@ -1117,3 +1127,150 @@ pub const IRON_QUAIL_KITE_MIN: f32 = 10.0;
 pub const IRON_QUAIL_KITE_MAX: f32 = 16.0;
 pub const BAT_MINE_NOTICE_DISTANCE: f32 = 14.0;
 pub const EXCALIBUR_HUNT_FACTOR: i32 = 3;
+
+
+// --- Upgrade: the vampire bat, the king's spirits, the cursed idol, the orangutan, jaguars and flying snakes ---------------------
+
+/// Cave bats come half as often as they did: the cave tries to bring one in only on every second wildlife spawn tick.
+pub const BAT_CAVE_SPAWN_EVERY: u32 = 2;
+/// A bat that strikes a player holding pink salt dies instead, and takes one lump of salt with it.
+/// For every `BATS_PER_VAMPIRE` bats killed in the Horizen's caves a vampire bat boss comes out of the dark. It has one attack: it
+/// circles the player at `VAMPIRE_BAT_ORBIT_RADIUS`, then swoops (`VAMPIRE_BAT_DIVE_SPEED`) for one blow and flies off again.
+pub const BATS_PER_VAMPIRE: u32 = 20;
+pub const VAMPIRE_BAT_HEALTH: i32 = 70;
+pub const VAMPIRE_BAT_HALF_WIDTH: f32 = 0.7;
+pub const VAMPIRE_BAT_HEIGHT: f32 = 0.7;
+pub const VAMPIRE_BAT_DAMAGE: u32 = 3;
+pub const VAMPIRE_BAT_REACH: f32 = 0.9;
+pub const VAMPIRE_BAT_ORBIT_RADIUS: f32 = 8.0;
+pub const VAMPIRE_BAT_ORBIT_HEIGHT: f32 = 2.4;
+pub const VAMPIRE_BAT_CIRCLE_SPEED: f32 = 7.0;
+pub const VAMPIRE_BAT_DIVE_SPEED: f32 = 16.0;
+pub const VAMPIRE_BAT_DIVE_SECONDS: f32 = 1.5;
+pub const VAMPIRE_BAT_FLEE_SECONDS: f32 = 2.0;
+pub const VAMPIRE_BAT_ATTACK_MIN: f32 = 2.0;
+pub const VAMPIRE_BAT_ATTACK_MAX: f32 = 3.5;
+pub const VAMPIRE_BAT_SPAWN_DISTANCE: f32 = 12.0;
+pub const VAMPIRE_BAT_GOLD_DROP: u32 = 3;
+
+/// The king's castle (`kingcastle.rs`) in the Horizen's giant cave. The cave is a ragged dome `KING_CAVE_RADIUS` across from the middle
+/// (the great cavern is `HORIZEN_CAVERN_RADIUS`) and `KING_CAVE_HEIGHT` high; the castle's outer wall is `KING_WALL_HALF` from the
+/// middle (the grand castle's is `GRAND_WALL_HALF`), with a tower at each corner `KING_TOWER_HEIGHT` high, and the keep `KING_KEEP_HALF`
+/// out. `KING_REACH` is the farthest any part of it reaches. The king's cave lies `KING_CAVE_CELLS` cells of `HORIZEN_CAVE_CELL` from the arrival point.
+pub const KING_CAVE_RADIUS: f32 = 104.0;
+pub const KING_CAVE_RAGGEDNESS: f32 = 0.08;
+pub const KING_CAVE_HEIGHT: i32 = 66;
+pub const KING_CAVE_CELLS: i32 = 3;
+pub const KING_WALL_HALF: i32 = 44;
+pub const KING_REACH: i32 = 48;
+pub const KING_WALL_HEIGHT: i32 = 11;
+pub const KING_TOWER_HALF: i32 = 4;
+pub const KING_TOWER_HEIGHT: i32 = 26;
+pub const KING_KEEP_HALF: i32 = 17;
+pub const KING_KEEP_HEIGHT: i32 = 22;
+pub const KING_GATE_HALF: i32 = 3;
+/// What the ghost of the king says when the pipes are played in his castle.
+/// Each `GOLD_PER_SPIRIT` gold given to him sends one spirit archer to follow the player. It fires `SPIRIT_SHOTS` arrows (each as
+/// hard as a bow's arrow, every `SPIRIT_SHOOT_INTERVAL` seconds, within `SPIRIT_RANGE`) at whatever the player has hit in the last
+/// `SPIRIT_MARK_SECONDS`, then vanishes. At most `MAX_SPIRIT_ARCHERS` follow at once.
+pub const GOLD_PER_SPIRIT: u32 = 10;
+pub const SPIRIT_SHOTS: u32 = 10;
+pub const SPIRIT_SHOOT_INTERVAL: f32 = 1.1;
+pub const SPIRIT_RANGE: f32 = 45.0;
+pub const SPIRIT_MARK_SECONDS: f32 = 8.0;
+pub const SPIRIT_HALF_WIDTH: f32 = 0.3;
+pub const SPIRIT_HEIGHT: f32 = 1.7;
+pub const SPIRIT_FOLLOW_RADIUS: f32 = 2.6;
+pub const SPIRIT_FOLLOW_HEIGHT: f32 = 1.0;
+pub const SPIRIT_SPEED: f32 = 11.0;
+pub const SPIRIT_TELEPORT_DISTANCE: f32 = 30.0;
+pub const MAX_SPIRIT_ARCHERS: usize = 40;
+
+/// The boots of the sky, worn: the player runs `BOOTS_SPEED_FACTOR` times as fast and jumps `BOOTS_JUMP_DISTANCE_FACTOR` times as far.
+/// A jump's length is its speed times the time in the air, and the time in the air grows with the take-off speed, so with the
+/// running speed up by 1.5 the take-off speed is raised by `BOOTS_JUMP_DISTANCE_FACTOR / BOOTS_SPEED_FACTOR` (to 4/3 of normal) to make the
+/// whole jump twice as long.
+pub const BOOTS_SPEED_FACTOR: f32 = 1.5;
+pub const BOOTS_JUMP_DISTANCE_FACTOR: f32 = 2.0;
+/// While a cursed idol is in the hotbar the player deals this many times the damage and heals not at all.
+pub const IDOL_DAMAGE_FACTOR: i32 = 2;
+
+/// The jungle is four times the area it was (its radius was 90 and is doubled, so it covers four times as much ground) and lies
+/// twice as far from the spawn point (it was 10 chunks out), so that it does not reach it. The cursed idol stands on a plinth in a chamber at the heart of the
+/// temple (`TEMPLE_CHAMBER_HALF` out from its middle, `TEMPLE_CHAMBER_HEIGHT` high), reached by a passage in the north face.
+pub const TEMPLE_CHAMBER_HALF: i32 = 3;
+pub const TEMPLE_CHAMBER_HEIGHT: i32 = 5;
+pub const TEMPLE_PASSAGE_HALF: i32 = 1;
+pub const TEMPLE_PASSAGE_HEIGHT: i32 = 3;
+
+/// The orangutan boss on the temple's upper tiers. It walks (and climbs the tiers) towards a player within `ORANGUTAN_NOTICE_DISTANCE`,
+/// never straying more than `ORANGUTAN_LEASH` from the top, hits for `ORANGUTAN_DAMAGE`, hurls rocks from between `ORANGUTAN_ROCK_MIN_RANGE`
+/// and `MAX_RANGE` (a rock bursts for `ROCK_BURST_DAMAGE` within `ROCK_BURST_RADIUS`), and, close up, rears and smashes the ground, hurting
+/// everything within `ORANGUTAN_SMASH_RADIUS` of its body and throwing it `ORANGUTAN_SMASH_KNOCKBACK` blocks.
+pub const ORANGUTAN_HEALTH: i32 = 260;
+pub const ORANGUTAN_HALF_WIDTH: f32 = 0.85;
+pub const ORANGUTAN_HEIGHT: f32 = 2.7;
+pub const ORANGUTAN_WALK_SPEED: f32 = 2.0;
+pub const ORANGUTAN_RUN_SPEED: f32 = 5.0;
+pub const ORANGUTAN_DAMAGE: u32 = 3;
+pub const ORANGUTAN_ATTACK_COOLDOWN: f32 = 1.3;
+pub const ORANGUTAN_REACH: f32 = 1.3;
+pub const ORANGUTAN_NOTICE_DISTANCE: f32 = 45.0;
+pub const ORANGUTAN_LEASH: f32 = 20.0;
+pub const ORANGUTAN_SPAWN_DISTANCE: f32 = 70.0;
+pub const ORANGUTAN_SMASH_TRIGGER_RANGE: f32 = 4.5;
+pub const ORANGUTAN_SMASH_WINDUP: f32 = 0.9;
+pub const ORANGUTAN_SMASH_RADIUS: f32 = 5.0;
+pub const ORANGUTAN_SMASH_DAMAGE: u32 = 3;
+pub const ORANGUTAN_SMASH_KNOCKBACK: f32 = 7.0;
+pub const ORANGUTAN_SMASH_COOLDOWN: f32 = 5.0;
+pub const ORANGUTAN_ROCK_MIN_RANGE: f32 = 7.0;
+pub const ORANGUTAN_ROCK_MAX_RANGE: f32 = 38.0;
+pub const ORANGUTAN_ROCK_WINDUP: f32 = 0.8;
+pub const ORANGUTAN_ROCK_COOLDOWN: f32 = 3.0;
+pub const ORANGUTAN_ENRAGED_FACTOR: f32 = 0.6;
+pub const ORANGUTAN_GOLD_DROP: u32 = 6;
+pub const ROCK_SPEED: f32 = 21.0;
+pub const ROCK_GRAVITY: f32 = 11.0;
+pub const ROCK_BURST_RADIUS: f32 = 1.7;
+pub const ROCK_BURST_DAMAGE: u32 = 2;
+
+/// Jaguars (jungle only, at most `MAX_JAGUAR`) sneak up on a player within `JAGUAR_NOTICE_DISTANCE` at `JAGUAR_STALK_SPEED`, crouch for
+/// `JAGUAR_CROUCH_SECONDS` once within `JAGUAR_POUNCE_RANGE`, then leap (`JAGUAR_LEAP_SPEED`, `JAGUAR_LEAP_RISE`) and strike for
+/// `JAGUAR_DAMAGE` if they land on the player, and slink off for `JAGUAR_RETREAT_SECONDS` before stalking again.
+pub const MAX_JAGUAR: usize = 3;
+pub const JAGUAR_HEALTH: i32 = 16;
+pub const JAGUAR_HALF_WIDTH: f32 = 0.5;
+pub const JAGUAR_HEIGHT: f32 = 0.95;
+pub const JAGUAR_NOTICE_DISTANCE: f32 = 40.0;
+pub const JAGUAR_STALK_SPEED: f32 = 2.0;
+pub const JAGUAR_POUNCE_RANGE: f32 = 7.5;
+pub const JAGUAR_CROUCH_SECONDS: f32 = 0.8;
+pub const JAGUAR_LEAP_SPEED: f32 = 13.0;
+pub const JAGUAR_LEAP_RISE: f32 = 6.5;
+pub const JAGUAR_LEAP_SECONDS: f32 = 1.0;
+pub const JAGUAR_DAMAGE: u32 = 3;
+pub const JAGUAR_REACH: f32 = 0.9;
+pub const JAGUAR_ATTACK_COOLDOWN: f32 = 1.0;
+pub const JAGUAR_RETREAT_SECONDS: f32 = 3.5;
+pub const JAGUAR_RETREAT_SPEED: f32 = 5.0;
+pub const SPAWN_WEIGHT_JAGUAR: u64 = 10;
+
+/// Flying snakes (jungle only, at most `MAX_FLYING_SNAKE`) twist through the air in a helix round a player within
+/// `SNAKE_NOTICE_DISTANCE`, its radius and height swelling and shrinking, then swoop down on them for `SNAKE_DAMAGE` and spiral away.
+pub const MAX_FLYING_SNAKE: usize = 5;
+pub const FLYING_SNAKE_HEALTH: i32 = 6;
+pub const SNAKE_HALF_WIDTH: f32 = 0.3;
+pub const SNAKE_HEIGHT: f32 = 0.3;
+pub const SNAKE_NOTICE_DISTANCE: f32 = 45.0;
+pub const SNAKE_SPIRAL_SPEED: f32 = 6.0;
+pub const SNAKE_SPIRAL_RADIUS: f32 = 5.0;
+pub const SNAKE_SPIRAL_HEIGHT: f32 = 4.5;
+pub const SNAKE_DIVE_SPEED: f32 = 14.0;
+pub const SNAKE_DIVE_SECONDS: f32 = 1.2;
+pub const SNAKE_FLEE_SECONDS: f32 = 1.8;
+pub const SNAKE_ATTACK_MIN: f32 = 3.0;
+pub const SNAKE_ATTACK_MAX: f32 = 6.0;
+pub const SNAKE_DAMAGE: u32 = 2;
+pub const SNAKE_REACH: f32 = 0.6;
+pub const SPAWN_WEIGHT_FLYING_SNAKE: u64 = 12;

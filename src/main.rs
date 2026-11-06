@@ -40,6 +40,7 @@ mod game;
 mod ghosts;
 mod help;
 mod horizen;
+mod kingcastle;
 mod hud;
 mod inventory;
 mod item;

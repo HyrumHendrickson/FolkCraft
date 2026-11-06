@@ -65,6 +65,8 @@ pub struct SaveData {
     pub skylands: Option<Box<SaveData>>,
     /// How many quail the player has killed (an Iron Quail comes for every `QUAIL_KILLS_PER_IRON_QUAIL`).
     pub quail_kills: u32,
+    /// How many bats the player has killed in the Horizen's caves (a vampire bat comes for every `BATS_PER_VAMPIRE`).
+    pub bat_kills: u32,
 }
 
 impl SaveData {
@@ -86,6 +88,7 @@ impl SaveData {
             health: MAX_HEALTH,
             dev_mode: false,
             quail_kills: 0,
+            bat_kills: 0,
             worn: None,
             back: None,
             in_horizen: false,
@@ -128,6 +131,8 @@ impl SaveData {
 ///                               slots 36 to 53 of "inv" belong to the pack)
 ///     "back <item>"             read only: saves made when the backpack had a place of its own; it is worn now
 ///     "quailkills <n>"          how many quail the player has killed
+///     "batkills <n>"            how many bats the player has killed in the Horizen's caves
+///     "orangutanslain"          the Orangutan on the jungle temple has been killed (it never returns)
 ///     "ruinedcastle <x> <z>"    the ruined castle with the sword in the stone, centred on that column
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
 ///     "dimension skylands"     the player is in the Skylands (everything above is then the overworld)
@@ -164,6 +169,7 @@ pub struct SaveExtras<'a> {
     pub in_skylands: bool,
     pub skylands: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
     pub quail_kills: u32,
+    pub bat_kills: u32,
 }
 
 /// The records of a world's silver tower state, each starting with `prefix`.
@@ -254,6 +260,12 @@ pub fn serialize_save_full(
     }
     if extras.quail_kills > 0 {
         out.push_str(&format!("quailkills {}\n", extras.quail_kills));
+    }
+    if extras.bat_kills > 0 {
+        out.push_str(&format!("batkills {}\n", extras.bat_kills));
+    }
+    if world.landmarks.orangutan_slain {
+        out.push_str("orangutanslain\n");
     }
     if extras.in_horizen {
         out.push_str("dimension horizen\n");
@@ -371,6 +383,8 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 apply_line(skylands, rest);
             }
             Some("yetislain") => data.landmarks.yeti_slain = true,
+            Some("orangutanslain") => data.landmarks.orangutan_slain = true,
+            Some("batkills") => data.bat_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("nessie") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {

@@ -116,23 +116,25 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     if !in_render_range(player_chunk, World::chunk_of_pos(tornado.pos)) {
         return;
     }
+    let k = tornado.scale;
+    let height = SKY_TORNADO_HEIGHT * k;
     for layer in 0..9 {
         let t = layer as f32 / 8.0;
         // A funnel: narrow at the foot, wide at the top.
-        let radius = SKY_TORNADO_RADIUS * tornado_radius_share(t);
+        let radius = SKY_TORNADO_RADIUS * k * tornado_radius_share(t);
         let angle = time * SKY_TORNADO_SPIN_SPEED + layer as f32 * 1.35;
         let centre = tornado.pos
-            + vec3(angle.cos() * radius * 0.48, t * SKY_TORNADO_HEIGHT + 0.35, angle.sin() * radius * 0.48);
+            + vec3(angle.cos() * radius * 0.48, t * height + 0.35, angle.sin() * radius * 0.48);
         let fire = if layer % 2 == 0 {
             Color::new(1.0, 0.18 + 0.12 * (1.0 - t), 0.015, 0.88)
         } else {
             Color::new(1.0, 0.62, 0.04, 0.82)
         };
-        draw_box(centre, vec3(radius, SKY_TORNADO_HEIGHT / 18.0, radius), angle, fire);
+        draw_box(centre, vec3(radius, height / 18.0, radius), angle, fire);
         if layer % 2 == 0 {
             draw_box(
                 centre + vec3(0.0, 0.18, 0.0),
-                vec3(radius * 0.55, SKY_TORNADO_HEIGHT / 24.0, radius * 0.55),
+                vec3(radius * 0.55, height / 24.0, radius * 0.55),
                 -angle * 1.4,
                 Color::new(1.0, 0.90, 0.18, 0.70),
             );
@@ -140,8 +142,8 @@ pub fn draw_fire_tornado(tornado: &FireTornado, time: f32, player_chunk: (i32, i
     }
     // A dark, translucent cap makes the top read as smoke rather than a stack of unrelated boxes.
     draw_box(
-        tornado.pos + vec3(0.0, SKY_TORNADO_HEIGHT + 0.35, 0.0),
-        vec3(SKY_TORNADO_RADIUS * 0.8, 0.32, SKY_TORNADO_RADIUS * 0.8),
+        tornado.pos + vec3(0.0, height + 0.35, 0.0),
+        vec3(SKY_TORNADO_RADIUS * k * 0.8, 0.32, SKY_TORNADO_RADIUS * k * 0.8),
         time * SKY_TORNADO_CAP_SPIN_SPEED,
         Color::new(0.16, 0.10, 0.07, 0.42),
     );
@@ -517,7 +519,7 @@ pub fn trail_wisps(path: &[(f32, f32)], length: f32, spacing: f32, time: f32) ->
 /// carries on through the air from island to island.
 pub fn trail_floor(world: &World, x: i32, z: i32, feet_y: f32) -> f32 {
     if world.dimension == Dimension::Skylands {
-        return crate::skylands::surface_top(world.seed, x, z).map_or(feet_y.floor(), |top| top as f32 + 1.0);
+        return crate::skylands::surface_top(world.seed, x, z, world.night).map_or(feet_y.floor(), |top| top as f32 + 1.0);
     }
     world.ground_top(x, z).max(GROUND_TOP) as f32 + 1.0
 }
@@ -720,6 +722,10 @@ pub fn draw_projectiles(projectiles: &[crate::hazard::Projectile], time: f32) {
                 draw_box(p.pos, Vec3::splat(0.32), time * 3.0 + p.age, Color::new(0.70, 0.88, 1.0, 1.0));
                 draw_box(p.pos, Vec3::splat(0.22), -time * 2.0, Color::new(0.92, 0.97, 1.0, 1.0));
             }
+            ProjectileKind::Rock => {
+                draw_box(p.pos, Vec3::splat(0.40), time * 2.5 + p.age, Color::new(0.46, 0.43, 0.40, 1.0));
+                draw_box(p.pos + vec3(0.1, 0.12, 0.0), Vec3::splat(0.26), -time * 1.5, Color::new(0.56, 0.53, 0.49, 1.0));
+            }
             ProjectileKind::Fireball => {
                 let flicker = 0.5 + 0.5 * (time * 20.0 + p.age * 9.0).sin();
                 draw_box(p.pos, Vec3::splat(0.45), time * 4.0, Color::new(1.0, 0.45, 0.05, 1.0));
@@ -738,11 +744,11 @@ pub fn draw_bursts(bursts: &[crate::game::ShownBurst]) {
         let t = (b.age / BURST_SHOW_SECONDS).clamp(0.0, 1.0);
         let fade = 1.0 - t;
         match b.shape {
-            BurstShape::Ice | BurstShape::Fire => {
-                let (radius, colour) = if b.shape == BurstShape::Ice {
-                    (ICE_BURST_RADIUS, (0.75, 0.92, 1.0))
-                } else {
-                    (FIREBALL_RADIUS, (1.0, 0.50, 0.10))
+            BurstShape::Ice | BurstShape::Fire | BurstShape::Rock => {
+                let (radius, colour) = match b.shape {
+                    BurstShape::Ice => (ICE_BURST_RADIUS, (0.75, 0.92, 1.0)),
+                    BurstShape::Rock => (ROCK_BURST_RADIUS, (0.55, 0.50, 0.44)),
+                    _ => (FIREBALL_RADIUS, (1.0, 0.50, 0.10)),
                 };
                 let r = radius * (0.35 + 0.65 * t);
                 draw_box(b.pos, Vec3::splat(r * 0.7), t * 3.0, Color::new(colour.0, colour.1, colour.2, 0.55 * fade));
@@ -751,9 +757,10 @@ pub fn draw_bursts(bursts: &[crate::game::ShownBurst]) {
                     draw_box(b.pos + vec3(a.cos() * r, 0.2 + 0.5 * t, a.sin() * r), Vec3::splat(0.14), a, Color::new(colour.0, colour.1, colour.2, 0.9 * fade));
                 }
             }
-            BurstShape::Smash => {
+            BurstShape::Smash | BurstShape::OrangutanSmash => {
                 // A ring of dust and cracked ground that runs out to the smash's radius and beyond.
-                let r = (crate::config::YETI_SMASH_RADIUS + 0.9) * (0.3 + 0.7 * t);
+                let radius = if b.shape == BurstShape::Smash { crate::config::YETI_SMASH_RADIUS } else { crate::config::ORANGUTAN_SMASH_RADIUS };
+                let r = (radius + 0.9) * (0.3 + 0.7 * t);
                 for i in 0..20 {
                     let a = i as f32 * std::f32::consts::TAU / 20.0;
                     draw_box(b.pos + vec3(a.cos() * r, 0.15 + 0.3 * (1.0 - t), a.sin() * r), vec3(0.25, 0.18 + 0.2 * fade, 0.25), a, Color::new(0.85, 0.88, 0.95, 0.8 * fade));

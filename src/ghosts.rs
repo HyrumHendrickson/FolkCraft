@@ -13,6 +13,13 @@ pub const CAVE_TOWER_GHOST: &str = "Things work differently at night. Try out al
 /// The voice in the tower on a lake's island (Nessie's).
 pub const LAKE_TOWER_GHOST: &str = "Blow the horn in the stonehenge.";
 
+/// What the ghost of the king says when the pipes are played in his castle in the Horizen's giant cave.
+pub const KING_GREETING: &str = "I am the king eternal. Give me gold and I shall send my spirits to guard you.";
+/// What he says when gold has been given, and when it was not enough or he has sent all the spirits he can.
+pub const KING_SENDS: &str = "It is done. My spirits will follow you, and each will loose ten arrows at your foes.";
+pub const KING_WANTS_MORE: &str = "Ten pieces of gold for each spirit. You have not that much.";
+pub const KING_FULL: &str = "My spirits already throng about you. Spend them first.";
+
 /// Cut `text` into lines of at most `max_chars` characters, at spaces (a word longer than that gets a line of its own).
 pub fn wrap(text: &str, max_chars: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
@@ -45,6 +52,7 @@ mod tests {
         assert!(SKY_TOWER_GHOST.contains("Wade") && SKY_TOWER_GHOST.contains("river") && SKY_TOWER_GHOST.contains("island") && SKY_TOWER_GHOST.contains("water"));
         assert!(CAVE_TOWER_GHOST.contains("night") && CAVE_TOWER_GHOST.contains("tools"));
         assert!(LAKE_TOWER_GHOST.contains("horn") && LAKE_TOWER_GHOST.contains("stonehenge"));
+        assert!(KING_GREETING.starts_with("I am the king eternal") && KING_GREETING.contains("Give me gold and I shall send my spirits to guard you"));
         assert!(GRAVEYARD_ASKS.contains("song") && GRAVEYARD_THANKS.contains("Thank") && GRAVEYARD_THANKS.contains("key"));
         assert!(GRAVEYARD_THANKS.contains("three lonely towers") && GRAVEYARD_THANKS.contains("others") && GRAVEYARD_THANKS.contains("music"));
     }
