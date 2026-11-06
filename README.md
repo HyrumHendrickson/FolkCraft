@@ -235,6 +235,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
 | `horizen.rs` | `Dimension` and the Horizen's land: empty flat ground with ponds and the arrival pool. |
 | `tornado.rs` | The Horizen's one daytime fire tornado (movement, target capture, collision and damage timing) and the `Cyclone` that carries the player between dimensions. |
 | `skylands.rs` | The third dimension: floating islands on a grid, wooden bridges between them, a few oaks (`generate_chunk`, `surface_top`, `spawn_point`, `home_cyclone`). Pure functions of the seed. |
+| `tower.rs` | The silver tower: `tower_cell` (shape, locked door, spiral stair, relic plinth), `Relic`, and `Tower` (the Horizen's, with its trail approach). Pure functions. |
 | `landmarks.rs` | `Lake`, `Mountain`, `GrandCastle`, `Rainbow`, `RainbowState`, `Landmarks` (what the terrain consults) and `Treks` (the river and compass walk counters that bring them in). Pure logic, tested without a window. |
 | `river.rs` | `is_river`, `river_near`: rivers as zero contours of a smooth noise field. Pure functions of seed and column. |
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG. |
@@ -505,3 +506,22 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Dimensions** are parked in `Game::away` and `Game::shelf` (`Game::travel_to`, `parked`, `take_parked`), so all three can be held at once.
 - **Save format** gains `dimension skylands`, `yetislain`, `nessie <x> <z>` and `s <record>` lines (the Skylands' own `pos`, `time`, edits and `item`s, exactly like the `h` lines).
 - Tests: `game::boss_and_skylands_tests`, `skylands::tests`, `landmarks::boss_landmark_tests`, and the boss models in `animal_draw`.
+
+## Update: silver towers, the salt mine, the jungle and deer bones
+
+- **Silver towers** (`tower.rs`): one design (9x9, 26 high, five floors of `TOWER_STOREY` blocks, a spiral stair that turns a quarter each floor, slit windows,
+  battlements) built three times: on every lake island in place of the old castle (`Lake::tower_cell`, relic Philosopher's Stone), on one Skylands island
+  (`Landmarks::sky_tower`, relic Horn of the Hunt) and on the Horizen's plain (`Landmarks::horizen_tower`, relic Ancient Crown). The door is `Block::TowerDoor` +
+  `TowerDoorTop` until a `SilverKey` is used on it (`Game::try_unlock`, right click; the key is used up); `World::unlock_tower` records it in `Landmarks::towers_unlocked`
+  and remakes the chunks. Killing the Loch Ness Monster no longer opens anything (`record_monster_slain`). The relic is on a plinth block (`StonePlinth`, `HornPlinth`,
+  `CrownPlinth`) taken by hand.
+- **Horizen tower:** hold a peep stone by day in the Horizen (`Game::try_show_horizen_tower`): the tower appears beyond the generated land on dry ground
+  (`horizen::site_is_dry`) and the peep stone's trail leads to it (`trail_path`).
+- **Skylands tower:** `Game::update_sky_tower` notes each island walked on (`Landmarks::sky_visited`); at `SKY_TOWER_VISITS` the nearest island not yet made
+  (`skylands::pick_tower_cell`) gets the tower, once, and it is saved (`skytower`, `skyvisit`; Horizen: `tower`; all: `unlocked`).
+- **Compass** in the Horizen and Skylands points to where the player arrived (`CompassTarget::Spawn`).
+- **Mines** (`mines::furnish`): pink salt crystals (`Block::PinkSalt`, `MINE_SALT_PER_MILLE`) on tunnel walls, and a silver key on a `KeyStand` in the middle ring's chamber of
+  shafts `MINE_KEY_SHAFTS` (three keys).
+- **Jungle** (`terrain::jungle_centre`, `in_jungle`, `place_jungle_tree`): a pure function of the seed, `JUNGLE_DISTANCE_CHUNKS` from spawn, trunks 22 to 32 tall, a bare
+  middle. A fall out of the Skylands lands there (`Game::jungle_landing`), `SKY_FALL_DROP` above the ground.
+- **Deer** leave `DEER_BONE_DROP` Deer Bones `DEER_BONE_CHANCE` percent of the time; 3 bones + a twine craft Musical Pipes. Pipes, pink salt and the three relics do nothing yet.

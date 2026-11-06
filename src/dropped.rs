@@ -68,6 +68,13 @@ impl ItemKind {
             ItemKind::BoneTotem => 0.07,
             ItemKind::PeltCloak => 0.03,
             ItemKind::RoyalArmor => 0.06,
+            ItemKind::SilverKey => 0.03,
+            ItemKind::PinkSalt => 0.07,
+            ItemKind::PhilosophersStone => 0.09,
+            ItemKind::AncientCrown => 0.08,
+            ItemKind::HornOfTheHunt => 0.07,
+            ItemKind::DeerBone => 0.04,
+            ItemKind::MusicalPipes => 0.05,
         }
     }
 
@@ -116,6 +123,13 @@ impl ItemKind {
             ItemKind::BoneTotem => vec3(0.20, 0.07, 0.07),
             ItemKind::PeltCloak => vec3(0.20, 0.03, 0.15),
             ItemKind::RoyalArmor => vec3(0.16, 0.06, 0.12),
+            ItemKind::SilverKey => vec3(0.16, 0.03, 0.07),
+            ItemKind::PinkSalt => vec3(0.11, 0.08, 0.10),
+            ItemKind::PhilosophersStone => vec3(0.12, 0.09, 0.12),
+            ItemKind::AncientCrown => vec3(0.14, 0.08, 0.14),
+            ItemKind::HornOfTheHunt => vec3(0.20, 0.07, 0.10),
+            ItemKind::DeerBone => vec3(0.20, 0.04, 0.05),
+            ItemKind::MusicalPipes => vec3(0.15, 0.05, 0.09),
         }
     }
 }

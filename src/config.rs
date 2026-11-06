@@ -185,14 +185,21 @@ pub const TREE_LINE_RISE: i32 = 6;
 /// Hills and valleys fade out over this many blocks beside a lake or a mountain, so no cliff is left behind.
 pub const LANDMARK_BLEND: i32 = 16;
 
-/// The castle in the middle of a lake's island: its walls are `Block::CastleStone`. These are its half-width
-/// (the outer wall stands this many blocks from the centre), the farthest any part of it reaches from the centre
-/// (the corner towers) and its height in blocks.
-pub const CASTLE_WALL_HALF: i32 = 8;
-pub const CASTLE_REACH: i32 = 10;
-pub const CASTLE_HEIGHT: i32 = 11;
-/// No tree grows within this many blocks of the castle's outer edge.
-pub const CASTLE_TREE_MARGIN: i32 = 6;
+/// The silver tower: three identical towers of `Block::SilverStone` stand in the worlds (on a lake's island, in the
+/// Skylands and in the Horizen). Its outer wall stands `TOWER_HALF` blocks from the centre (so it is `2 * TOWER_HALF + 1`
+/// across), and `TOWER_REACH` is the farthest any part reaches from the centre. It has `TOWER_STOREYS` floors,
+/// `TOWER_STOREY` blocks apart (a floor slab and four blocks of room), under a roof with battlements one block high.
+pub const TOWER_HALF: i32 = 4;
+pub const TOWER_REACH: i32 = 4;
+pub const TOWER_STOREY: i32 = 5;
+pub const TOWER_STOREYS: i32 = 5;
+pub const TOWER_HEIGHT: i32 = TOWER_STOREY * TOWER_STOREYS + 1;
+/// No tree grows within this many blocks of a tower's outer edge.
+pub const TOWER_TREE_MARGIN: i32 = 6;
+/// A tower in the Horizen stands on flat dry land: no pond comes within this many blocks of it.
+pub const TOWER_POND_MARGIN: i32 = 4;
+/// The player must have walked on this many different Skylands islands before the next island to appear carries a tower.
+pub const SKY_TOWER_VISITS: usize = 10;
 
 /// The grand castle: a large castle of grey stone with five floors, found by following the ghostly trail that a
 /// peep stone shows at night. These are the outer wall's half-width, the farthest any part reaches from the centre,
@@ -672,10 +679,42 @@ pub const SKY_SPAWN_RADIUS: f32 = 15.0;
 pub const SKY_HOME_CYCLONE_OFFSET: f32 = 9.0;
 /// Below this height the player has fallen off every island.
 pub const SKY_VOID_Y: f32 = 55.0;
-/// A fall off an island: the white fades in over `SKY_FALL_FADE_IN`, the player is taken to the normal world and put
-/// `SKY_FALL_DROP` blocks above its spawn point, and the white fades out again over `SKY_FALL_FADE_OUT` as they fall.
+/// A fall off an island: the white fades in over `SKY_FALL_FADE_IN`, the player is taken to the jungle of the normal world
+/// and put `SKY_FALL_DROP` blocks above its middle, and the white fades out again over `SKY_FALL_FADE_OUT` as they fall.
 pub const SKY_FALL_FADE_IN: f32 = 0.9;
 pub const SKY_FALL_FADE_OUT: f32 = 3.2;
 pub const SKY_FALL_DROP: f32 = 50.0;
 /// Trees on an island: percent of columns that try to grow one.
 pub const SKY_TREE_PERCENT: u64 = 3;
+
+// --- Silver towers, the salt mine, the jungle and the deer's bones ------------------------------
+
+/// Breaking a pink salt crystal, a silver key off its stand and a relic off its plinth.
+pub const BREAK_SECONDS_SALT: f32 = 1.2;
+pub const BREAK_SECONDS_KEY: f32 = 0.6;
+pub const BREAK_SECONDS_RELIC: f32 = 1.0;
+/// Lumps of pink salt a crystal drops.
+pub const PINK_SALT_DROP: u32 = 2;
+/// The mines are a salt mine: this many in a thousand of the dirt blocks that face a tunnel are crystals of pink salt.
+pub const MINE_SALT_PER_MILLE: u64 = 70;
+/// A silver key lies on a stand in the middle of the chamber where the middle ring crosses the shafts numbered in
+/// `MINE_KEY_SHAFTS` (one key for each of the three towers).
+pub const MINE_KEY_RING: usize = 1;
+pub const MINE_KEY_SHAFTS: [usize; 3] = [0, 2, 4];
+
+/// The jungle: a round stretch of the normal world, `JUNGLE_DISTANCE_CHUNKS` chunks from the spawn point (in a direction
+/// the seed decides) and `JUNGLE_RADIUS` blocks across from the middle to the edge, thick with tall trees. Its middle,
+/// `JUNGLE_CLEARING_RADIUS` blocks round, is bare so that whoever falls out of the Skylands lands on the ground.
+pub const JUNGLE_DISTANCE_CHUNKS: i32 = 10;
+pub const JUNGLE_RADIUS: i32 = 90;
+pub const JUNGLE_CLEARING_RADIUS: i32 = 9;
+/// A jungle tree's trunk is this many blocks tall (inclusive range), and a chunk of jungle tries to grow this many trees.
+pub const JUNGLE_TRUNK_MIN: i32 = 22;
+pub const JUNGLE_TRUNK_MAX: i32 = 32;
+pub const JUNGLE_TREES_MIN: i32 = 12;
+pub const JUNGLE_TREES_MAX: i32 = 18;
+
+/// Killing a deer leaves `DEER_BONE_DROP` bones one time in five (`DEER_BONE_CHANCE` percent). Three bones and a twine
+/// make a set of musical pipes.
+pub const DEER_BONE_CHANCE: u64 = 20;
+pub const DEER_BONE_DROP: u32 = 2;

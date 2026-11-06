@@ -107,10 +107,25 @@ pub enum ItemKind {
     PeltCloak,
     /// The armour of the throne room. Worn, it halves all the damage the player takes.
     RoyalArmor,
+    /// Found on a stand in the mines under the mountain. Used on the locked door of a silver tower, it opens it for good
+    /// (and is used up).
+    SilverKey,
+    /// Broken out of the pink salt crystals that stud the walls of the mines. It has no use yet.
+    PinkSalt,
+    /// The relic at the top of the silver tower on the lake's island. It does nothing yet.
+    PhilosophersStone,
+    /// The relic at the top of the silver tower in the Horizen. It does nothing yet.
+    AncientCrown,
+    /// The relic at the top of the silver tower in the Skylands. It does nothing yet.
+    HornOfTheHunt,
+    /// Sometimes left by a deer (one time in five). Three bones and a twine make musical pipes.
+    DeerBone,
+    /// Pipes cut from deer bones. They do nothing yet.
+    MusicalPipes,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 63] = [
+    pub const ALL: [ItemKind; 70] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -174,6 +189,13 @@ impl ItemKind {
         ItemKind::BoneTotem,
         ItemKind::PeltCloak,
         ItemKind::RoyalArmor,
+        ItemKind::SilverKey,
+        ItemKind::PinkSalt,
+        ItemKind::PhilosophersStone,
+        ItemKind::AncientCrown,
+        ItemKind::HornOfTheHunt,
+        ItemKind::DeerBone,
+        ItemKind::MusicalPipes,
     ];
 
     /// Display name.
@@ -242,6 +264,13 @@ impl ItemKind {
             ItemKind::BoneTotem => "Bone Totem",
             ItemKind::PeltCloak => "Pelt Cloak",
             ItemKind::RoyalArmor => "Royal Armor",
+            ItemKind::SilverKey => "Silver Key",
+            ItemKind::PinkSalt => "Pink Salt",
+            ItemKind::PhilosophersStone => "Philosopher's Stone",
+            ItemKind::AncientCrown => "Ancient Crown",
+            ItemKind::HornOfTheHunt => "Horn of the Hunt",
+            ItemKind::DeerBone => "Deer Bone",
+            ItemKind::MusicalPipes => "Musical Pipes",
         }
     }
 
@@ -311,6 +340,13 @@ impl ItemKind {
             ItemKind::BoneTotem => "bone_totem",
             ItemKind::PeltCloak => "pelt_cloak",
             ItemKind::RoyalArmor => "royal_armor",
+            ItemKind::SilverKey => "silver_key",
+            ItemKind::PinkSalt => "pink_salt",
+            ItemKind::PhilosophersStone => "philosophers_stone",
+            ItemKind::AncientCrown => "ancient_crown",
+            ItemKind::HornOfTheHunt => "horn_of_the_hunt",
+            ItemKind::DeerBone => "deer_bone",
+            ItemKind::MusicalPipes => "musical_pipes",
         }
     }
 
@@ -389,6 +425,13 @@ impl ItemKind {
             ItemKind::BoneTotem => Color::new(0.90, 0.88, 0.80, 1.0),
             ItemKind::PeltCloak => Color::new(0.32, 0.22, 0.15, 1.0),
             ItemKind::RoyalArmor => Color::new(0.66, 0.68, 0.74, 1.0),
+            ItemKind::SilverKey => Color::new(0.82, 0.84, 0.92, 1.0),
+            ItemKind::PinkSalt => Color::new(0.95, 0.64, 0.70, 1.0),
+            ItemKind::PhilosophersStone => Color::new(0.76, 0.12, 0.16, 1.0),
+            ItemKind::AncientCrown => Color::new(0.90, 0.68, 0.16, 1.0),
+            ItemKind::HornOfTheHunt => Color::new(0.90, 0.84, 0.68, 1.0),
+            ItemKind::DeerBone => Color::new(0.93, 0.90, 0.82, 1.0),
+            ItemKind::MusicalPipes => Color::new(0.88, 0.82, 0.68, 1.0),
         }
     }
 
@@ -625,6 +668,11 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         }
         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
+        Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(PINK_SALT_DROP as usize)),
+        Block::KeyStand => drops.push(ItemKind::SilverKey),
+        Block::StonePlinth => drops.push(ItemKind::PhilosophersStone),
+        Block::HornPlinth => drops.push(ItemKind::HornOfTheHunt),
+        Block::CrownPlinth => drops.push(ItemKind::AncientCrown),
         Block::ClayForge => drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize)),
         Block::ForgeCharged => {
             drops.extend(std::iter::repeat(ItemKind::Clay).take(FORGE_CLAY_DROP as usize));
@@ -654,6 +702,9 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::Gravestone
         | Block::BridgePlank
         | Block::BridgePost
+        | Block::SilverStone
+        | Block::TowerDoor
+        | Block::TowerDoorTop
         | Block::Water
         | Block::Flower
         | Block::Fire

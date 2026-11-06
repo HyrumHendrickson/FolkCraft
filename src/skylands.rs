@@ -16,8 +16,10 @@ use macroquad::prelude::*;
 use crate::block::Block;
 use crate::chunk::idx;
 use crate::config::*;
+use crate::landmarks::Landmarks;
 use crate::rng::{hash3, Rng};
 use crate::terrain::place_oak;
+use crate::tower::{self, Relic};
 
 /// One floating island: a disc round (`x`, `z`) with a wavy shore, flat on top at `top` and tapering to a point below.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,6 +91,38 @@ pub fn island_in_cell(seed: i64, cx: i32, cz: i32) -> Island {
 pub fn island_at(seed: i64, wx: i32, wz: i32) -> Option<Island> {
     let (cx, cz) = (cell_of(wx), cell_of(wz));
     (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (cx + dx, cz + dz))).map(|(x, z)| island_in_cell(seed, x, z)).find(|i| i.contains(wx, wz))
+}
+
+/// The grid cell of the island under the column (wx, wz), if there is one.
+pub fn island_cell_under(seed: i64, wx: i32, wz: i32) -> Option<(i32, i32)> {
+    island_at(seed, wx, wz).map(|i| (cell_of(i.x), cell_of(i.z)))
+}
+
+/// The island that carries the tower: the nearest to the column `at` (in a grid cell within a few cells of it) that the player
+/// has not walked on, is not the first island, and none of whose chunks have been made yet (`made` says whether a chunk has),
+/// so that it is the next one to appear. `None` if there is no such island.
+pub fn pick_tower_cell(seed: i64, at: (i32, i32), visited: &[(i32, i32)], made: &dyn Fn(i32, i32) -> bool) -> Option<(i32, i32)> {
+    let (cx, cz) = (cell_of(at.0), cell_of(at.1));
+    let mut best: Option<((i32, i32), i64)> = None;
+    for dz in -8..=8 {
+        for dx in -8..=8 {
+            let cell = (cx + dx, cz + dz);
+            if cell == (0, 0) || visited.contains(&cell) {
+                continue;
+            }
+            let island = island_in_cell(seed, cell.0, cell.1);
+            let reach = (tower::TOWER_FOOT_MARGIN + island.radius.ceil() as i32) as i32;
+            let chunks_made = (island.z - reach).div_euclid(CHUNK_SIZE)..=(island.z + reach).div_euclid(CHUNK_SIZE);
+            if chunks_made.into_iter().any(|kz| ((island.x - reach).div_euclid(CHUNK_SIZE)..=(island.x + reach).div_euclid(CHUNK_SIZE)).any(|kx| made(kx, kz))) {
+                continue;
+            }
+            let d = ((island.x - at.0) as i64).pow(2) + ((island.z - at.1) as i64).pow(2);
+            if best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((cell, d));
+            }
+        }
+    }
+    best.map(|(c, _)| c)
 }
 
 /// A bridge between two islands: the cells at its ends.
@@ -177,7 +211,10 @@ pub fn home_cyclone() -> Vec3 {
 
 /// Whether trees grow near (wx, wz): never on the stretch of the first island where the player arrives and the cyclone
 /// stands, nor near any island's shore.
-fn tree_site(seed: i64, wx: i32, wz: i32, island: &Island) -> bool {
+fn tree_site(seed: i64, wx: i32, wz: i32, island: &Island, landmarks: &Landmarks) -> bool {
+    if landmarks.sky_tower == Some((cell_of(island.x), cell_of(island.z))) {
+        return false;
+    }
     let near = |p: Vec3| (p.x - wx as f32).abs() < 5.0 && (p.z - wz as f32).abs() < 5.0;
     island.share(wx, wz) < 0.6
         && !(*island == island_in_cell(seed, 0, 0) && (near(spawn_point()) || near(home_cyclone())))
@@ -185,7 +222,7 @@ fn tree_site(seed: i64, wx: i32, wz: i32, island: &Island) -> bool {
 }
 
 /// The blocks of chunk (cx, cz) of the Skylands: the islands (rock, dirt, a few oaks), and the bridges' decks and posts.
-pub fn generate_chunk(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
+pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec<Block> {
     let mut blocks = vec![Block::Air; (CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE) as usize];
     let mut trees = Vec::new();
     for lz in 0..CHUNK_SIZE {
@@ -196,7 +233,16 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
                 for y in bottom..=island.top {
                     blocks[idx(lx, y, lz)] = if y > island.top - SKY_DIRT_LAYERS { Block::Dirt } else { Block::Stone };
                 }
-                if (3..CHUNK_SIZE - 3).contains(&lx) && (3..CHUNK_SIZE - 3).contains(&lz) && tree_site(seed, wx, wz, &island) {
+                if landmarks.sky_tower == Some((cell_of(island.x), cell_of(island.z))) {
+                    let (dx, dz) = (wx - island.x, wz - island.z);
+                    let locked = !landmarks.is_unlocked(island.x, island.z);
+                    for dy in 0..TOWER_HEIGHT {
+                        if let Some(block) = tower::tower_cell(dx, dz, dy, locked, Relic::HornOfTheHunt) {
+                            blocks[idx(lx, island.top + 1 + dy, lz)] = block;
+                        }
+                    }
+                }
+                if (3..CHUNK_SIZE - 3).contains(&lx) && (3..CHUNK_SIZE - 3).contains(&lz) && tree_site(seed, wx, wz, &island, landmarks) {
                     trees.push((lx, lz, island.top));
                 }
             } else if let Some(deck) = deck_at(seed, wx, wz) {
@@ -263,7 +309,7 @@ mod tests {
 
     #[test]
     fn an_island_is_grass_over_rock_that_tapers_to_the_shore() {
-        let blocks = generate_chunk(5, 0, 0);
+        let blocks = generate_chunk(5, 0, 0, &Landmarks::default());
         let first = island_in_cell(5, 0, 0);
         let (lx, lz) = (first.x, first.z);
         assert_eq!(blocks[idx(lx, first.top, lz)], Block::Dirt);
@@ -342,7 +388,7 @@ mod tests {
         let (mut planks, mut posts, mut wood) = (0, 0, 0);
         for cz in -3..3 {
             for cx in -3..3 {
-                for &b in generate_chunk(5, cx, cz).iter() {
+                for &b in generate_chunk(5, cx, cz, &Landmarks::default()).iter() {
                     planks += (b == Block::BridgePlank) as i32;
                     posts += (b == Block::BridgePost) as i32;
                     wood += (b == Block::Wood) as i32;
@@ -358,7 +404,7 @@ mod tests {
     #[test]
     fn trees_keep_off_the_arrival_spot_and_the_way_home() {
         for seed in 0..30 {
-            let blocks = generate_chunk(seed, 0, 0);
+            let blocks = generate_chunk(seed, 0, 0, &Landmarks::default());
             for p in [spawn_point(), home_cyclone()] {
                 for dz in -2..=2 {
                     for dx in -2..=2 {

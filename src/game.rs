@@ -12,7 +12,8 @@ use crate::effects::rainbow_clear_of_view;
 use crate::hud::{InventoryUi, Toasts};
 use crate::inventory::Inventory;
 use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKind};
-use crate::horizen::Dimension;
+use crate::horizen::{self, Dimension};
+use crate::tower::Tower;
 use crate::skylands;
 use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
 use crate::player::Player;
@@ -214,7 +215,8 @@ impl Game {
                     .with_cooking(h.cooking)
                     .with_glow(h.glow)
                     .with_pots(h.pots)
-                    .with_night(h.night);
+                    .with_night(h.night)
+                    .with_landmarks(h.landmarks);
                 w.dimension = dimension;
                 Away { world: w, items: h.items, player: h.player }
             })
@@ -638,7 +640,34 @@ impl Game {
     /// Whether the held item lets the player do something to `block` with the left mouse
     /// button: break it, light it with a bow drill, or work a lit forge with bellows.
     pub fn can_interact(&self, block: Block) -> bool {
-        block.can_break_with(self.held_item()) || self.can_ignite(block) || self.can_blow(block)
+        block.can_break_with(self.held_item()) || self.can_ignite(block) || self.can_blow(block) || self.can_unlock(block)
+    }
+
+    /// Whether the held silver key fits the block (the lock of a tower's door).
+    fn can_unlock(&self, block: Block) -> bool {
+        matches!(block, Block::TowerDoor | Block::TowerDoorTop) && self.held_item() == Some(ItemKind::SilverKey)
+    }
+
+    /// The centre column of the tower whose door has a block at `pos`: the door is in the middle of the south side.
+    fn tower_of_door(&self, (x, _, z): Pos) -> (i32, i32) {
+        (x, z - TOWER_HALF)
+    }
+
+    /// Use the held silver key on the locked door at `pos`: the door opens for good and the key is used up. Without a key
+    /// the player is told what is needed. Returns whether the door opened.
+    pub fn try_unlock(&mut self, pos: Pos) -> bool {
+        if !matches!(self.world.block_at(pos.0, pos.1, pos.2), Block::TowerDoor | Block::TowerDoorTop) {
+            return false;
+        }
+        if self.held_item() != Some(ItemKind::SilverKey) {
+            self.toasts.push("The door is locked. It needs a silver key.".to_string());
+            return false;
+        }
+        let (x, z) = self.tower_of_door(pos);
+        self.inventory.take_from_slot(self.selected);
+        self.world.unlock_tower(x, z);
+        self.toasts.push("The silver key turns. The door swings open.".to_string());
+        true
     }
 
     fn can_ignite(&self, block: Block) -> bool {
@@ -918,6 +947,9 @@ impl Game {
         if hit.block.is_burning() {
             return self.use_on_fire((hit.x, hit.y, hit.z));
         }
+        if matches!(hit.block, Block::TowerDoor | Block::TowerDoorTop) {
+            return self.try_unlock((hit.x, hit.y, hit.z));
+        }
         let Some(kind) = self.held_item() else { return false };
         let Some(block) = kind.placeable_block() else { return false };
         let (x, y, z) = hit.prev;
@@ -1108,8 +1140,13 @@ impl Game {
     /// `COMPASS_TREK_CHUNKS` chunks brings a mountain; holding a peep stone shows the rainbow (once).
     /// Call once a frame, after the player has moved.
     pub fn update_landmarks(&mut self) {
-        // The other dimensions have no landmarks, and the compass, peep stone and totem do nothing there.
-        if !self.in_overworld() {
+        // The other dimensions have one silver tower each (and no other landmarks); the totem does nothing there.
+        if self.in_horizen() {
+            self.try_show_horizen_tower();
+            return;
+        }
+        if self.in_skylands() {
+            self.update_sky_tower();
             return;
         }
         self.treks.mountain_found = self.world.landmarks.mountain().is_some();
@@ -1207,10 +1244,15 @@ impl Game {
     /// to the end of the rainbow, even once the gold has been taken. A bone totem leads by day to the well and by night to
     /// the graveyard. `None` when neither is in hand, nothing is out there to lead to, or the player is in the Horizen.
     pub fn trail_path(&self) -> Option<Vec<(f32, f32)>> {
+        let start = (self.player.pos.x, self.player.pos.z);
+        // In the Horizen a peep stone leads by day to the silver tower.
+        if self.in_horizen() {
+            let tower = self.world.landmarks.horizen_tower?;
+            return (self.held_item() == Some(ItemKind::PeepStone) && !self.world.night).then(|| vec![start, tower.approach(), tower.middle()]);
+        }
         if !self.in_overworld() {
             return None;
         }
-        let start = (self.player.pos.x, self.player.pos.z);
         match self.held_item()? {
             ItemKind::PeepStone if self.world.night => {
                 let castle = self.world.landmarks.grand_castle?;
@@ -1269,9 +1311,60 @@ impl Game {
         true
     }
 
+    /// With a peep stone in hand by day in the Horizen, and only if it has no tower yet, bring its one silver tower out
+    /// beyond the edge of the land, on dry ground, with the ghostly trail to it shown by the peep stone. If no dry site is
+    /// found this frame the next frame tries again. Returns whether the tower appeared.
+    pub fn try_show_horizen_tower(&mut self) -> bool {
+        if !self.in_horizen() || self.world.night || self.world.landmarks.horizen_tower.is_some() || self.held_item() != Some(ItemKind::PeepStone) {
+            return false;
+        }
+        let p = self.player.pos;
+        let first = self.rng.unit() * std::f32::consts::TAU;
+        for extra in 0..12 {
+            for i in 0..16 {
+                let tower = Tower::ahead((p.x, p.z), first + i as f32 * std::f32::consts::TAU / 16.0, extra as f32 * 6.0);
+                if horizen::site_is_dry(self.info.seed, tower.x, tower.z) {
+                    self.world.add_horizen_tower(tower);
+                    self.toasts.push("A pale golden trail leads away across the plain.".to_string());
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// In the Skylands: note the island the player stands on, and once they have walked on `SKY_TOWER_VISITS` different
+    /// ones, put the tower on the next island that has yet to appear (the nearest one not made so far), once.
+    pub fn update_sky_tower(&mut self) {
+        let p = self.player.pos;
+        let seed = self.info.seed;
+        if self.player.on_ground {
+            if let Some(cell) = skylands::island_cell_under(seed, p.x.floor() as i32, p.z.floor() as i32) {
+                self.world.landmarks.note_sky_visit(cell);
+            }
+        }
+        if self.world.landmarks.sky_tower.is_some() || self.world.landmarks.sky_visited.len() < SKY_TOWER_VISITS {
+            return;
+        }
+        let visited = self.world.landmarks.sky_visited.clone();
+        let cell = skylands::pick_tower_cell(seed, (p.x.floor() as i32, p.z.floor() as i32), &visited, &|kx, kz| self.world.chunks.contains_key(&(kx, kz)));
+        if let Some(cell) = cell {
+            self.world.add_sky_tower(cell);
+            self.toasts.push("Far off among the clouds, something tall glints in the light.".to_string());
+        }
+    }
+
     /// The bearing the compass needle points along for the player now.
     pub fn compass_bearing(&self) -> f32 {
-        compass_bearing(&self.world.landmarks, (self.player.pos.x, self.player.pos.z))
+        let at = (self.player.pos.x, self.player.pos.z);
+        // In the Horizen and the Skylands the needle points to where the player arrived.
+        let spawn = match self.world.dimension {
+            Dimension::Overworld => return compass_bearing(&self.world.landmarks, at),
+            Dimension::Horizen => (HORIZEN_SPAWN.0 as f32 + 0.5, HORIZEN_SPAWN.1 as f32 + 0.5),
+            Dimension::Skylands => (skylands::spawn_point().x, skylands::spawn_point().z),
+        };
+        let (dx, dz) = (spawn.0 - at.0, spawn.1 - at.1);
+        if dx.abs() + dz.abs() < 1e-3 { COMPASS_NORTH_BEARING } else { dz.atan2(dx) }
     }
 
     // --- Wearing -------------------------------------------------------------------------
@@ -1307,7 +1400,7 @@ impl Game {
     // --- Bosses, the cyclone and the Skylands ----------------------------------------------
 
     /// Bring the bosses out when the player comes near: the Yeti on the summit of the mountain, and the monster of every
-    /// lake with a castle whose gate is still shut. Called with the wildlife spawns.
+    /// lake with a tower whose monster is still alive. Called with the wildlife spawns.
     fn spawn_bosses(&mut self) {
         let p = self.player.pos;
         if !self.world.landmarks.yeti_slain && !self.animals.iter().any(|a| a.kind == AnimalKind::Yeti) {
@@ -1319,7 +1412,7 @@ impl Game {
                 }
             }
         }
-        let lakes: Vec<Lake> = self.world.landmarks.lakes.iter().copied().filter(|l| self.world.landmarks.gate_shut(l)).collect();
+        let lakes: Vec<Lake> = self.world.landmarks.lakes.iter().copied().filter(|l| self.world.landmarks.monster_alive(l)).collect();
         for lake in lakes {
             let centre = vec3(lake.x as f32 + 0.5, 0.0, lake.z as f32 + 0.5);
             let has_monster = self.animals.iter().any(|a| a.kind == AnimalKind::LochNessMonster && vec2(a.home.x - centre.x, a.home.z - centre.z).length() <= lake.radius as f32);
@@ -1341,7 +1434,7 @@ impl Game {
         }
     }
 
-    /// What a boss's death does: the Yeti's raises the cyclone on the summit, the monster's opens its castle's gate.
+    /// What a boss's death does: the Yeti's raises the cyclone on the summit; the monster's is only noted.
     fn boss_slain(&mut self, boss: &Animal) {
         match boss.kind {
             AnimalKind::Yeti => {
@@ -1349,13 +1442,13 @@ impl Game {
                 self.toasts.push("The Yeti is slain. A cyclone rises on the summit.".to_string());
             }
             AnimalKind::LochNessMonster => {
-                let nearest = self.world.landmarks.lakes.iter().copied().filter(|l| l.has_castle()).min_by(|a, b| {
+                let nearest = self.world.landmarks.lakes.iter().copied().filter(|l| l.has_tower()).min_by(|a, b| {
                     let d = |l: &Lake| (l.x as f32 - boss.home.x).powi(2) + (l.z as f32 - boss.home.z).powi(2);
                     d(a).partial_cmp(&d(b)).unwrap_or(std::cmp::Ordering::Equal)
                 });
                 if let Some(lake) = nearest {
-                    self.world.open_lake_gate(&lake);
-                    self.toasts.push("The Loch Ness Monster is slain. The castle gate swings open.".to_string());
+                    self.world.record_monster_slain(&lake);
+                    self.toasts.push("The Loch Ness Monster is slain.".to_string());
                 }
             }
             _ => {}
@@ -1403,9 +1496,9 @@ impl Game {
             return None;
         }
         let over = &self.parked(Dimension::Overworld)?.world;
-        let (sx, sz) = over.landmarks.summit()?;
-        let summit = vec3(sx as f32 + 0.5, (over.ground_top(sx, sz) + 1) as f32, sz as f32 + 0.5);
-        Some((over, eye - skylands::spawn_point() + summit))
+        let (jx, jz) = crate::terrain::jungle_centre(self.info.seed);
+        let landing = vec3(jx as f32 + 0.5, (over.ground_top(jx, jz) + 1) as f32 + SKY_FALL_DROP, jz as f32 + 0.5);
+        Some((over, eye - skylands::spawn_point() + landing))
     }
 
     /// Carry the player up through the cyclone into the Skylands, arriving in a fading white.
@@ -1433,6 +1526,31 @@ impl Game {
         self.toasts.push("The cyclone sets you down on the summit.".to_string());
     }
 
+    /// The dry column nearest the middle of the jungle, where a fall out of the Skylands lands.
+    pub fn jungle_landing(&self) -> (i32, i32) {
+        let (cx, cz) = crate::terrain::jungle_centre(self.info.seed);
+        for r in 0..40_i32 {
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    if dx.abs().max(dz.abs()) == r && !self.world.is_wet_column(cx + dx, cz + dz) {
+                        return (cx + dx, cz + dz);
+                    }
+                }
+            }
+        }
+        (cx, cz)
+    }
+
+    /// Make the jungle's chunks in the parked overworld, so that it is there to show behind the white screen of a fall.
+    fn prepare_jungle_backdrop(&mut self) {
+        let (jx, jz) = crate::terrain::jungle_centre(self.info.seed);
+        if let Some(a) = [&mut self.away, &mut self.shelf].into_iter().flatten().find(|a| a.world.dimension == Dimension::Overworld) {
+            let pos = vec3(jx as f32 + 0.5, a.world.ground_top(jx, jz) as f32 + 1.0 + SKY_FALL_DROP, jz as f32 + 0.5);
+            a.world.stream_chunks(pos);
+            a.world.rebuild_dirty(pos, usize::MAX);
+        }
+    }
+
     /// Advance the cyclone (five seconds inside it carries the player through), a fall off an island, and the white screen.
     /// Call once a frame.
     pub fn update_travel(&mut self, dt: f32) {
@@ -1443,7 +1561,8 @@ impl Game {
                     // Wholly white now: the player leaves the Skylands and is put high above the normal world's spawn point,
                     // to fall back on to it.
                     self.travel_to(Dimension::Overworld);
-                    self.player.pos = Player::new().pos + vec3(0.0, SKY_FALL_DROP, 0.0);
+                    let (jx, jz) = self.jungle_landing();
+                    self.player.pos = vec3(jx as f32 + 0.5, self.world.ground_top(jx, jz) as f32 + 1.0 + SKY_FALL_DROP, jz as f32 + 0.5);
                     self.player.vel = Vec3::ZERO;
                     self.player.knock = Vec3::ZERO;
                     self.world.stream_chunks(self.player.pos);
@@ -1454,6 +1573,7 @@ impl Game {
             self.whiteout = (w.elapsed < w.duration()).then_some(w);
         }
         if self.in_skylands() && self.whiteout.is_none() && self.player.pos.y < SKY_VOID_Y {
+            self.prepare_jungle_backdrop();
             self.whiteout = Some(Whiteout { elapsed: 0.0, kind: WhiteoutKind::Fall { moved: false } });
             self.toasts.push("You fall from the island.".to_string());
         }
@@ -4079,16 +4199,16 @@ mod landmark_tests {
         assert_eq!(g.world.block_at(wx, GROUND_TOP - LAKE_DEPTH, wz), Block::Dirt);
         assert_eq!(g.world.block_at(wx, GROUND_TOP + 1, wz), Block::Air);
         assert!(g.world.is_wet_column(wx, wz));
-        // In the middle is an island: a hill of dry ground with a flat top, and a castle on the top.
+        // In the middle is an island: a hill of dry ground with a flat top, and a silver tower on the top.
         load_column(&mut g, lake.x + 30, lake.z);
-        load_column(&mut g, lake.x + CASTLE_WALL_HALF, lake.z);
+        load_column(&mut g, lake.x + TOWER_HALF, lake.z);
         load_column(&mut g, lake.x, lake.z);
         assert!(!g.world.is_wet_column(lake.x, lake.z) && !g.world.is_wet_column(lake.x + 30, lake.z));
         let top = GROUND_TOP + ISLAND_HILL_HEIGHT;
         assert_eq!(g.world.ground_top(lake.x, lake.z), top, "the island is a hill with a flat top");
         let slope = g.world.ground_top(lake.x + 30, lake.z);
         assert!(slope > GROUND_TOP && slope < top, "and its side slopes down to the water: {slope}");
-        assert_eq!(g.world.block_at(lake.x + CASTLE_WALL_HALF, top + 1, lake.z), Block::CastleStone);
+        assert_eq!(g.world.block_at(lake.x + TOWER_HALF, top + 1, lake.z), Block::SilverStone);
         // The channel leaves the column the player stood in and runs to the lake, all of it water.
         let (px, pz) = (at.0.floor() as i32, at.1.floor() as i32);
         assert!(g.world.is_wet_column(px, pz));
@@ -4965,7 +5085,7 @@ mod totem_horizen_and_wear_tests {
             g.update_blackout(1.0 / 60.0);
         }
         assert!(g.blackout.is_none() && !g.world.night, "the red stew brings day to the Horizen");
-        for item in [ItemKind::PeepStone, ItemKind::BoneTotem, ItemKind::Compass] {
+        for item in [ItemKind::BoneTotem, ItemKind::Compass] {
             hold(&mut g, item);
             for _ in 0..3 {
                 g.update_landmarks();
@@ -5210,7 +5330,7 @@ mod boss_and_skylands_tests {
     }
 
     fn gate_cell(g: &Game, lake: &Lake) -> Block {
-        let (x, z) = (lake.x, lake.z + CASTLE_WALL_HALF);
+        let (x, z) = (lake.x, lake.z + TOWER_HALF);
         g.world.block_at(x, g.world.ground_top(x, z) + 1, z)
     }
 
@@ -5219,7 +5339,7 @@ mod boss_and_skylands_tests {
         let mut g = game();
         let lake = lake();
         g.world.add_lake(lake);
-        let (x, z) = (lake.x, lake.z + CASTLE_WALL_HALF + 4);
+        let (x, z) = (lake.x, lake.z + TOWER_HALF + 4);
         g.player.pos = vec3(x as f32 + 0.5, g.world.ground_top(x, z) as f32 + 1.01, z as f32 + 0.5);
         g.world.stream_chunks(g.player.pos);
         g.world.rebuild_dirty(g.player.pos, usize::MAX);
@@ -5355,7 +5475,7 @@ mod boss_and_skylands_tests {
     }
 
     #[test]
-    fn falling_off_an_island_whites_out_the_screen_and_drops_the_player_from_fifty_blocks_above_the_normal_worlds_spawn() {
+    fn falling_off_an_island_whites_out_the_screen_and_drops_the_player_from_fifty_blocks_above_the_jungle() {
         let mut g = on_the_summit();
         g.enter_skylands();
         g.whiteout = None;
@@ -5371,10 +5491,12 @@ mod boss_and_skylands_tests {
             g.update_travel(0.05);
             t += 0.05;
         }
-        let spawn = Player::new().pos;
+        let (jx, jz) = g.jungle_landing();
         assert!(g.in_overworld(), "the fall ends in the normal world");
-        assert!((g.player.pos.x - spawn.x).abs() < 0.01 && (g.player.pos.z - spawn.z).abs() < 0.01);
-        assert!((g.player.pos.y - (spawn.y + SKY_FALL_DROP)).abs() < 1.0, "50 blocks above: {}", g.player.pos.y);
+        assert!((g.player.pos.x - (jx as f32 + 0.5)).abs() < 0.01 && (g.player.pos.z - (jz as f32 + 0.5)).abs() < 0.01, "in the jungle");
+        assert!(crate::terrain::in_jungle(g.info.seed, jx, jz));
+        let ground = g.world.ground_top(jx, jz) as f32;
+        assert!((g.player.pos.y - (ground + 1.0 + SKY_FALL_DROP)).abs() < 1.0, "50 blocks above: {}", g.player.pos.y);
         assert!(g.white_alpha() > 0.8, "still white as the fall begins");
         // Let them fall back onto the ground at the spawn point; the white clears.
         for _ in 0..((SKY_FALL_FADE_OUT + 1.0) * 60.0) as i32 {
@@ -5384,7 +5506,7 @@ mod boss_and_skylands_tests {
         }
         assert!(g.whiteout.is_none() && g.white_alpha() == 0.0);
         assert!(g.in_overworld() && g.overworld_backdrop(g.player.eye()).is_none());
-        assert!((g.player.pos.y - spawn.y).abs() < 1.5, "landed at the normal world's spawn at {}", g.player.pos.y);
+        assert!((g.player.pos.y - (ground + 1.0)).abs() < 1.5, "landed in the jungle's clearing at {}", g.player.pos.y);
     }
 
     #[test]
@@ -5446,23 +5568,31 @@ mod boss_and_skylands_tests {
     }
 
     #[test]
-    fn the_castle_gate_is_shut_until_the_monster_is_dead() {
+    fn the_towers_door_is_locked_until_a_silver_key_is_used_and_the_monster_is_a_separate_matter() {
         let (mut g, lake) = at_the_castle();
-        assert_eq!(gate_cell(&g, &lake), Block::CastleDoor, "shut");
-        let (x, z) = (lake.x + 1, lake.z + CASTLE_WALL_HALF);
-        for dy in 1..=4 {
-            assert_eq!(g.world.block_at(x, g.world.ground_top(x, z) + dy, z), if dy <= 4 { Block::CastleDoor } else { Block::Air }, "the whole opening is shut");
-        }
-        assert_eq!(g.world.block_at(lake.x, g.world.ground_top(lake.x, lake.z + CASTLE_WALL_HALF) + 5, lake.z + CASTLE_WALL_HALF), Block::CastleStone, "the wall above it is as before");
-        // Kill its monster.
+        assert_eq!(gate_cell(&g, &lake), Block::TowerDoor, "locked");
+        let (x, z) = (lake.x, lake.z + TOWER_HALF);
+        let door = (x, g.world.ground_top(x, z) + 1, z);
+        // Without the key the door stays shut, and says what it needs.
+        assert!(!g.try_unlock(door) && gate_cell(&g, &lake) == Block::TowerDoor);
+        assert!(g.can_interact(Block::TowerDoor) == false);
+        // Kill its monster: the door does not open.
         g.spawn_bosses();
         let i = g.animals.iter().position(|a| a.kind == AnimalKind::LochNessMonster).expect("the monster rises");
         g.hurt_animals(&[(i, 10_000)]);
-        assert_eq!(gate_cell(&g, &lake), Block::Air, "open");
         assert!(g.world.landmarks.monsters_slain.contains(&(lake.x, lake.z)));
+        assert_eq!(gate_cell(&g, &lake), Block::TowerDoor, "still locked");
         g.spawn_bosses();
         assert!(g.animals.iter().all(|a| a.kind != AnimalKind::LochNessMonster), "it does not come back");
-        // The gate stays open after a reload.
+        // A silver key in the hand opens both halves of the door for good, and is used up.
+        g.inventory.slots[g.selected] = Some(crate::item::ItemStack { kind: ItemKind::SilverKey, count: 2 });
+        assert!(g.can_interact(Block::TowerDoorTop));
+        let hit = Hit { x: door.0, y: door.1 + 1, z: door.2, block: Block::TowerDoorTop, prev: (door.0, door.1 + 1, door.2 + 1) };
+        assert!(g.use_held(&hit));
+        assert_eq!(gate_cell(&g, &lake), Block::Air, "open");
+        assert_eq!(g.world.block_at(door.0, door.1 + 1, door.2), Block::Air);
+        assert_eq!(g.inventory.count(ItemKind::SilverKey), 1, "one key is used up");
+        // The door stays open after a reload.
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let mut again = Game::from_save(info, parse_save(&g.save_text()), 3);
         again.world.stream_chunks(g.player.pos);
@@ -5494,5 +5624,132 @@ mod boss_and_skylands_tests {
             g.player.pos.y = g.world.ground_top(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32) as f32 + 1.01;
         }
         assert!(closest < start_gap, "it swims towards the player on the shore ({start_gap} -> {closest})");
+    }
+}
+
+#[cfg(test)]
+mod silver_tower_tests {
+    use super::*;
+    use crate::item::ItemStack;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        Game::from_save(info, SaveData::new(), 5)
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind) {
+        g.inventory.slots[0] = Some(ItemStack { kind, count: 1 });
+        g.select_slot(0);
+    }
+
+    #[test]
+    fn a_peep_stone_by_day_in_the_horizen_brings_out_one_tower_and_a_trail_to_it() {
+        let mut g = game();
+        g.enter_horizen();
+        g.world.night = false;
+        assert!(!g.try_show_horizen_tower(), "no peep stone in hand");
+        hold(&mut g, ItemKind::PeepStone);
+        assert_eq!(g.trail_path(), None, "nothing out there yet");
+        assert!(g.try_show_horizen_tower());
+        let tower = g.world.landmarks.horizen_tower.expect("the tower is out");
+        let (dx, dz) = ((tower.x as f32 - g.player.pos.x).abs(), (tower.z as f32 - g.player.pos.z).abs());
+        assert!(dx.max(dz) >= tower_distance_for_test(), "beyond the generated land: {dx} {dz}");
+        assert!(horizen::site_is_dry(g.info.seed, tower.x, tower.z), "on dry ground");
+        let path = g.trail_path().expect("the peep stone leads there");
+        assert_eq!(path.last().copied(), Some(tower.middle()));
+        assert!(!g.try_show_horizen_tower(), "only one");
+        // By night the peep stone shows nothing in the Horizen.
+        g.world.night = true;
+        assert_eq!(g.trail_path(), None);
+        // The tower is built where the trail ends, and it survives a save and reload with its door unlocked.
+        g.world.night = false;
+        g.world.unlock_tower(tower.x, tower.z);
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        let horizen = again.parked(Dimension::Overworld).map(|_| ()).and(Some(())).map(|_| &again.world).unwrap_or(&again.world);
+        assert_eq!(horizen.landmarks.horizen_tower, Some(tower));
+        assert!(horizen.landmarks.is_unlocked(tower.x, tower.z));
+    }
+
+    fn tower_distance_for_test() -> f32 {
+        crate::tower::tower_distance() as f32
+    }
+
+    #[test]
+    fn the_tenth_new_island_in_the_skylands_brings_the_tower_to_the_next_island_to_appear() {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.player.on_ground = true;
+        let seed = g.info.seed;
+        let mut count = 0;
+        // Walk onto islands one by one; nine are not enough.
+        for cell in [(0, 0), (1, 0), (2, 0), (3, 0), (3, 1), (2, 1), (1, 1), (0, 1), (-1, 1), (-1, 0)] {
+            if count == SKY_TOWER_VISITS - 1 {
+                g.update_sky_tower();
+                assert!(g.world.landmarks.sky_tower.is_none(), "nine islands are not enough");
+            }
+            let island = skylands::island_in_cell(seed, cell.0, cell.1);
+            g.player.pos = vec3(island.x as f32 + 0.5, island.top as f32 + 1.01, island.z as f32 + 0.5);
+            g.update_sky_tower();
+            count += 1;
+        }
+        assert_eq!(g.world.landmarks.sky_visited.len(), SKY_TOWER_VISITS);
+        let cell = g.world.landmarks.sky_tower.expect("the tenth island brings the tower");
+        assert!(!g.world.landmarks.sky_visited.contains(&cell) && cell != (0, 0));
+        let island = skylands::island_in_cell(seed, cell.0, cell.1);
+        assert!(!g.world.chunks.contains_key(&World::chunk_of(island.x, island.z)), "it is the next to appear: not made yet");
+        // Its chunks hold a locked tower with the Horn of the Hunt at the top; no other island has one.
+        g.world.ensure_chunk(World::chunk_of(island.x, island.z).0, World::chunk_of(island.x, island.z).1);
+        assert_eq!(g.world.block_at(island.x, island.top + 1 + TOWER_STOREY * (TOWER_STOREYS - 1), island.z), Block::HornPlinth);
+        let door_chunk = World::chunk_of(island.x, island.z + TOWER_HALF);
+        g.world.ensure_chunk(door_chunk.0, door_chunk.1);
+        assert_eq!(g.world.block_at(island.x, island.top + 1, island.z + TOWER_HALF), Block::TowerDoor);
+        // Only one tower is ever brought out.
+        g.update_sky_tower();
+        assert_eq!(g.world.landmarks.sky_tower, Some(cell));
+    }
+
+    #[test]
+    fn in_the_horizen_and_the_skylands_the_compass_points_to_where_the_player_arrived() {
+        let mut g = game();
+        g.enter_horizen();
+        g.player.pos = vec3(HORIZEN_SPAWN.0 as f32 + 40.5, 6.0, HORIZEN_SPAWN.1 as f32 + 0.5);
+        assert!((g.compass_bearing().abs() - std::f32::consts::PI).abs() < 0.01, "the spawn lies west: {}", g.compass_bearing());
+        g.travel_to(Dimension::Overworld);
+        assert_eq!(g.compass_bearing(), COMPASS_NORTH_BEARING, "north in the overworld until a mountain is out");
+        g.travel_to(Dimension::Skylands);
+        let spawn = skylands::spawn_point();
+        g.player.pos = spawn + vec3(0.0, 0.0, -30.0);
+        assert!((g.compass_bearing() - std::f32::consts::FRAC_PI_2).abs() < 0.01, "the arrival island lies south: {}", g.compass_bearing());
+    }
+
+    #[test]
+    fn a_deer_leaves_two_bones_one_time_in_five() {
+        let mut rng = Rng::new(21);
+        let trials = 20_000;
+        let mut hits = 0;
+        for _ in 0..trials {
+            let drops = AnimalKind::Deer.drops(&mut rng);
+            let bones = drops.iter().filter(|&&k| k == ItemKind::DeerBone).count();
+            assert!(bones == 0 || bones == DEER_BONE_DROP as usize);
+            hits += (bones > 0) as usize;
+        }
+        let rate = hits as f64 / trials as f64;
+        assert!((rate - 0.20).abs() < 0.015, "bone rate {rate}");
+        assert!(AnimalKind::Quail.drops(&mut rng).iter().all(|&k| k != ItemKind::DeerBone));
+    }
+
+    #[test]
+    fn taking_a_relic_off_its_plinth_gives_it_once() {
+        let mut g = game();
+        for (block, item) in [(Block::StonePlinth, ItemKind::PhilosophersStone), (Block::HornPlinth, ItemKind::HornOfTheHunt), (Block::CrownPlinth, ItemKind::AncientCrown)] {
+            let mut rng = Rng::new(1);
+            assert_eq!(crate::item::drops_for(block, &mut rng), vec![item]);
+        }
+        assert_eq!(crate::item::drops_for(Block::KeyStand, &mut Rng::new(1)), vec![ItemKind::SilverKey]);
+        assert_eq!(crate::item::drops_for(Block::PinkSalt, &mut Rng::new(1)), vec![ItemKind::PinkSalt; PINK_SALT_DROP as usize]);
+        g.inventory.slots[0] = None;
+        assert!(Block::PinkSalt.can_break_with(None), "salt is taken by hand");
     }
 }

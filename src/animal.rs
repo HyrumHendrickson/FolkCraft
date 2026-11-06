@@ -197,6 +197,9 @@ impl AnimalKind {
             AnimalKind::Deer => {
                 add(ItemKind::Venison, DEER_VENISON_DROP);
                 add(ItemKind::Leather, DEER_LEATHER_DROP);
+                if rng.chance(DEER_BONE_CHANCE) {
+                    add(ItemKind::DeerBone, DEER_BONE_DROP);
+                }
             }
             AnimalKind::Quail => {
                 add(ItemKind::Poultry, QUAIL_POULTRY_DROP);

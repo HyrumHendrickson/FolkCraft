@@ -5,7 +5,7 @@
 //!
 //! - A **lake** appears when the player has walked ten chunks through a river without leaving the water. It is a
 //!   large wavy basin, one block deep like a river, joined to the river by a straight channel. In the middle is a
-//!   large island: a hill with a flat top, and on the flat top stands a small castle.
+//!   large island: a hill with a flat top, and on the flat top stands a silver tower (`tower.rs`).
 //! - The world's one **mountain** appears when the player has followed a held compass north for ten chunks. It is
 //!   tall, can be climbed one block at a time, and is capped with snow. Rings of cliff (ledges) break its slope, each
 //!   with one gap, the gaps on alternate sides, so it has to be climbed in a zigzag. Once it is there the compass
@@ -17,6 +17,9 @@
 //!   beyond the edge of the land, which the peep stone's ghostly trail leads to. It is whole and shut by night and a
 //!   ruin by day (`grand_castle_cell`): the gate, the stair to the second floor and the door of the throne room are
 //!   open or closed the opposite way round, and the royal armour lies in the throne room only at night.
+//! - Two more silver towers stand in the other dimensions: one on an island of the Skylands (`Landmarks::sky_tower`, brought
+//!   out by walking on ten islands) and one on the plain of the Horizen (`Landmarks::horizen_tower`, which a peep stone leads
+//!   to by day). Each has a door locked until a silver key from the mines has been used on it (`towers_unlocked`).
 //! - A **well** (by day) and a **graveyard** (by night) each appear once, when the player holds a bone totem at that
 //!   time of day; the totem's ghostly trail leads to whichever of them is out there. The well is a deep square of
 //!   water: whoever falls in is taken to the Horizen (`horizen.rs`).
@@ -27,6 +30,7 @@
 use crate::block::Block;
 use crate::config::*;
 use crate::rng::hash3;
+use crate::tower::{self, Relic, Tower};
 use crate::world::Pos;
 
 /// Tallest a mountain can be: its summit and the cell above it must lie inside the world.
@@ -59,7 +63,7 @@ fn distance_to_segment(px: f32, pz: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
     ((px - (a.0 + t * dx)).powi(2) + (pz - (a.1 + t * dz)).powi(2)).sqrt()
 }
 
-/// A lake: a large wavy basin of shallow water with a large island in the middle (and a castle on the island) and,
+/// A lake: a large wavy basin of shallow water with a large island in the middle (and a silver tower on the island) and,
 /// running out of it, the channel that joins it to the river the player walked up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lake {
@@ -92,10 +96,10 @@ impl Lake {
         self.radius as f32 * LAKE_ISLAND_SHARE
     }
 
-    /// Whether the island is big enough, even at its narrowest, to hold the castle with room to spare. Small
-    /// lakes (there are none in play, but a saved or hand-made one can be small) have an island and no castle.
-    pub fn has_castle(&self) -> bool {
-        self.island_radius() * 0.75 >= CASTLE_REACH as f32 * std::f32::consts::SQRT_2 + 2.0
+    /// Whether the island is big enough, even at its narrowest, to hold the tower with room to spare. Small
+    /// lakes (there are none in play, but a saved or hand-made one can be small) have an island and no tower.
+    pub fn has_tower(&self) -> bool {
+        self.island_radius() * 0.75 >= ISLAND_PLATEAU_RADIUS * 0.9
     }
 
     /// Blocks from the column (wx, wz) to the outer shore of the lake, island included: negative inside it
@@ -124,11 +128,11 @@ impl Lake {
     }
 
     /// How many blocks the island hill raises the ground at the column (wx, wz): nothing off the island or on a
-    /// lake too small for a castle, the full `ISLAND_HILL_HEIGHT` on the flat top (a disc of `ISLAND_PLATEAU_RADIUS`
-    /// round the centre, which the castle stands on) and a slope between, steady enough to be climbed one block
+    /// lake too small for a tower, the full `ISLAND_HILL_HEIGHT` on the flat top (a disc of `ISLAND_PLATEAU_RADIUS`
+    /// round the centre, which the tower stands on) and a slope between, steady enough to be climbed one block
     /// at a time.
     pub fn hill_rise(&self, wx: i32, wz: i32) -> i32 {
-        if !self.has_castle() {
+        if !self.has_tower() {
             return 0;
         }
         let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
@@ -167,75 +171,20 @@ impl Lake {
         )
     }
 
-    /// What the castle is made of in the cell `dy` blocks above the island's ground at the column (wx, wz):
-    /// `Some(Block::CastleStone)` for a wall, `Some(Block::Air)` for a cell the castle keeps empty, `None` outside the
-    /// castle's square or on a lake with no castle. With `gate_shut` the opening of the outer wall's gate is `Block::CastleDoor`
-    /// instead, as it is while the monster of the lake still lives (see `Landmarks::gate_shut`).
-    pub fn castle_cell(&self, wx: i32, wz: i32, dy: i32, gate_shut: bool) -> Option<Block> {
-        if !self.has_castle() || !(0..CASTLE_HEIGHT).contains(&dy) {
+    /// What the tower is made of in the cell `dy` blocks above the island's ground at the column (wx, wz) (see
+    /// `tower::tower_cell`): `None` outside the tower's square or on a lake with no tower. With `locked` the doorway is
+    /// shut by `Block::TowerDoor`, as it is until a silver key has been used on it (see `Landmarks::tower_locked`).
+    pub fn tower_cell(&self, wx: i32, wz: i32, dy: i32, locked: bool) -> Option<Block> {
+        if !self.has_tower() {
             return None;
         }
-        let (dx, dz) = (wx - self.x, wz - self.z);
-        if dx.abs() > CASTLE_REACH || dz.abs() > CASTLE_REACH {
-            return None;
-        }
-        Some(if castle_is_solid(dx, dz, dy) {
-            Block::CastleStone
-        } else if gate_shut && is_outer_gate(dx, dz, dy) {
-            Block::CastleDoor
-        } else {
-            Block::Air
-        })
+        tower::tower_cell(wx - self.x, wz - self.z, dy, locked, Relic::PhilosophersStone)
     }
 
-    /// Whether the column (wx, wz) is within `margin` blocks of the castle's square.
-    pub fn near_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
-        self.has_castle() && (wx - self.x).abs() <= CASTLE_REACH + margin && (wz - self.z).abs() <= CASTLE_REACH + margin
+    /// Whether the column (wx, wz) is within `margin` blocks of the tower's square.
+    pub fn near_tower(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.has_tower() && tower::near(wx - self.x, wz - self.z, margin)
     }
-}
-
-/// Whether the cell is part of the opening of the outer wall's gate (in the south side, three blocks wide).
-fn is_outer_gate(dx: i32, dz: i32, dy: i32) -> bool {
-    dz == CASTLE_WALL_HALF && dx.abs() <= 1 && (0..=3).contains(&dy)
-}
-
-/// The shape of the castle, in blocks from its centre (`dx`, `dz`) and above the ground (`dy`, 0 is the first layer of
-/// air). Seen from above: an outer wall `CASTLE_WALL_HALF` blocks from the centre on each side, with a gate in the
-/// south side (towards +z) three blocks wide; a solid five-block tower at each corner; and in the middle a keep, a
-/// seven-block square building with a door in its south side and a roof. All of it ends in battlements: every other
-/// block along the top is left out.
-fn castle_is_solid(dx: i32, dz: i32, dy: i32) -> bool {
-    let (ax, az) = (dx.abs(), dz.abs());
-    let merlon = (dx + dz).rem_euclid(2) == 0;
-    let wall = CASTLE_WALL_HALF;
-    // The corner towers.
-    if (ax - wall).abs() <= 2 && (az - wall).abs() <= 2 {
-        return dy <= 9 || (dy == 10 && merlon);
-    }
-    // The outer wall, with its gate.
-    if ax.max(az) == wall {
-        if dz == wall && ax <= 1 && dy <= 3 {
-            return false;
-        }
-        return dy <= 5 || (dy == 6 && merlon);
-    }
-    // The keep: walls, a door, a roof, battlements.
-    if ax <= 3 && az <= 3 {
-        let shell = ax == 3 || az == 3;
-        if dy == 8 {
-            return true;
-        }
-        if dy == 9 {
-            return shell && merlon;
-        }
-        if dy <= 7 {
-            if dz == 3 && dx == 0 && dy <= 2 {
-                return false;
-            }
-            return shell;
-        }
-    }
-    false
 }
 
 /// A mountain: ground raised in a smooth, lopsided heap, steep enough to be tall and gentle enough to climb.
@@ -354,7 +303,7 @@ impl GrandCastle {
     }
 
     /// What the castle is made of in the cell `dy` blocks above the ground at the column (wx, wz), by night or by day:
-    /// see `grand_castle_cell` and `Lake::castle_cell`. `None` outside the castle's square or above its tallest tower.
+    /// see `grand_castle_cell` and `Lake::tower_cell`. `None` outside the castle's square or above its tallest tower.
     pub fn castle_block(&self, wx: i32, wz: i32, dy: i32, night: bool) -> Option<Block> {
         if !(0..GRAND_HEIGHT).contains(&dy) || !self.near(wx, wz, 0) {
             return None;
@@ -750,8 +699,18 @@ pub struct Landmarks {
     pub graveyard: Option<Graveyard>,
     /// Whether the Yeti on the mountain's summit has been killed (a cyclone then stands there).
     pub yeti_slain: bool,
-    /// The lakes (by their centre) whose Loch Ness Monster has been killed: the gate of their castle is open.
+    /// The lakes (by their centre) whose Loch Ness Monster has been killed.
     pub monsters_slain: Vec<(i32, i32)>,
+    /// The silver towers whose door has been unlocked, by the column of their centre (a lake's centre for the tower on its
+    /// island). Each world keeps its own: the Skylands and the Horizen have theirs.
+    pub towers_unlocked: Vec<(i32, i32)>,
+    /// The Horizen's one silver tower, once a peep stone has been held by day there. Only the Horizen has one.
+    pub horizen_tower: Option<Tower>,
+    /// The Skylands' one silver tower: the grid cell of the island it stands on, once it has been brought out. Only the
+    /// Skylands have one.
+    pub sky_tower: Option<(i32, i32)>,
+    /// The grid cells of the Skylands' islands the player has walked on.
+    pub sky_visited: Vec<(i32, i32)>,
 }
 
 impl Landmarks {
@@ -804,16 +763,29 @@ impl Landmarks {
         self.mountain().map(|m| (m.x, m.z))
     }
 
-    /// Whether the gate of the lake's castle is shut: it is, until the lake's monster has been killed.
-    pub fn gate_shut(&self, lake: &Lake) -> bool {
-        lake.has_castle() && !self.monsters_slain.contains(&(lake.x, lake.z))
+    /// Whether the door of the tower on the lake's island is still locked: it is, until a silver key has been used on it.
+    pub fn tower_locked(&self, lake: &Lake) -> bool {
+        lake.has_tower() && !self.towers_unlocked.contains(&(lake.x, lake.z))
     }
 
-    /// Whether the castle of `lake` can touch the chunk (cx, cz).
-    pub fn lake_castle_touches_chunk(lake: &Lake, cx: i32, cz: i32) -> bool {
-        let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
-        let (x1, z1) = (x0 + CHUNK_SIZE - 1, z0 + CHUNK_SIZE - 1);
-        lake.has_castle() && lake.x - CASTLE_REACH <= x1 && lake.x + CASTLE_REACH >= x0 && lake.z - CASTLE_REACH <= z1 && lake.z + CASTLE_REACH >= z0
+    /// Whether the lake has a Loch Ness Monster still alive (every lake with a tower has one until it is killed).
+    pub fn monster_alive(&self, lake: &Lake) -> bool {
+        lake.has_tower() && !self.monsters_slain.contains(&(lake.x, lake.z))
+    }
+
+    /// Whether the tower centred on the column (x, z) has been unlocked.
+    pub fn is_unlocked(&self, x: i32, z: i32) -> bool {
+        self.towers_unlocked.contains(&(x, z))
+    }
+
+    /// Note that the player has walked on the Skylands island of grid cell `cell`. Returns whether it is one they had not
+    /// walked on before.
+    pub fn note_sky_visit(&mut self, cell: (i32, i32)) -> bool {
+        if self.sky_visited.contains(&cell) {
+            return false;
+        }
+        self.sky_visited.push(cell);
+        true
     }
 
     /// The world's one mountain, if it has come out yet. (A save made when mountains could be many holds more than
@@ -843,10 +815,10 @@ impl Landmarks {
         self.near_grand_castle(wx, wz, 2) || self.near_well(wx, wz, 3) || self.near_graveyard(wx, wz, 2)
     }
 
-    /// Whether no tree may grow at the column (wx, wz): the castles stand in clearings, and so do the well and the
+    /// Whether no tree may grow at the column (wx, wz): the towers and castles stand in clearings, and so do the well and the
     /// graveyard.
     pub fn keeps_trees_out(&self, wx: i32, wz: i32) -> bool {
-        self.near_castle(wx, wz, CASTLE_TREE_MARGIN)
+        self.near_tower(wx, wz, TOWER_TREE_MARGIN)
             || self.near_grand_castle(wx, wz, GRAND_TREE_MARGIN)
             || self.near_well(wx, wz, WELL_TREE_MARGIN)
             || self.near_graveyard(wx, wz, GRAVEYARD_TREE_MARGIN)
@@ -881,9 +853,9 @@ impl Landmarks {
         lakes.chain(mountains).chain(castle).chain(well).chain(graveyard).map(|d| smoothstep(d / blend)).fold(1.0, f32::min)
     }
 
-    /// Whether the column (wx, wz) is within `margin` blocks of the square a castle stands in.
-    pub fn near_castle(&self, wx: i32, wz: i32, margin: i32) -> bool {
-        self.lakes.iter().any(|l| l.near_castle(wx, wz, margin))
+    /// Whether the column (wx, wz) is within `margin` blocks of the square a lake's tower stands in.
+    pub fn near_tower(&self, wx: i32, wz: i32, margin: i32) -> bool {
+        self.lakes.iter().any(|l| l.near_tower(wx, wz, margin))
     }
 
     /// Whether any lake or mountain (with the margin the hills fade over) can touch the chunk (cx, cz).
@@ -1093,48 +1065,31 @@ mod tests {
     }
 
     #[test]
-    fn the_castle_stands_in_the_middle_of_the_island_with_a_gate_and_a_door() {
+    fn the_tower_stands_in_the_middle_of_the_island_with_a_locked_door_in_its_south_side() {
         let l = Lake { x: 100, z: -50, radius: LAKE_RADIUS, phase: 5, from: (0, 0) };
-        assert!(l.has_castle());
-        // Every column of the castle's square is dry island, with room to spare.
-        for dz in -CASTLE_REACH - 3..=CASTLE_REACH + 3 {
-            for dx in -CASTLE_REACH - 3..=CASTLE_REACH + 3 {
-                assert!(!l.contains(l.x + dx, l.z + dz), "water at the castle's foot: {dx},{dz}");
+        assert!(l.has_tower());
+        // Every column of the tower's square is dry island, with room to spare.
+        for dz in -TOWER_REACH - 3..=TOWER_REACH + 3 {
+            for dx in -TOWER_REACH - 3..=TOWER_REACH + 3 {
+                assert!(!l.contains(l.x + dx, l.z + dz), "water at the tower's foot: {dx},{dz}");
             }
         }
-        let at = |dx: i32, dz: i32, dy: i32| l.castle_cell(l.x + dx, l.z + dz, dy, false);
-        let wall = Some(Block::CastleStone);
-        assert_eq!(at(8, 0, 0), wall, "the east wall");
-        assert_eq!(at(-8, 3, 5), wall);
-        assert_eq!(at(0, -8, 0), wall, "the north wall");
-        assert_eq!(at(0, 8, 0), Some(Block::Air), "the gate in the south wall, three wide");
-        assert_eq!(at(1, 8, 3), Some(Block::Air));
-        assert_eq!(at(-1, 8, 0), Some(Block::Air));
-        assert_eq!(at(2, 8, 0), wall);
-        assert_eq!(at(0, 8, 4), wall, "and a lintel over it");
-        assert_eq!(at(8, 8, 9), wall, "the corner tower is higher than the wall");
-        assert_eq!(at(7, 0, 8), Some(Block::Air), "the wall is lower than the tower");
-        assert_eq!(at(0, 3, 0), Some(Block::Air), "the door of the keep, on its south side");
-        assert_eq!(at(0, 3, 3), wall);
-        assert_eq!(at(3, 0, 0), wall, "the keep's wall");
-        assert_eq!(at(0, 0, 0), Some(Block::Air), "empty inside the keep");
-        assert_eq!(at(0, 0, 8), wall, "with a roof");
-        assert_eq!(at(0, 5, 0), Some(Block::Air), "the courtyard is open");
-        assert_eq!(at(0, 0, 11), None, "nothing above the castle");
-        assert_eq!(l.castle_cell(l.x + CASTLE_REACH + 1, l.z, 0, false), None, "nothing outside its square");
-        // Walls and floor leave a way in: from the gate to the keep door the cells are all open, a man's height.
-        for dz in 3..=8 {
-            for dy in 0..2 {
-                assert_eq!(at(0, dz, dy), Some(Block::Air), "the way in at {dz},{dy}");
-            }
-        }
+        let at = |dx: i32, dz: i32, dy: i32, locked: bool| l.tower_cell(l.x + dx, l.z + dz, dy, locked);
+        assert_eq!(at(TOWER_HALF, 0, 0, true), Some(Block::SilverStone), "the east wall");
+        assert_eq!(at(0, TOWER_HALF, 0, true), Some(Block::TowerDoor), "the lock, in the south wall");
+        assert_eq!(at(0, TOWER_HALF, 1, true), Some(Block::TowerDoorTop));
+        assert_eq!(at(0, TOWER_HALF, 0, false), Some(Block::Air), "open once unlocked");
+        assert_eq!(at(0, 0, TOWER_STOREY * (TOWER_STOREYS - 1), true), Some(Block::StonePlinth), "the Philosopher's Stone at the top");
+        assert_eq!(at(0, 0, TOWER_HEIGHT, true), None, "nothing above the battlements");
+        assert_eq!(l.tower_cell(l.x + TOWER_REACH + 1, l.z, 0, true), None, "nothing outside its square");
+        assert!(l.near_tower(l.x + TOWER_REACH + TOWER_TREE_MARGIN, l.z, TOWER_TREE_MARGIN));
     }
 
     #[test]
-    fn a_small_lake_has_an_island_but_no_castle() {
+    fn a_small_lake_has_an_island_but_no_tower() {
         let l = Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) };
-        assert!(!l.has_castle() && l.castle_cell(0, 0, 0, false).is_none());
-        assert!(!l.near_castle(0, 0, 100));
+        assert!(!l.has_tower() && l.tower_cell(0, 0, 0, true).is_none());
+        assert!(!l.near_tower(0, 0, 100));
     }
 
     #[test]
@@ -1246,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn the_island_hill_is_flat_on_top_and_only_on_a_lake_big_enough_for_a_castle() {
+    fn the_island_hill_is_flat_on_top_and_only_on_a_lake_big_enough_for_a_tower() {
         let l = Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 5, from: (0, 0) };
         assert_eq!(l.hill_rise(0, 0), ISLAND_HILL_HEIGHT);
         assert_eq!(l.hill_rise(ISLAND_PLATEAU_RADIUS as i32, 0), ISLAND_HILL_HEIGHT, "the flat top reaches the plateau's edge");
@@ -1255,8 +1210,8 @@ mod tests {
         assert!(l.island_radius() * 0.75 > ISLAND_PLATEAU_RADIUS * 2.0, "a hill much larger than its flat top");
         let small = Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) };
         assert_eq!(small.hill_rise(0, 0), 0, "a small island is flat");
-        // The castle's whole square is on the flat top.
-        let corner = (CASTLE_REACH as f32 * std::f32::consts::SQRT_2).ceil();
+        // The tower's whole square is on the flat top.
+        let corner = (TOWER_REACH as f32 * std::f32::consts::SQRT_2).ceil();
         assert!(corner <= ISLAND_PLATEAU_RADIUS);
     }
 
@@ -1417,7 +1372,7 @@ mod tests {
         assert_eq!(at(0, 0, GRAND_HEIGHT), None, "nothing above the castle");
         assert_eq!(c.castle_block(c.x + GRAND_REACH + 1, c.z, 0, true), None);
         assert!(GRAND_REACH >= GRAND_WALL_HALF + 4 && GRAND_HEIGHT > GRAND_STOREY * GRAND_STOREYS, "the keep's roof fits under the tallest tower");
-        assert!(GRAND_REACH > 2 * CASTLE_REACH && GRAND_STOREYS >= 3);
+        assert!(GRAND_REACH > 2 * TOWER_REACH && GRAND_STOREYS >= 3);
         // The trail leads to the gate and then to the keep's door, both on the south side.
         let (gx, gz) = c.gate_approach();
         let (kx, kz) = c.keep_door();
@@ -1669,34 +1624,50 @@ mod boss_landmark_tests {
     }
 
     #[test]
-    fn the_gate_is_a_shut_door_exactly_where_it_would_be_open() {
+    fn the_door_is_locked_exactly_where_it_would_be_open() {
         let l = lake();
         let mut shut = 0;
-        for dx in -CASTLE_REACH..=CASTLE_REACH {
-            for dz in -CASTLE_REACH..=CASTLE_REACH {
-                for dy in 0..CASTLE_HEIGHT {
-                    let (open, closed) = (l.castle_cell(dx, dz, dy, false), l.castle_cell(dx, dz, dy, true));
+        for dx in -TOWER_REACH..=TOWER_REACH {
+            for dz in -TOWER_REACH..=TOWER_REACH {
+                for dy in 0..TOWER_HEIGHT {
+                    let (open, closed) = (l.tower_cell(dx, dz, dy, false), l.tower_cell(dx, dz, dy, true));
                     if open == closed {
                         continue;
                     }
                     shut += 1;
-                    assert_eq!((open, closed), (Some(Block::Air), Some(Block::CastleDoor)));
-                    assert!(dz == CASTLE_WALL_HALF && dx.abs() <= 1 && dy <= 3, "only the outer gate: {dx},{dz},{dy}");
+                    assert_eq!(open, Some(Block::Air));
+                    assert!(matches!(closed, Some(Block::TowerDoor) | Some(Block::TowerDoorTop)));
+                    assert!(dz == TOWER_HALF && dx == 0 && dy <= 1, "only the door: {dx},{dz},{dy}");
                 }
             }
         }
-        assert_eq!(shut, 3 * 4, "three wide and four high");
+        assert_eq!(shut, 2, "one block wide and two high");
     }
 
     #[test]
-    fn a_lakes_gate_stays_shut_until_its_own_monster_is_slain() {
+    fn a_lakes_tower_stays_locked_until_its_own_key_has_been_used_and_its_monster_is_a_separate_matter() {
         let mut marks = Landmarks::default();
         let other = Lake { x: 500, ..lake() };
-        assert!(marks.gate_shut(&lake()) && marks.gate_shut(&other));
-        marks.monsters_slain.push((0, 0));
-        assert!(!marks.gate_shut(&lake()) && marks.gate_shut(&other));
+        assert!(marks.tower_locked(&lake()) && marks.tower_locked(&other));
+        marks.towers_unlocked.push((0, 0));
+        assert!(!marks.tower_locked(&lake()) && marks.tower_locked(&other));
+        assert!(marks.is_unlocked(0, 0) && !marks.is_unlocked(500, 0));
         let small = Lake { radius: 20, ..lake() };
-        assert!(!marks.gate_shut(&small), "a lake with no castle has no gate");
+        assert!(!marks.tower_locked(&small), "a lake with no tower has no door");
+        // Killing the monster does not open the door, and the key does not kill the monster.
+        assert!(marks.monster_alive(&lake()) && marks.monster_alive(&other));
+        marks.monsters_slain.push((500, 0));
+        assert!(marks.monster_alive(&lake()) && !marks.monster_alive(&other) && marks.tower_locked(&other));
+        assert!(!marks.monster_alive(&small));
+    }
+
+    #[test]
+    fn the_skylands_remember_the_islands_walked_on_and_which_one_has_the_tower() {
+        let mut marks = Landmarks::default();
+        assert!(marks.note_sky_visit((1, 0)) && marks.note_sky_visit((0, 1)));
+        assert!(!marks.note_sky_visit((1, 0)), "an island counts once");
+        assert_eq!(marks.sky_visited.len(), 2);
+        assert_eq!(marks.sky_tower, None);
     }
 
     #[test]

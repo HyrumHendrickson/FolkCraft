@@ -600,13 +600,122 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_line(cx, tl.y + 3.0, cx, p(0.0, 0.56).y, 2.0, lighten(color, 0.24));
             draw_circle(cx, tl.y + 9.0 * u, 3.0 * u, ItemKind::Gold.color());
         }
+        ItemKind::SilverKey => {
+            // A ring for the bow, a long shaft and two teeth at the tip.
+            let bow = p(0.30, 0.30);
+            draw_circle(bow.x, bow.y, 8.5 * u, outline);
+            draw_circle(bow.x, bow.y, 7.0 * u, color);
+            draw_circle(bow.x, bow.y, 3.4 * u, Color::new(0.10, 0.10, 0.13, 1.0));
+            let (from, to) = (p(0.38, 0.38), p(0.80, 0.80));
+            rod(from, to, 4.6 * u, color);
+            for t in [0.66, 0.86] {
+                let at = from + (to - from) * t;
+                rod(at, at + vec2(7.0 * u, -7.0 * u), 3.4 * u, darken(color, 0.9));
+            }
+            draw_line(bow.x - 3.0 * u, bow.y - 5.0 * u, bow.x + 3.0 * u, bow.y - 5.5 * u, 1.2, lighten(color, 0.30));
+        }
+        ItemKind::PinkSalt => {
+            // Three crystals standing together, each a long tip over a faceted body, lit from the upper left.
+            for (fx, base, top, half) in [(0.30, 0.82, 0.38, 0.11), (0.52, 0.86, 0.14, 0.13), (0.72, 0.80, 0.44, 0.10)] {
+                let (l, rt, tip) = (p(fx - half, base), p(fx + half, base), p(fx, top));
+                tri(l, rt, tip, darken(color, 0.86));
+                tri(l, p(fx, base - 0.02), tip, lighten(color, 0.10));
+                draw_line(tip.x, tip.y, p(fx, base).x, p(fx, base).y, 1.0, lighten(color, 0.34));
+            }
+            draw_line(p(0.24, 0.84).x, p(0.24, 0.84).y, p(0.78, 0.84).x, p(0.78, 0.84).y, 2.0, darken(color, 0.62));
+        }
+        ItemKind::PhilosophersStone => {
+            let rad = r.w * 0.28;
+            ball(cx, cy + 1.0, rad, color);
+            // An inner fire, and a gold ring round it like a halo.
+            draw_circle(cx + rad * 0.10, cy + rad * 0.15, rad * 0.55, lighten(color, 0.14));
+            draw_circle(cx - rad * 0.05, cy, rad * 0.26, Color::new(1.0, 0.62, 0.40, 0.85));
+            draw_circle_lines(cx, cy + 1.0, rad * 1.22, 1.6, ItemKind::Gold.color());
+            let g = p(0.38, 0.34);
+            draw_line(g.x - 3.0 * u, g.y, g.x + 3.0 * u, g.y, 1.2, WHITE);
+            draw_line(g.x, g.y - 3.0 * u, g.x, g.y + 3.0 * u, 1.2, WHITE);
+        }
+        ItemKind::AncientCrown => {
+            let (bl, br) = (p(0.18, 0.54), p(0.82, 0.80));
+            slab(bl.x, bl.y, br.x - bl.x, br.y - bl.y, color);
+            // Five points, the middle one the tallest, each with a pearl.
+            for (i, fx) in [0.22, 0.36, 0.50, 0.64, 0.78].into_iter().enumerate() {
+                let height = if i == 2 { 0.16 } else if i % 2 == 0 { 0.26 } else { 0.30 };
+                tri(p(fx - 0.09, 0.56), p(fx + 0.09, 0.56), p(fx, height), lighten(color, 0.06));
+                ball(p(fx, height).x, p(fx, height).y, 2.6 * u, Color::new(0.96, 0.94, 0.90, 1.0));
+            }
+            draw_rectangle(bl.x, p(0.0, 0.62).y, br.x - bl.x, 3.0 * u, darken(color, 0.76));
+            for (fx, jewel) in [(0.30, Color::new(0.16, 0.72, 0.40, 1.0)), (0.50, Color::new(0.78, 0.12, 0.18, 1.0)), (0.70, Color::new(0.20, 0.42, 0.86, 1.0))] {
+                ball(p(fx, 0.71).x, p(fx, 0.71).y, 3.4 * u, jewel);
+            }
+        }
+        ItemKind::HornOfTheHunt => {
+            // A curved horn: thick at the mouth (upper right), tapering round to the tip (lower left), with gold bands.
+            let pts = [p(0.80, 0.22), p(0.66, 0.46), p(0.48, 0.64), p(0.30, 0.74), p(0.18, 0.70)];
+            for (i, w) in pts.windows(2).enumerate() {
+                rod(w[0], w[1], (11.0 - 2.4 * i as f32) * u, color);
+            }
+            ball(pts[0].x, pts[0].y, 8.0 * u, darken(color, 0.62));
+            ball(pts[0].x - 1.0 * u, pts[0].y + 1.0 * u, 5.4 * u, Color::new(0.20, 0.12, 0.08, 1.0));
+            for t in [0.22, 0.58] {
+                let at = pts[1] + (pts[2] - pts[1]) * t;
+                draw_circle(at.x, at.y, 5.2 * u, ItemKind::Gold.color());
+                draw_circle(at.x, at.y, 3.6 * u, color);
+            }
+            draw_line(pts[1].x - 4.0 * u, pts[1].y - 4.0 * u, pts[3].x, pts[3].y - 5.0 * u, 1.2, lighten(color, 0.22));
+        }
+        ItemKind::DeerBone => {
+            // A long bone with a knuckle at each end.
+            let (a, b) = (p(0.26, 0.74), p(0.74, 0.26));
+            rod(a, b, 6.0 * u, color);
+            for end in [a, b] {
+                let side = vec2(-(b.y - a.y), b.x - a.x).normalize() * 4.0 * u;
+                ball(end.x + side.x, end.y + side.y, 4.6 * u, color);
+                ball(end.x - side.x, end.y - side.y, 4.6 * u, color);
+            }
+            draw_line(p(0.40, 0.60).x, p(0.40, 0.60).y, p(0.58, 0.42).x, p(0.58, 0.42).y, 1.2, lighten(color, 0.28));
+            draw_line(p(0.44, 0.64).x, p(0.44, 0.64).y, p(0.62, 0.46).x, p(0.62, 0.46).y, 1.0, darken(color, 0.70));
+        }
+        ItemKind::MusicalPipes => {
+            // Five pipes of rising length bound side by side.
+            for (i, top) in [0.62, 0.50, 0.38, 0.26, 0.16].into_iter().enumerate() {
+                let fx = 0.20 + i as f32 * 0.15;
+                let (a, b) = (p(fx, 0.84), p(fx, top));
+                slab(a.x - 3.6 * u, b.y, 7.2 * u, a.y - b.y, if i % 2 == 0 { color } else { darken(color, 0.92) });
+                draw_rectangle(a.x - 2.0 * u, b.y + 1.0, 4.0 * u, 3.0 * u, Color::new(0.16, 0.12, 0.08, 1.0));
+            }
+            draw_line(p(0.14, 0.62).x, p(0.14, 0.62).y, p(0.86, 0.62).x, p(0.86, 0.62).y, 3.6 * u, ItemKind::LeatherCord.color());
+            draw_line(p(0.14, 0.72).x, p(0.14, 0.72).y, p(0.86, 0.72).x, p(0.86, 0.72).y, 3.0 * u, ItemKind::LeatherCord.color());
+        }
     }
 }
 
 /// An item icon with its stack count in the corner (no frame).
+/// What the compass needle points at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompassTarget {
+    /// North, until the world's mountain is out.
+    North,
+    /// The world's mountain.
+    Mountain,
+    /// Where the player arrived, in the Horizen and the Skylands.
+    Spawn,
+}
+
+impl CompassTarget {
+    /// The letter drawn at the needle's tip.
+    fn letter(self) -> &'static str {
+        match self {
+            CompassTarget::North => "N",
+            CompassTarget::Mountain => "M",
+            CompassTarget::Spawn => "S",
+        }
+    }
+}
+
 /// The compass in hand: a dial in the top right whose red needle points north (the way to a mountain) until the world's mountain is out, and at the mountain after and
 /// whose tail points south, turning as the player turns, with the blocks walked north so far below it.
-pub fn draw_compass(yaw: f32, bearing: f32, progress: f32, to_mountain: bool) {
+pub fn draw_compass(yaw: f32, bearing: f32, progress: f32, target: CompassTarget) {
     let (w, radius) = (screen_width(), 46.0);
     let (cx, cy) = (w - radius - 24.0, radius + 56.0);
     draw_circle(cx, cy, radius + 4.0, Color::new(0.0, 0.0, 0.0, 0.6));
@@ -615,11 +724,11 @@ pub fn draw_compass(yaw: f32, bearing: f32, progress: f32, to_mountain: bool) {
     draw_line(cx, cy, cx - nx * radius * 0.6, cy - ny * radius * 0.6, 5.0, Color::new(0.96, 0.96, 0.96, 1.0));
     draw_line(cx, cy, cx + nx * radius * 0.85, cy + ny * radius * 0.85, 5.0, Color::new(0.80, 0.14, 0.14, 1.0));
     draw_circle(cx, cy, 4.0, Color::new(0.05, 0.05, 0.05, 1.0));
-    draw_text(if to_mountain { "M" } else { "N" }, cx + nx * (radius + 12.0) - 6.0, cy + ny * (radius + 12.0) + 6.0, 22.0, WHITE);
-    let line = if to_mountain {
-        "Points to the mountain".to_string()
-    } else {
-        format!("North {:.0}/{} blocks", progress.min((COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32), COMPASS_TREK_CHUNKS * CHUNK_SIZE)
+    draw_text(target.letter(), cx + nx * (radius + 12.0) - 6.0, cy + ny * (radius + 12.0) + 6.0, 22.0, WHITE);
+    let line = match target {
+        CompassTarget::Mountain => "Points to the mountain".to_string(),
+        CompassTarget::Spawn => "Points to where you arrived".to_string(),
+        CompassTarget::North => format!("North {:.0}/{} blocks", progress.min((COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32), COMPASS_TREK_CHUNKS * CHUNK_SIZE),
     };
     draw_text(&line, cx - radius - 12.0, cy + radius + 26.0, 20.0, WHITE);
 }

@@ -10,6 +10,7 @@ use crate::config::*;
 use crate::dropped::DroppedItem;
 use crate::inventory::Inventory;
 use crate::item::{ItemKind, ItemStack};
+use crate::tower::Tower;
 use crate::landmarks::{GrandCastle, Graveyard, Lake, Landmarks, Mountain, Rainbow, RainbowState, Well, MAX_LANDMARK_RADIUS, MOUNTAIN_MAX_HEIGHT};
 use crate::player::Player;
 use crate::rng::clock_seed;
@@ -118,7 +119,11 @@ impl SaveData {
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
 ///     "dimension skylands"     the player is in the Skylands (everything above is then the overworld)
 ///     "yetislain"              the Yeti has been killed (a cyclone stands on the summit)
-///     "nessie <x> <z>"         the monster of the lake centred there has been killed (its castle gate is open)
+///     "nessie <x> <z>"         the monster of the lake centred there has been killed
+///     "unlocked <x> <z>"       the silver tower centred there has had its door unlocked
+///     "tower <x> <z>"          the Horizen's silver tower (only in the Horizen's records)
+///     "skytower <cx> <cz>"     the Skylands' silver tower stands on the island of that grid cell (Skylands' records)
+///     "skyvisit <cx> <cz>"     the Skylands island of that grid cell has been walked on (Skylands' records)
 ///     "s <record>"              a record of the Skylands, as for \"h\"
 ///     "h <record>"              a record of the Horizen: any of the above that makes sense there (blocks, fires,
 ///                                items, \"pos <x> <y> <z> <yaw> <pitch>\" for the player's place in it)
@@ -147,8 +152,25 @@ pub struct SaveExtras<'a> {
     pub skylands: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
 }
 
+/// The records of a world's silver tower state, each starting with `prefix`.
+fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
+    for (x, z) in &landmarks.towers_unlocked {
+        out.push_str(&format!("{prefix}unlocked {x} {z}\n"));
+    }
+    if let Some(t) = landmarks.horizen_tower {
+        out.push_str(&format!("{prefix}tower {} {}\n", t.x, t.z));
+    }
+    if let Some((x, z)) = landmarks.sky_tower {
+        out.push_str(&format!("{prefix}skytower {x} {z}\n"));
+    }
+    for (x, z) in &landmarks.sky_visited {
+        out.push_str(&format!("{prefix}skyvisit {x} {z}\n"));
+    }
+}
+
 /// The records that describe a world's edits, each starting with `prefix`.
 fn world_lines(world: &World, prefix: &str, out: &mut String) {
+    tower_lines(&world.landmarks, prefix, out);
     out.push_str(&format!("{prefix}time {}\n", if world.night { "night" } else { "day" }));
     for (x, y, z) in &world.removed {
         out.push_str(&format!("{prefix}{} {} {}\n", x, y, z));
@@ -216,6 +238,7 @@ pub fn serialize_save_full(
     for (x, z) in &world.landmarks.monsters_slain {
         out.push_str(&format!("nessie {x} {z}\n"));
     }
+    tower_lines(&world.landmarks, "", &mut out);
     for l in &world.landmarks.lakes {
         out.push_str(&format!("lake {} {} {} {} {} {}\n", l.x, l.z, l.radius, l.phase, l.from.0, l.from.1));
     }
@@ -322,6 +345,32 @@ fn apply_line(data: &mut SaveData, line: &str) {
                     if !data.landmarks.monsters_slain.contains(&(x, z)) {
                         data.landmarks.monsters_slain.push((x, z));
                     }
+                }
+            }
+            Some("unlocked") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    if !data.landmarks.towers_unlocked.contains(&(x, z)) {
+                        data.landmarks.towers_unlocked.push((x, z));
+                    }
+                }
+            }
+            Some("tower") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.horizen_tower = Some(Tower { x, z });
+                }
+            }
+            Some("skytower") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.sky_tower = Some((x, z));
+                }
+            }
+            Some("skyvisit") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.landmarks.note_sky_visit((x, z));
                 }
             }
             Some("pos") => {
@@ -630,6 +679,26 @@ mod tests {
         assert!(text.contains("rainbow spent"));
         assert_eq!(parse_save(&text).landmarks, world.landmarks);
         assert_eq!(parse_save("W\n1\n0 6 0 0 0\n").landmarks, Landmarks::default(), "older worlds have none");
+    }
+
+    #[test]
+    fn the_silver_towers_survive_a_save_round_trip_in_each_dimension() {
+        let mut world = World::new(1, HashSet::new());
+        world.landmarks.towers_unlocked.push((100, -50));
+        let mut horizen = World::new_horizen(1);
+        horizen.landmarks.horizen_tower = Some(Tower { x: 300, z: -80 });
+        horizen.landmarks.towers_unlocked.push((300, -80));
+        let mut sky = World::new_skylands(1);
+        sky.landmarks.sky_tower = Some((4, -2));
+        sky.landmarks.sky_visited = vec![(0, 0), (1, 0), (1, 1)];
+        let player = Player::new();
+        let extras = SaveExtras { horizen: Some((&horizen, &player, &[])), skylands: Some((&sky, &player, &[])), ..Default::default() };
+        let text = serialize_save_full("w", 1, &world, &player, &Inventory::new(), &[], 10, false, &extras);
+        let data = parse_save(&text);
+        assert_eq!(data.landmarks.towers_unlocked, vec![(100, -50)]);
+        assert_eq!(data.landmarks.horizen_tower, None, "the Horizen's tower is not the overworld's");
+        assert_eq!(data.horizen.unwrap().landmarks, horizen.landmarks);
+        assert_eq!(data.skylands.unwrap().landmarks, sky.landmarks);
     }
 
     #[test]

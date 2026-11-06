@@ -10,7 +10,7 @@ use crate::dropped::draw_dropped_items;
 use crate::effects::{draw_cyclone, draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
 use crate::game::Game;
 use crate::item::ItemKind;
-use crate::hud::{draw_compass, draw_hotbar, inventory_screen};
+use crate::hud::{draw_compass, CompassTarget, draw_hotbar, inventory_screen};
 use crate::player::MoveInput;
 use crate::sky::{draw_horizen_sky, draw_sky};
 use crate::world::{Hit, World};
@@ -334,8 +334,15 @@ fn render_hud(game: &mut Game, drawn: usize) {
             draw_break_bar(progress);
         }
         draw_health(game.health);
-        if game.held_item() == Some(ItemKind::Compass) && game.in_overworld() {
-            draw_compass(game.player.yaw, game.compass_bearing(), game.treks.compass_progress(), game.world.landmarks.mountain().is_some());
+        if game.held_item() == Some(ItemKind::Compass) {
+            let target = if !game.in_overworld() {
+                CompassTarget::Spawn
+            } else if game.world.landmarks.mountain().is_some() {
+                CompassTarget::Mountain
+            } else {
+                CompassTarget::North
+            };
+            draw_compass(game.player.yaw, game.compass_bearing(), game.treks.compass_progress(), target);
         }
     }
     game.toasts.draw();

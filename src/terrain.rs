@@ -240,6 +240,59 @@ pub fn place_oak(blocks: &mut [Block], rng: &mut Rng, lx: i32, lz: i32, ground: 
     }
 }
 
+/// The middle of the jungle: `JUNGLE_DISTANCE_CHUNKS` chunks from the spawn point, in a direction the seed decides.
+pub fn jungle_centre(seed: i64) -> (i32, i32) {
+    let angle = (hash3(seed, 17, -3, 0x1A9C) % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
+    let dist = (JUNGLE_DISTANCE_CHUNKS * CHUNK_SIZE) as f32;
+    let spawn = (CHUNK_SIZE / 2) as f32;
+    ((spawn + angle.cos() * dist).round() as i32, (spawn + angle.sin() * dist).round() as i32)
+}
+
+/// Blocks from the column (wx, wz) to the middle of the jungle.
+fn jungle_distance(seed: i64, wx: i32, wz: i32) -> f32 {
+    let (cx, cz) = jungle_centre(seed);
+    (((wx - cx).pow(2) + (wz - cz).pow(2)) as f32).sqrt()
+}
+
+/// Whether the column (wx, wz) is in the jungle.
+pub fn in_jungle(seed: i64, wx: i32, wz: i32) -> bool {
+    jungle_distance(seed, wx, wz) <= JUNGLE_RADIUS as f32
+}
+
+/// Whether the column (wx, wz) is the bare middle of the jungle, where no tree grows.
+pub fn in_jungle_clearing(seed: i64, wx: i32, wz: i32) -> bool {
+    jungle_distance(seed, wx, wz) <= JUNGLE_CLEARING_RADIUS as f32
+}
+
+/// A very tall jungle tree: a trunk `JUNGLE_TRUNK_MIN` to `JUNGLE_TRUNK_MAX` blocks high under a layered canopy.
+/// `lx`/`lz` must be at least 3 blocks from the chunk edge.
+pub fn place_jungle_tree(blocks: &mut [Block], rng: &mut Rng, lx: i32, lz: i32, ground: i32) {
+    let base = ground + 1;
+    let height = rng.range(JUNGLE_TRUNK_MIN, JUNGLE_TRUNK_MAX + 1);
+    for (layer, radius) in [(-2_i32, 1_i32), (-1, 2), (0, 3), (1, 3), (2, 2), (3, 1)] {
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx.abs() == radius && dz.abs() == radius && radius >= 2 {
+                    continue;
+                }
+                if radius == 3 && (dx.abs() == 3 || dz.abs() == 3) && rng.chance(25) {
+                    continue;
+                }
+                let y = base + height + layer;
+                if y < WORLD_HEIGHT {
+                    let i = idx(lx + dx, y, lz + dz);
+                    if blocks[i] == Block::Air {
+                        blocks[i] = Block::Leaves;
+                    }
+                }
+            }
+        }
+    }
+    for dy in 0..height {
+        blocks[idx(lx, base + dy, lz)] = Block::Wood;
+    }
+}
+
 /// Tall conical evergreen standing on the dirt whose top block is at `ground`.
 /// `lx`/`lz` must be at least 3 blocks from the chunk edge.
 pub fn place_pine(blocks: &mut [Block], rng: &mut Rng, lx: i32, lz: i32, ground: i32) {
@@ -353,6 +406,9 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
     let clearing = clearing_for_chunk(seed, cx, cz);
     let mut rng = Rng::new(hash3(seed, cx, cz, 0x7EEE));
     let target = rng.range(6, 11);
+    // A chunk of jungle is thick with trees.
+    let jungle_chunk = in_jungle(seed, cx * CHUNK_SIZE + CHUNK_SIZE / 2, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    let target = if jungle_chunk { rng.range(JUNGLE_TREES_MIN, JUNGLE_TREES_MAX + 1) } else { target };
     let mut placed: Vec<(i32, i32)> = Vec::new();
     for _ in 0..120 {
         if placed.len() as i32 >= target {
@@ -385,9 +441,15 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
         {
             continue;
         }
+        let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+        if in_jungle_clearing(seed, wx, wz) {
+            continue;
+        }
         placed.push((lx, lz));
         let ground = top_at(lx, lz);
-        if rng.chance(65) {
+        if in_jungle(seed, wx, wz) {
+            place_jungle_tree(&mut blocks, &mut rng, lx, lz, ground);
+        } else if rng.chance(65) {
             place_oak(&mut blocks, &mut rng, lx, lz, ground);
         } else {
             place_pine(&mut blocks, &mut rng, lx, lz, ground);
@@ -454,18 +516,18 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
         }
     }
 
-    // The castles of the lakes that reach this chunk. The square each stands in is cleared first (plants, rocks), then
-    // the walls are put up. The top of the island's hill is flat, so the castle stands level, on the top of it.
-    for lake in landmarks.lakes.iter().filter(|l| l.has_castle()) {
-        let gate_shut = landmarks.gate_shut(lake);
+    // The silver towers on the lakes' islands that reach this chunk. The square each stands in is cleared first (plants,
+    // rocks), then the tower is built. The top of the island's hill is flat, so the tower stands level, on the top of it.
+    for lake in landmarks.lakes.iter().filter(|l| l.has_tower()) {
+        let locked = landmarks.tower_locked(lake);
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
-                if !lake.near_castle(wx, wz, 0) {
+                if !lake.near_tower(wx, wz, 0) {
                     continue;
                 }
-                for dy in 0..CASTLE_HEIGHT {
-                    if let Some(block) = lake.castle_cell(wx, wz, dy, gate_shut) {
+                for dy in 0..TOWER_HEIGHT {
+                    if let Some(block) = lake.tower_cell(wx, wz, dy, locked) {
                         blocks[idx(lx, top_at(lx, lz) + 1 + dy, lz)] = block;
                     }
                 }
@@ -518,6 +580,8 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
     }
     for mountain in &landmarks.mountains {
         crate::mines::frame(mountain, cx, cz, &mut blocks);
+        let tops: Vec<i32> = surfaces.iter().map(|s| s.0).collect();
+        crate::mines::furnish(mountain, cx, cz, &mut blocks, &tops);
     }
     blocks
 }
@@ -1292,20 +1356,19 @@ mod tests {
     }
 
     #[test]
-    fn a_big_lake_has_a_castle_on_its_island_in_a_cleared_square() {
+    fn a_big_lake_has_a_silver_tower_on_its_island_in_a_cleared_square() {
         let mut marks = Landmarks::default();
         marks.lakes.push(crate::landmarks::Lake { x: 0, z: 0, radius: LAKE_RADIUS, phase: 4, from: (0, 0) });
-        // The island is a hill with a flat top, and the castle stands on the top.
+        // The island is a hill with a flat top, and the tower stands on the top.
         let y0 = GROUND_TOP + ISLAND_HILL_HEIGHT + 1;
         let b = generate_chunk_with(11, 0, 0, &marks);
-        assert_eq!(b[idx(CASTLE_WALL_HALF, y0, 0)], Block::CastleStone, "the east wall");
-        assert_eq!(b[idx(0, y0, CASTLE_WALL_HALF)], Block::CastleDoor, "the gate, shut while the lake's monster lives");
-        assert_eq!(b[idx(0, y0 + 4, CASTLE_WALL_HALF)], Block::CastleStone, "and the lintel over it");
-        assert_eq!(b[idx(0, y0, 3)], Block::Air, "the keep's door");
-        assert_eq!(b[idx(3, y0, 0)], Block::CastleStone, "the keep");
-        assert_eq!(b[idx(CASTLE_WALL_HALF, y0 + 9, CASTLE_WALL_HALF)], Block::CastleStone, "a tower");
+        assert_eq!(b[idx(TOWER_HALF, y0, 0)], Block::SilverStone, "the east wall");
+        assert_eq!(b[idx(0, y0, TOWER_HALF)], Block::TowerDoor, "the lock, in the south wall");
+        assert_eq!(b[idx(0, y0 + 1, TOWER_HALF)], Block::TowerDoorTop);
+        assert_eq!(b[idx(0, y0, 0)], Block::Air, "empty inside");
+        assert_eq!(b[idx(0, y0 + TOWER_STOREY * (TOWER_STOREYS - 1), 0)], Block::StonePlinth, "the Philosopher's Stone at the top");
         assert_eq!(b[idx(0, 0, 0)], Block::Stone, "the island stands on the usual stone");
-        // The ground under and around it is dry dirt, and no tree or plant stands in the castle's square.
+        // The ground under and around it is dry dirt, and no tree or plant stands in the tower's square.
         for lz in 0..CHUNK_SIZE {
             for lx in 0..CHUNK_SIZE {
                 assert_eq!(b[idx(lx, GROUND_TOP, lz)], Block::Dirt, "island ground at {lx},{lz}");
@@ -1313,20 +1376,48 @@ mod tests {
                     assert_eq!(b[idx(lx, y0 - 1, lz)], Block::Dirt, "the flat top of the hill at {lx},{lz}");
                     assert_eq!(ground_top_with(11, &marks, lx, lz), y0 - 1, "level at {lx},{lz}");
                 }
-                if lx <= CASTLE_REACH && lz <= CASTLE_REACH {
-                    for y in y0 + CASTLE_HEIGHT..WORLD_HEIGHT {
-                        assert_eq!(b[idx(lx, y, lz)], Block::Air, "nothing above the castle at {lx},{lz},{y}");
+                if lx <= TOWER_REACH && lz <= TOWER_REACH {
+                    for y in y0 + TOWER_HEIGHT..WORLD_HEIGHT {
+                        assert_eq!(b[idx(lx, y, lz)], Block::Air, "nothing above the tower at {lx},{lz},{y}");
                     }
                 }
-                if lx <= CASTLE_REACH + CASTLE_TREE_MARGIN && lz <= CASTLE_REACH + CASTLE_TREE_MARGIN {
-                    assert!(!(0..WORLD_HEIGHT).any(|y| b[idx(lx, y, lz)] == Block::Wood), "a trunk near the castle at {lx},{lz}");
+                if lx <= TOWER_REACH + TOWER_TREE_MARGIN && lz <= TOWER_REACH + TOWER_TREE_MARGIN {
+                    assert!(!(0..WORLD_HEIGHT).any(|y| b[idx(lx, y, lz)] == Block::Wood), "a trunk near the tower at {lx},{lz}");
                 }
             }
         }
-        // The castle stone is part of the world's solid ground: it blocks, is opaque and cannot be broken.
-        assert!(Block::CastleStone.collides() && Block::CastleStone.opaque() && !Block::CastleStone.breakable());
-        // Without the lake there is no castle.
-        assert!(!generate_chunk_with(11, 0, 0, &Landmarks::default()).contains(&Block::CastleStone));
+        // Without the lake there is no tower, and once the door is unlocked the doorway is open.
+        assert!(!generate_chunk_with(11, 0, 0, &Landmarks::default()).contains(&Block::SilverStone));
+        marks.towers_unlocked.push((0, 0));
+        assert_eq!(generate_chunk_with(11, 0, 0, &marks)[idx(0, y0, TOWER_HALF)], Block::Air);
+    }
+
+    #[test]
+    fn the_jungle_is_ten_chunks_from_spawn_thick_with_very_tall_trees_and_bare_in_the_middle() {
+        for seed in [1_i64, 7, 42] {
+            let (jx, jz) = jungle_centre(seed);
+            let gap = ((jx - CHUNK_SIZE / 2) as f32).hypot((jz - CHUNK_SIZE / 2) as f32);
+            assert!((gap - (JUNGLE_DISTANCE_CHUNKS * CHUNK_SIZE) as f32).abs() < 2.0, "{gap}");
+            assert!(in_jungle(seed, jx, jz) && in_jungle_clearing(seed, jx, jz) && !in_jungle(seed, jx + JUNGLE_RADIUS + 1, jz));
+            let tallest = |cx: i32, cz: i32| {
+                let b = generate_chunk_blocks(seed, cx, cz);
+                (0..CHUNK_SIZE).flat_map(|lz| (0..CHUNK_SIZE).map(move |lx| (lx, lz))).map(|(lx, lz)| (GROUND_TOP..WORLD_HEIGHT).rev().find(|&y| b[idx(lx, y, lz)] == Block::Wood).unwrap_or(0)).max().unwrap()
+            };
+            // A chunk in the jungle (well off its middle) grows trunks over twenty blocks tall; the ordinary forest never does.
+            let (kx, kz) = ((jx + 40).div_euclid(CHUNK_SIZE), jz.div_euclid(CHUNK_SIZE));
+            assert!(tallest(kx, kz) >= GROUND_TOP + JUNGLE_TRUNK_MIN, "tallest {}", tallest(kx, kz));
+            assert!(tallest(0, 1) < GROUND_TOP + 15, "the ordinary forest stays low");
+            // Nothing grows in the clearing at the middle.
+            let (mx, mz) = (jx.div_euclid(CHUNK_SIZE), jz.div_euclid(CHUNK_SIZE));
+            let b = generate_chunk_blocks(seed, mx, mz);
+            for lz in 0..CHUNK_SIZE {
+                for lx in 0..CHUNK_SIZE {
+                    if in_jungle_clearing(seed, mx * CHUNK_SIZE + lx, mz * CHUNK_SIZE + lz) {
+                        assert!(!(GROUND_TOP + 1..WORLD_HEIGHT).any(|y| b[idx(lx, y, lz)] == Block::Wood), "a trunk in the clearing");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

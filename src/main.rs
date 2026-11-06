@@ -56,6 +56,7 @@ mod settings;
 mod sky;
 mod skylands;
 mod terrain;
+mod tower;
 mod tornado;
 mod ui;
 mod world;

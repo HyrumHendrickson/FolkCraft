@@ -9,6 +9,7 @@ use crate::config::*;
 use crate::item::{Hearth, ItemKind};
 use crate::horizen::{self, Dimension};
 use crate::skylands;
+use crate::tower::Tower;
 use crate::landmarks::{GrandCastle, Graveyard, Landmarks, Lake, Mountain, Rainbow, RainbowState, Well};
 use crate::terrain::{berry_bush_is_purple, generate_chunk_for, ground_top_with, is_wet_column};
 
@@ -273,18 +274,57 @@ impl World {
         self.regenerate_landmark_chunks();
     }
 
-    /// Open the gate of `lake`'s castle for good, once its monster is dead: the chunks of the castle are made again.
-    pub fn open_lake_gate(&mut self, lake: &Lake) {
+    /// Note that the monster of `lake` has been killed.
+    pub fn record_monster_slain(&mut self, lake: &Lake) {
         if !self.landmarks.monsters_slain.contains(&(lake.x, lake.z)) {
             self.landmarks.monsters_slain.push((lake.x, lake.z));
         }
-        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| Landmarks::lake_castle_touches_chunk(lake, cx, cz)).collect();
+    }
+
+    /// Make again the loaded chunks that a tower centred on the column (x, z) can touch.
+    fn regenerate_tower_chunks(&mut self, x: i32, z: i32) {
+        let stale: Vec<(i32, i32)> = self
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(cx, cz)| {
+                let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+                x - TOWER_REACH <= x0 + CHUNK_SIZE - 1 && x + TOWER_REACH >= x0 && z - TOWER_REACH <= z0 + CHUNK_SIZE - 1 && z + TOWER_REACH >= z0
+            })
+            .collect();
         for key in &stale {
             self.chunks.remove(key);
         }
         for &(cx, cz) in &stale {
             self.ensure_chunk(cx, cz);
         }
+    }
+
+    /// Unlock the door of the tower centred on the column (x, z) for good, and make its chunks again.
+    pub fn unlock_tower(&mut self, x: i32, z: i32) {
+        if !self.landmarks.towers_unlocked.contains(&(x, z)) {
+            self.landmarks.towers_unlocked.push((x, z));
+        }
+        self.regenerate_tower_chunks(x, z);
+    }
+
+    /// Bring the Horizen's one tower into it. A second is ignored.
+    pub fn add_horizen_tower(&mut self, tower: Tower) {
+        if self.landmarks.horizen_tower.is_none() {
+            self.landmarks.horizen_tower = Some(tower);
+            self.regenerate_tower_chunks(tower.x, tower.z);
+        }
+    }
+
+    /// Put the Skylands' one tower on the island of grid cell `cell`. A second is ignored. Chunks already made are made
+    /// again (the island is meant to be one that has not been made yet, so usually there are none).
+    pub fn add_sky_tower(&mut self, cell: (i32, i32)) {
+        if self.landmarks.sky_tower.is_some() {
+            return;
+        }
+        self.landmarks.sky_tower = Some(cell);
+        let island = skylands::island_in_cell(self.seed, cell.0, cell.1);
+        self.regenerate_tower_chunks(island.x, island.z);
     }
 
     /// Show the rainbow, or retire it for good once its gold has been taken (the place where the gold lay is kept,
@@ -443,8 +483,8 @@ impl World {
             return;
         }
         let mut blocks = match self.dimension {
-            Dimension::Horizen => horizen::generate_chunk(self.seed, cx, cz),
-            Dimension::Skylands => skylands::generate_chunk(self.seed, cx, cz),
+            Dimension::Horizen => horizen::generate_chunk(self.seed, cx, cz, &self.landmarks),
+            Dimension::Skylands => skylands::generate_chunk(self.seed, cx, cz, &self.landmarks),
             Dimension::Overworld => generate_chunk_for(self.seed, cx, cz, &self.landmarks, self.night),
         };
         for &(x, y, z) in &self.removed {

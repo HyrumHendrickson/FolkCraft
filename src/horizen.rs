@@ -13,7 +13,9 @@
 use crate::block::Block;
 use crate::chunk::idx;
 use crate::config::*;
+use crate::landmarks::Landmarks;
 use crate::rng::hash3;
+use crate::tower::{self, Relic, Tower};
 
 /// Which of the three worlds a `World` is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,9 +83,16 @@ pub fn ground_top(seed: i64, wx: i32, wz: i32) -> i32 {
     GROUND_TOP - if is_pond(seed, wx, wz) { RIVER_DEPTH } else { 0 }
 }
 
+/// Whether a tower centred on (x, z) would stand on dry ground: no pond within `TOWER_POND_MARGIN` blocks of its square.
+pub fn site_is_dry(seed: i64, x: i32, z: i32) -> bool {
+    let reach = TOWER_REACH + TOWER_POND_MARGIN;
+    (z - reach..=z + reach).all(|wz| (x - reach..=x + reach).all(|wx| !is_pond(seed, wx, wz)))
+}
+
 /// The blocks of chunk (cx, cz) of the Horizen: the stone layer, dirt up to the ground (nothing can be dug), water
-/// filling the ponds up to the plain, and nothing else: no tree, plant, stone or animal.
-pub fn generate_chunk(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
+/// filling the ponds up to the plain, and the silver tower (with the Ancient Crown at the top) once a peep stone has
+/// brought it out. No tree, plant, stone or animal.
+pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec<Block> {
     let mut blocks = vec![Block::Air; (CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE) as usize];
     for lz in 0..CHUNK_SIZE {
         for lx in 0..CHUNK_SIZE {
@@ -97,6 +106,22 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32) -> Vec<Block> {
             }
             for y in top + 1..=GROUND_TOP {
                 blocks[idx(lx, y, lz)] = Block::Water;
+            }
+        }
+    }
+    if let Some(Tower { x, z }) = landmarks.horizen_tower {
+        let locked = !landmarks.is_unlocked(x, z);
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (dx, dz) = (cx * CHUNK_SIZE + lx - x, cz * CHUNK_SIZE + lz - z);
+                if !tower::near(dx, dz, 0) {
+                    continue;
+                }
+                for dy in 0..TOWER_HEIGHT {
+                    if let Some(block) = tower::tower_cell(dx, dz, dy, locked, Relic::AncientCrown) {
+                        blocks[idx(lx, GROUND_TOP + 1 + dy, lz)] = block;
+                    }
+                }
             }
         }
     }
@@ -155,11 +180,33 @@ mod tests {
     }
 
     #[test]
+    fn a_tower_stands_on_the_plain_with_the_crown_at_the_top() {
+        let seed = 11;
+        let site = (0..40).flat_map(|i| (0..40).map(move |j| (60 + i * 3, 60 + j * 3))).find(|&(x, z)| site_is_dry(seed, x, z)).unwrap();
+        let mut marks = Landmarks::default();
+        marks.horizen_tower = Some(Tower { x: site.0, z: site.1 });
+        let (cx, cz) = (site.0.div_euclid(CHUNK_SIZE), site.1.div_euclid(CHUNK_SIZE));
+        let (lx, lz) = (site.0.rem_euclid(CHUNK_SIZE), site.1.rem_euclid(CHUNK_SIZE));
+        let top = (TOWER_STOREYS - 1) * TOWER_STOREY;
+        let blocks = generate_chunk(seed, cx, cz, &marks);
+        assert_eq!(blocks[idx(lx, GROUND_TOP + 1 + top, lz)], Block::CrownPlinth);
+        assert!(generate_chunk(seed, cx, cz, &Landmarks::default()).iter().all(|b| *b != Block::CrownPlinth));
+        // The door is locked until it has been unlocked.
+        let door = |m: &Landmarks| {
+            let b = generate_chunk(seed, (site.0).div_euclid(CHUNK_SIZE), (site.1 + TOWER_HALF).div_euclid(CHUNK_SIZE), m);
+            b[idx(lx, GROUND_TOP + 1, (site.1 + TOWER_HALF).rem_euclid(CHUNK_SIZE))]
+        };
+        assert_eq!(door(&marks), Block::TowerDoor);
+        marks.towers_unlocked.push(site);
+        assert_eq!(door(&marks), Block::Air);
+    }
+
+    #[test]
     fn a_chunk_is_stone_dirt_and_ponds_and_nothing_stands_on_it() {
         let mut ponds = 0;
         for cz in -3..3 {
             for cx in -3..3 {
-                let blocks = generate_chunk(11, cx, cz);
+                let blocks = generate_chunk(11, cx, cz, &Landmarks::default());
                 for lz in 0..CHUNK_SIZE {
                     for lx in 0..CHUNK_SIZE {
                         assert_eq!(blocks[idx(lx, 0, lz)], Block::Stone);

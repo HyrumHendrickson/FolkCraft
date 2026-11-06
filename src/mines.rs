@@ -328,6 +328,48 @@ pub fn frame(m: &Mountain, cx: i32, cz: i32, blocks: &mut [Block]) {
     }
 }
 
+/// Make the mines a salt mine and leave the silver keys in them, in the share of the mountain that lies in chunk
+/// (cx, cz): pink salt crystals stud the dirt of the walls, floors and roofs that face a tunnel (never within three blocks of
+/// the surface, where the entrance stairs are), and a silver key lies on a stand in the middle of the chamber where the
+/// middle ring crosses each of the shafts in `MINE_KEY_SHAFTS`. `tops` is the height of the ground in each column.
+pub fn furnish(m: &Mountain, cx: i32, cz: i32, blocks: &mut [Block], tops: &[i32]) {
+    let net = network(m);
+    let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+    let open = |blocks: &[Block], lx: i32, y: i32, lz: i32| {
+        (0..CHUNK_SIZE).contains(&lx) && (0..CHUNK_SIZE).contains(&lz) && (1..WORLD_HEIGHT).contains(&y) && blocks[idx(lx, y, lz)] == Block::Air
+    };
+    let mut crystals = Vec::new();
+    for lz in 0..CHUNK_SIZE {
+        for lx in 0..CHUNK_SIZE {
+            let top = tops[(lz * CHUNK_SIZE + lx) as usize];
+            // Only chunks the tunnels can reach need looking at.
+            if m.rise_at(x0 + lx, z0 + lz) == 0 {
+                continue;
+            }
+            for y in 1..(top - 3).min(WORLD_HEIGHT) {
+                if blocks[idx(lx, y, lz)] != Block::Dirt {
+                    continue;
+                }
+                let faces = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)];
+                if faces.iter().any(|&(dx, dy, dz)| open(blocks, lx + dx, y + dy, lz + dz)) && hash3(m.phase as i64 ^ 0x5A17, x0 + lx, z0 + lz, y) % 1000 < MINE_SALT_PER_MILLE {
+                    crystals.push((lx, y, lz));
+                }
+            }
+        }
+    }
+    for (lx, y, lz) in crystals {
+        blocks[idx(lx, y, lz)] = Block::PinkSalt;
+    }
+    for &shaft in &MINE_KEY_SHAFTS {
+        if let Some(&(rx, rz, floor)) = net.rooms.get(shaft * 3 + MINE_KEY_RING) {
+            let (lx, lz) = (rx - x0, rz - z0);
+            if (0..CHUNK_SIZE).contains(&lx) && (0..CHUNK_SIZE).contains(&lz) && (1..WORLD_HEIGHT).contains(&floor) {
+                blocks[idx(lx, floor, lz)] = Block::KeyStand;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +490,67 @@ mod tests {
             end = s.b;
         }
         assert!(last > 20.0, "it has climbed to {last}");
+    }
+
+    /// A chunk of dirt over the stone floor, carved and furnished the way `terrain` does it.
+    fn furnished_chunk(m: &Mountain, cx: i32, cz: i32) -> Vec<Block> {
+        let mut blocks = vec![Block::Air; (CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE) as usize];
+        let mut tops = vec![0; (CHUNK_SIZE * CHUNK_SIZE) as usize];
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let top = surface(m, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                tops[(lz * CHUNK_SIZE + lx) as usize] = top;
+                blocks[idx(lx, 0, lz)] = Block::Stone;
+                for y in 1..=top {
+                    blocks[idx(lx, y, lz)] = Block::Dirt;
+                }
+            }
+        }
+        carve(m, cx, cz, &mut blocks, &tops);
+        furnish(m, cx, cz, &mut blocks, &tops);
+        blocks
+    }
+
+    #[test]
+    fn the_mines_are_a_salt_mine_with_pink_crystals_only_where_a_tunnel_shows_them() {
+        let m = mountain();
+        let net = network(&m);
+        let (rx, rz, _) = net.rooms[MINE_KEY_SHAFTS[0] * 3 + MINE_KEY_RING];
+        let (cx, cz) = (rx.div_euclid(CHUNK_SIZE), rz.div_euclid(CHUNK_SIZE));
+        let blocks = furnished_chunk(&m, cx, cz);
+        let salt: Vec<usize> = blocks.iter().enumerate().filter(|(_, b)| **b == Block::PinkSalt).map(|(i, _)| i).collect();
+        assert!(salt.len() > 20, "{} crystals", salt.len());
+        // Every crystal has a tunnel beside it, and none is within three blocks of the surface.
+        let at = |lx: i32, y: i32, lz: i32| {
+            if (0..CHUNK_SIZE).contains(&lx) && (0..CHUNK_SIZE).contains(&lz) && (0..WORLD_HEIGHT).contains(&y) { blocks[idx(lx, y, lz)] } else { Block::Dirt }
+        };
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                for y in 1..WORLD_HEIGHT {
+                    if at(lx, y, lz) != Block::PinkSalt {
+                        continue;
+                    }
+                    let top = surface(&m, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                    assert!(y < top - 3, "a crystal near the surface at {lx},{y},{lz}");
+                    let beside = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)].iter().any(|&(dx, dy, dz)| at(lx + dx, y + dy, lz + dz) == Block::Air);
+                    assert!(beside, "a buried crystal at {lx},{y},{lz}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn three_silver_keys_lie_on_stands_in_three_chambers_of_the_middle_ring() {
+        let m = mountain();
+        let net = network(&m);
+        assert_eq!(MINE_KEY_SHAFTS.len(), 3);
+        for &shaft in &MINE_KEY_SHAFTS {
+            let (rx, rz, floor) = net.rooms[shaft * 3 + MINE_KEY_RING];
+            let (cx, cz) = (rx.div_euclid(CHUNK_SIZE), rz.div_euclid(CHUNK_SIZE));
+            let blocks = furnished_chunk(&m, cx, cz);
+            let (lx, lz) = (rx - cx * CHUNK_SIZE, rz - cz * CHUNK_SIZE);
+            assert_eq!(blocks[idx(lx, floor, lz)], Block::KeyStand, "shaft {shaft}");
+            assert_eq!(blocks[idx(lx, floor + 1, lz)], Block::Air, "room to stand beside it");
+        }
     }
 }

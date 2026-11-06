@@ -67,6 +67,21 @@ pub enum Block {
     BridgePlank,
     /// A rope-rail post at the edge of a bridge: thin and walk-through, and it cannot be broken or made.
     BridgePost,
+    /// The silvery stone of the three silver towers (`tower.rs`): a solid cube that cannot be broken or made.
+    SilverStone,
+    /// The locked door of a silver tower (its lower half, with the lock, and its upper half). Solid until a silver key is
+    /// used on it (`Game::try_unlock`); they cannot be broken or made.
+    TowerDoor,
+    TowerDoorTop,
+    /// A crystal of pink salt in the walls of the mines under the mountain. Taking it by hand drops pink salt.
+    PinkSalt,
+    /// A silver key lying on a stand in a chamber of the mines. Taking it by hand gives the key.
+    KeyStand,
+    /// The plinths at the top of the silver towers, each with its relic on it (the Philosopher's Stone, the Horn of the
+    /// Hunt, the Ancient Crown). Taking it by hand gives the relic.
+    StonePlinth,
+    HornPlinth,
+    CrownPlinth,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -191,6 +206,63 @@ const BRIDGE_POST_PARTS: &[Part] = &[
     part([0.20, 0.62, 0.46], [0.80, 0.68, 0.54], (0.74, 0.64, 0.42)),
     part([0.46, 0.62, 0.20], [0.54, 0.68, 0.80], (0.74, 0.64, 0.42)),
 ];
+/// The lower half of a tower's door: dark planks, set back a little from the wall's outer face so that the iron straps and the
+/// silver lock (with its keyhole) stand flush with it. The door is in the south side, so the lock faces +z.
+const TOWER_DOOR_PARTS: &[Part] = &[
+    part([0.0, 0.0, 0.0], [1.0, 1.0, 0.94], (0.30, 0.20, 0.12)),
+    part([0.0, 0.18, 0.94], [1.0, 0.28, 1.0], (0.62, 0.64, 0.70)),
+    part([0.0, 0.76, 0.94], [1.0, 0.86, 1.0], (0.62, 0.64, 0.70)),
+    part([0.60, 0.40, 0.94], [0.90, 0.66, 1.0], (0.80, 0.82, 0.88)),
+    part([0.71, 0.46, 0.97], [0.79, 0.60, 1.0], (0.08, 0.08, 0.10)),
+];
+/// The upper half of a tower's door: the same planks and straps, without the lock.
+const TOWER_DOOR_TOP_PARTS: &[Part] = &[
+    part([0.0, 0.0, 0.0], [1.0, 1.0, 0.94], (0.30, 0.20, 0.12)),
+    part([0.0, 0.18, 0.94], [1.0, 0.28, 1.0], (0.62, 0.64, 0.70)),
+    part([0.0, 0.76, 0.94], [1.0, 0.86, 1.0], (0.62, 0.64, 0.70)),
+];
+/// A silver key lying on a small stone stand.
+const KEY_STAND_PARTS: &[Part] = &[
+    part([0.28, 0.0, 0.28], [0.72, 0.30, 0.72], (0.46, 0.46, 0.50)),
+    part([0.38, 0.30, 0.22], [0.62, 0.38, 0.36], (0.80, 0.82, 0.90)),
+    part([0.46, 0.38, 0.27], [0.54, 0.40, 0.33], (0.08, 0.08, 0.10)),
+    part([0.47, 0.30, 0.36], [0.53, 0.37, 0.80], (0.82, 0.84, 0.92)),
+    part([0.53, 0.30, 0.66], [0.62, 0.37, 0.72], (0.82, 0.84, 0.92)),
+    part([0.53, 0.30, 0.75], [0.59, 0.37, 0.80], (0.82, 0.84, 0.92)),
+];
+/// The plinth a tower's relic lies on: a stone base and a slab, which the relic's own boxes stand on.
+macro_rules! plinth_parts {
+    ($($relic:expr),* $(,)?) => {
+        &[
+            part([0.18, 0.0, 0.18], [0.82, 0.46, 0.82], (0.52, 0.53, 0.58)),
+            part([0.12, 0.46, 0.12], [0.88, 0.54, 0.88], (0.66, 0.68, 0.74)),
+            $($relic,)*
+        ]
+    };
+}
+/// The Philosopher's Stone: a deep red stone with a bright spark in it.
+const STONE_PLINTH_PARTS: &[Part] = plinth_parts!(
+    part([0.34, 0.54, 0.34], [0.66, 0.84, 0.66], (0.72, 0.10, 0.14)),
+    part([0.40, 0.84, 0.40], [0.60, 0.92, 0.60], (0.82, 0.16, 0.18)),
+    part([0.42, 0.62, 0.30], [0.52, 0.74, 0.34], (0.98, 0.52, 0.46)),
+);
+/// The Horn of the Hunt: a curved horn of bone with a gold band, lying on its plinth with its tip up.
+const HORN_PLINTH_PARTS: &[Part] = plinth_parts!(
+    part([0.20, 0.54, 0.40], [0.44, 0.66, 0.60], (0.90, 0.84, 0.68)),
+    part([0.42, 0.60, 0.42], [0.62, 0.74, 0.58], (0.86, 0.80, 0.64)),
+    part([0.58, 0.70, 0.44], [0.76, 0.86, 0.56], (0.82, 0.76, 0.60)),
+    part([0.72, 0.82, 0.46], [0.82, 0.98, 0.54], (0.78, 0.72, 0.56)),
+    part([0.38, 0.58, 0.38], [0.44, 0.70, 0.62], (0.88, 0.66, 0.16)),
+);
+/// The Ancient Crown: a band of gold with four points and a green jewel.
+const CROWN_PLINTH_PARTS: &[Part] = plinth_parts!(
+    part([0.28, 0.54, 0.28], [0.72, 0.68, 0.72], (0.86, 0.64, 0.14)),
+    part([0.28, 0.68, 0.28], [0.38, 0.86, 0.38], (0.92, 0.72, 0.20)),
+    part([0.62, 0.68, 0.28], [0.72, 0.86, 0.38], (0.92, 0.72, 0.20)),
+    part([0.28, 0.68, 0.62], [0.38, 0.86, 0.72], (0.92, 0.72, 0.20)),
+    part([0.62, 0.68, 0.62], [0.72, 0.86, 0.72], (0.92, 0.72, 0.20)),
+    part([0.44, 0.60, 0.70], [0.56, 0.68, 0.74], (0.15, 0.75, 0.40)),
+);
 const CHARCOAL_PARTS: &[Part] = &[
     part([0.15, 0.0, 0.20], [0.85, 0.25, 0.75], (0.12, 0.12, 0.13)),
     part([0.30, 0.25, 0.30], [0.65, 0.38, 0.62], (0.17, 0.17, 0.18)),
@@ -235,6 +307,11 @@ impl Block {
                 | Block::ForgeCharged
                 | Block::GoldPile
                 | Block::ArmorStand
+                | Block::PinkSalt
+                | Block::KeyStand
+                | Block::StonePlinth
+                | Block::HornPlinth
+                | Block::CrownPlinth
         )
     }
 
@@ -280,6 +357,9 @@ impl Block {
             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
             Block::ArmorStand => BREAK_SECONDS_ARMOR,
+            Block::PinkSalt => BREAK_SECONDS_SALT,
+            Block::KeyStand => BREAK_SECONDS_KEY,
+            Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth => BREAK_SECONDS_RELIC,
             Block::Air
             | Block::Dirt
             | Block::Stone
@@ -289,6 +369,9 @@ impl Block {
             | Block::Gravestone
             | Block::BridgePlank
             | Block::BridgePost
+            | Block::SilverStone
+            | Block::TowerDoor
+            | Block::TowerDoorTop
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -321,7 +404,7 @@ impl Block {
     /// Full, solid cubes that hide the faces of their neighbours. Everything else
     /// (trunks, plants, small items) leaves the neighbouring faces visible.
     pub fn opaque(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Leaves | Block::Needles | Block::Planks | Block::BridgePlank | Block::SilverStone | Block::PinkSalt)
     }
 
     /// Whether the player and dropped items bump into this block. Plants, pebbles, stones
@@ -337,6 +420,14 @@ impl Block {
                 | Block::Gravestone
                 | Block::ArmorStand
                 | Block::BridgePlank
+                | Block::SilverStone
+                | Block::TowerDoor
+                | Block::TowerDoorTop
+                | Block::PinkSalt
+                | Block::KeyStand
+                | Block::StonePlinth
+                | Block::HornPlinth
+                | Block::CrownPlinth
                 | Block::Wood
                 | Block::Leaves
                 | Block::Needles
@@ -358,7 +449,7 @@ impl Block {
     /// Solid, built-or-natural cubes that a plank can be attached to from the side or below,
     /// which is what lets a ceiling reach out from the top of a wall. Foliage does not count.
     pub fn anchors_planks(self) -> bool {
-        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::Planks)
+        matches!(self, Block::Dirt | Block::Stone | Block::Snow | Block::CastleStone | Block::CastleDoor | Block::SilverStone | Block::Planks)
     }
 
     /// The boxes this block is drawn from. Empty for air and for plain full cubes.
@@ -386,6 +477,12 @@ impl Block {
             Block::Gravestone => GRAVESTONE_PARTS,
             Block::ArmorStand => ARMOR_STAND_PARTS,
             Block::BridgePost => BRIDGE_POST_PARTS,
+            Block::TowerDoor => TOWER_DOOR_PARTS,
+            Block::TowerDoorTop => TOWER_DOOR_TOP_PARTS,
+            Block::KeyStand => KEY_STAND_PARTS,
+            Block::StonePlinth => STONE_PLINTH_PARTS,
+            Block::HornPlinth => HORN_PLINTH_PARTS,
+            Block::CrownPlinth => CROWN_PLINTH_PARTS,
             _ => &[],
         }
     }
@@ -454,6 +551,8 @@ impl Block {
             Block::Needles => (0.09, 0.36, 0.22),
             Block::Planks => (0.72, 0.54, 0.31),
             Block::BridgePlank => (0.50, 0.36, 0.20),
+            Block::SilverStone => (0.78, 0.80, 0.86),
+            Block::PinkSalt => (0.95, 0.64, 0.70),
             _ => self.parts().first().map_or((0.0, 0.0, 0.0), |p| p.color),
         }
     }
@@ -463,7 +562,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 33] = [
+    const ALL: [Block; 41] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -497,6 +596,14 @@ mod tests {
         Block::ArmorStand,
         Block::BridgePlank,
         Block::BridgePost,
+        Block::SilverStone,
+        Block::TowerDoor,
+        Block::TowerDoorTop,
+        Block::PinkSalt,
+        Block::KeyStand,
+        Block::StonePlinth,
+        Block::HornPlinth,
+        Block::CrownPlinth,
     ];
 
     #[test]
@@ -720,6 +827,22 @@ mod tests {
     #[test]
     fn only_air_has_no_bounds() {
         assert_eq!(ALL.iter().filter(|b| b.bounds().is_none()).count(), 1);
+    }
+
+    #[test]
+    fn the_tower_the_salt_the_key_and_the_relics_have_their_rules() {
+        for b in [Block::SilverStone, Block::TowerDoor, Block::TowerDoorTop] {
+            assert!(!b.breakable() && b.break_seconds() == 0.0 && b.collides() && b.id().is_none(), "{b:?}: part of the tower, never broken or made");
+        }
+        assert!(Block::SilverStone.opaque() && Block::SilverStone.anchors_planks());
+        assert!(!Block::TowerDoor.opaque() && !Block::TowerDoor.is_full_cube(), "a door is drawn from boxes");
+        assert!(Block::PinkSalt.is_full_cube() && Block::PinkSalt.opaque() && Block::PinkSalt.hand_breakable() && Block::PinkSalt.id().is_none());
+        for b in [Block::PinkSalt, Block::KeyStand, Block::StonePlinth, Block::HornPlinth, Block::CrownPlinth] {
+            assert!(b.can_break_with(None) && b.collides() && b.break_seconds() > 0.0, "{b:?} is taken by hand");
+        }
+        // The lock is on the outer (south) face of the door's lower half, and the upper half has none.
+        assert!(Block::TowerDoor.parts().len() > Block::TowerDoorTop.parts().len());
+        assert!(Block::TowerDoor.parts().iter().any(|p| p.max[2] == 1.0 && p.color.0 > 0.7), "a silver lock plate faces south");
     }
 
     #[cfg(test)]
