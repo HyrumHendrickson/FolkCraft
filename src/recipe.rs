@@ -1,6 +1,7 @@
 //! Crafting recipes. A recipe consumes a fixed number of items; there is no shape or
 //! placement, only counts. To add a recipe, append an entry to `RECIPES`.
 
+use crate::config::JERKY_SALT_COST;
 use crate::inventory::Inventory;
 use crate::item::ItemKind;
 
@@ -65,6 +66,17 @@ pub const RECIPES: &[Recipe] = &[
         output_count: 1,
         inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::PhoenixFeather, 1)],
     },
+    Recipe {
+        output: ItemKind::PoisonArrow,
+        output_count: 1,
+        inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)],
+    },
+    // Jerky: raw meat cured with a lump of pink salt, one kind for each meat. No fire is needed.
+    Recipe { output: ItemKind::VenisonJerky, output_count: 1, inputs: &[(ItemKind::Venison, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
+    Recipe { output: ItemKind::PoultryJerky, output_count: 1, inputs: &[(ItemKind::Poultry, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
+    Recipe { output: ItemKind::BearJerky, output_count: 1, inputs: &[(ItemKind::BearMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
+    Recipe { output: ItemKind::RabbitJerky, output_count: 1, inputs: &[(ItemKind::RabbitMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
+    Recipe { output: ItemKind::MooseJerky, output_count: 1, inputs: &[(ItemKind::MooseMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
 ];
 
 /// The recipe that makes `output`, if there is one.

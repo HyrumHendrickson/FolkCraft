@@ -65,6 +65,8 @@ pub struct SaveData {
     pub skylands: Option<Box<SaveData>>,
     /// How many quail the player has killed (an Iron Quail comes for every `QUAIL_KILLS_PER_IRON_QUAIL`).
     pub quail_kills: u32,
+    /// How many parrots the player has killed (Bronze Parrots come for every `PARROTS_PER_BRONZE_PARROT`).
+    pub parrot_kills: u32,
     /// How many bats the player has killed in the Horizen's caves (a vampire bat comes for every `BATS_PER_VAMPIRE`).
     pub bat_kills: u32,
 }
@@ -88,6 +90,7 @@ impl SaveData {
             health: MAX_HEALTH,
             dev_mode: false,
             quail_kills: 0,
+            parrot_kills: 0,
             bat_kills: 0,
             worn: None,
             back: None,
@@ -127,10 +130,12 @@ impl SaveData {
 ///     "ghostrest"               the graveyard's ghost has heard its song and rests
 ///     "won"                     the player has beaten the Wild Hunt and won the game
 ///     "phoenixslain"            the Phoenix of the Skylands is dead (written in the Skylands' records, with the `s` prefix)
+///     "phoenixdead <seconds>"   how long it has been dead; it rises again after `PHOENIX_RESPAWN_SECONDS`
 ///     "worn <item>"             what the player wears: a cloak, the armour, the crown or a backpack (while it is a backpack,
 ///                               slots 36 to 53 of "inv" belong to the pack)
 ///     "back <item>"             read only: saves made when the backpack had a place of its own; it is worn now
 ///     "quailkills <n>"          how many quail the player has killed
+///     "parrotkills <n>"         how many parrots the player has killed
 ///     "batkills <n>"            how many bats the player has killed in the Horizen's caves
 ///     "orangutanslain"          the Orangutan on the jungle temple has been killed (it never returns)
 ///     "ruinedcastle <x> <z>"    the ruined castle with the sword in the stone, centred on that column
@@ -169,6 +174,8 @@ pub struct SaveExtras<'a> {
     pub in_skylands: bool,
     pub skylands: Option<(&'a World, &'a Player, &'a [DroppedItem])>,
     pub quail_kills: u32,
+    /// How many parrots the player has killed (Bronze Parrots come for every `PARROTS_PER_BRONZE_PARROT`).
+    pub parrot_kills: u32,
     pub bat_kills: u32,
 }
 
@@ -191,6 +198,9 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
     }
     if landmarks.phoenix_slain {
         out.push_str(&format!("{prefix}phoenixslain\n"));
+        if landmarks.phoenix_dead_for > 0.0 {
+            out.push_str(&format!("{prefix}phoenixdead {:.1}\n", landmarks.phoenix_dead_for));
+        }
     }
     if landmarks.graveyard_rested {
         out.push_str(&format!("{prefix}ghostrest\n"));
@@ -257,6 +267,9 @@ pub fn serialize_save_full(
     }
     if let Some(worn) = extras.worn {
         out.push_str(&format!("worn {}\n", worn.id()));
+    }
+    if extras.parrot_kills > 0 {
+        out.push_str(&format!("parrotkills {}\n", extras.parrot_kills));
     }
     if extras.quail_kills > 0 {
         out.push_str(&format!("quailkills {}\n", extras.quail_kills));
@@ -422,6 +435,7 @@ fn apply_line(data: &mut SaveData, line: &str) {
             Some("ghostrest") => data.landmarks.graveyard_rested = true,
             Some("won") => data.landmarks.game_won = true,
             Some("phoenixslain") => data.landmarks.phoenix_slain = true,
+            Some("phoenixdead") => data.landmarks.phoenix_dead_for = t.next().and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0),
             Some("cavevisit") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {
@@ -438,6 +452,7 @@ fn apply_line(data: &mut SaveData, line: &str) {
                     data.player.pitch = v[4];
                 }
             }
+            Some("parrotkills") => data.parrot_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("quailkills") => data.quail_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("back") => data.back = t.next().and_then(ItemKind::from_id).filter(|k| k.is_backpack()),
             Some("worn") => data.worn = t.next().and_then(ItemKind::from_id).filter(|k| k.is_wearable()),

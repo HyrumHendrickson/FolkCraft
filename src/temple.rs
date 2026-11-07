@@ -23,7 +23,14 @@ pub const TEMPLE_TOP: i32 = TEMPLE_TIERS * TEMPLE_TIER_HEIGHT;
 ///   passage `2 * TEMPLE_PASSAGE_HALF + 1` wide that runs in from the north face (towards -z),
 /// - on the top platform a shrine: walls, a doorway in the south side, a flat roof and a tall roof comb along it, with a pile
 ///   of gold on the floor in the middle.
+#[cfg(test)]
 pub fn temple_cell(dx: i32, dz: i32, dy: i32) -> Block {
+    temple_cell_boarded(dx, dz, dy, false)
+}
+
+/// `temple_cell`, with the passage to the idol's chamber boarded up (`boarded`): the mouth of the passage in the north face is shut
+/// by `TEMPLE_BOARD_DEPTH` layers of `Block::CastleDoor` (unbreakable wooden planking) until the Orangutan is dead.
+pub fn temple_cell_boarded(dx: i32, dz: i32, dy: i32, boarded: bool) -> Block {
     let (ax, az) = (dx.abs(), dz.abs());
     let edge = ax.max(az);
     if edge > TEMPLE_BASE_HALF || dy < 0 {
@@ -34,7 +41,7 @@ pub fn temple_cell(dx: i32, dz: i32, dy: i32) -> Block {
         return if (ax, az, dy) == (0, 0, 0) { Block::IdolPlinth } else { Block::Air };
     }
     if dz < 0 && ax <= TEMPLE_PASSAGE_HALF && dy < TEMPLE_PASSAGE_HEIGHT {
-        return Block::Air;
+        return if boarded && dz > -TEMPLE_BASE_HALF - 1 && dz <= -TEMPLE_BASE_HALF + TEMPLE_BOARD_DEPTH - 1 { Block::CastleDoor } else { Block::Air };
     }
     let tier = ((TEMPLE_BASE_HALF - edge) / 2).min(TEMPLE_TIERS - 1);
     let mut height = TEMPLE_TIER_HEIGHT * (tier + 1);

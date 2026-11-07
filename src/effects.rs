@@ -783,3 +783,39 @@ pub fn draw_acid(world: &World, acid: &[crate::hazard::AcidCell], time: f32) {
         draw_box(vec3(cell.x as f32 + 0.5, y, cell.z as f32 + 0.5), vec3(0.5, 0.02 + shimmer.abs(), 0.5), 0.0, Color::new(0.45, 0.28, 0.10, 0.62 * fade));
     }
 }
+
+// --- Falling stars ----------------------------------------------------------------------------
+
+/// Draw the falling stars of the Skylands' nights: a bright white-gold head with a halo and a long fading tail while a star falls, and where
+/// it lands a flash that swells and fades, a pillar of light and a ring of sparks. Call while the 3D camera is active, with the other
+/// translucent things.
+pub fn draw_falling_stars(stars: &[crate::stars::FallingStar], time: f32) {
+    for star in stars {
+        if !star.landed() {
+            let head = star.pos();
+            let back = -star.direction();
+            draw_sphere(head, 1.1, None, Color::new(1.0, 1.0, 0.95, 1.0));
+            draw_sphere(head, 1.9 + 0.2 * (time * 30.0).sin(), None, Color::new(1.0, 0.92, 0.55, 0.35));
+            draw_sphere(head, 3.2, None, Color::new(0.80, 0.88, 1.0, 0.12));
+            const TAIL: usize = 14;
+            for i in 1..=TAIL {
+                let f = i as f32 / TAIL as f32;
+                let at = head + back * (f * FALLING_STAR_TRAIL_LENGTH);
+                let fade = (1.0 - f).powf(1.3);
+                draw_sphere(at, 0.95 * (1.0 - 0.7 * f), None, Color::new(1.0, 0.90 - 0.25 * f, 0.55 - 0.2 * f, 0.75 * fade));
+            }
+        } else {
+            let t = (star.flash_age() / FALLING_STAR_FLASH_SECONDS).clamp(0.0, 1.0);
+            let fade = (1.0 - t) * (1.0 - t);
+            let at = star.to;
+            draw_sphere(at + vec3(0.0, 0.6, 0.0), 1.0 + 3.5 * t.sqrt(), None, Color::new(1.0, 0.95, 0.70, 0.45 * fade));
+            draw_sphere(at + vec3(0.0, 0.6, 0.0), 0.8 * (1.0 - t * 0.5), None, Color::new(1.0, 1.0, 0.95, 0.9 * fade));
+            draw_box(at + vec3(0.0, 9.0, 0.0), vec3(0.18 + 0.25 * (1.0 - t), 9.0, 0.18 + 0.25 * (1.0 - t)), 0.0, Color::new(1.0, 0.95, 0.75, 0.35 * fade));
+            for i in 0..10 {
+                let a = i as f32 * std::f32::consts::TAU / 10.0 + t * 1.5;
+                let r = 0.5 + 4.5 * t.sqrt();
+                draw_box(at + vec3(a.cos() * r, 0.3 + 1.6 * t * (1.0 + (i % 3) as f32 * 0.4), a.sin() * r), Vec3::splat(0.12), a, Color::new(1.0, 0.92, 0.6, 0.9 * fade));
+            }
+        }
+    }
+}

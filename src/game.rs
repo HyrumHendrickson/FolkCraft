@@ -16,8 +16,9 @@ use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKi
 use crate::horizen::{self, Dimension};
 use crate::tower::Tower;
 use crate::skylands;
+use crate::stars::{self, FallingStar};
 use crate::{ghosts, stonehenge};
-use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
+use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Landmarks, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
@@ -211,8 +212,13 @@ pub struct Game {
     storm_lightning_pos: Vec3,
     /// Fade in progress after the player reaches the bottom of the well.
     pub horizen_transition: Option<f32>,
+    /// A well fall is under way and the player has not yet been moved to the Horizen: that happens when the screen is black.
+    pub horizen_pending: bool,
     /// Quail the player has killed. An Iron Quail comes for every `QUAIL_KILLS_PER_IRON_QUAIL`.
     pub quail_kills: u32,
+    /// Parrots the player has killed (Bronze Parrots come for every `PARROTS_PER_BRONZE_PARROT`), and Bronze Parrots due but not yet out.
+    pub parrot_kills: u32,
+    pub bronze_parrots_owed: u32,
     /// What a ghost is saying now, and for how many more seconds (shown as text on the screen: ghosts are not seen).
     pub ghost_text: Option<(String, f32)>,
     /// Whether the player is inside the graveyard (so that its ghost speaks when they walk in, not every frame).
@@ -238,6 +244,9 @@ pub struct Game {
     /// made acid.
     pub projectiles: Vec<Projectile>,
     pub bursts: Vec<ShownBurst>,
+    /// The falling stars of the Skylands' nights, and the seconds since the last one began to fall.
+    pub falling_stars: Vec<FallingStar>,
+    star_timer: f32,
     pub acid: Vec<AcidCell>,
     /// Seconds the player has stood in acid water since it last burned them.
     acid_burn: f32,
@@ -350,7 +359,10 @@ impl Game {
             storm_lightning_flash: 0.0,
             storm_lightning_pos: Vec3::ZERO,
             horizen_transition: None,
+            horizen_pending: false,
             quail_kills: data.quail_kills,
+            parrot_kills: data.parrot_kills,
+            bronze_parrots_owed: 0,
             ghost_text: None,
             in_graveyard: false,
             iron_quails_owed: 0,
@@ -363,6 +375,8 @@ impl Game {
             victory: None,
             projectiles: Vec::new(),
             bursts: Vec::new(),
+            falling_stars: Vec::new(),
+            star_timer: 0.0,
             acid: Vec::new(),
             acid_burn: 0.0,
             hunt_total: 0,
@@ -400,6 +414,7 @@ impl Game {
             in_skylands: self.in_skylands(),
             skylands: find(Dimension::Skylands),
             quail_kills: self.quail_kills,
+            parrot_kills: self.parrot_kills,
             bat_kills: self.bat_kills,
         };
         serialize_save_full(&self.info.name, self.info.seed, over.0, over.1, &self.inventory, over.2, self.health, self.dev_mode, &extras)
@@ -656,7 +671,7 @@ impl Game {
                 a.calm();
             }
             // The fight is over: the Iron Quail has won.
-            self.animals.retain(|a| a.kind != AnimalKind::IronQuail);
+            self.animals.retain(|a| !a.kind.is_metal_bird());
             // The Wild Hunt has won too: its warriors and their arrows are gone, and the horn can call them again.
             self.animals.retain(|a| !a.kind.is_wild_hunt());
             // The ravens Nessie called go too, and what the bosses threw.
@@ -1195,8 +1210,11 @@ impl Game {
             .enumerate()
             .filter(|(_, a)| a.kind.is_huntable())
             .filter_map(|(i, a)| {
-                let (lo, hi) = a.hitbox();
-                ray_box(eye, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= reach).map(|t| (i, t))
+                a.hitboxes()
+                    .into_iter()
+                    .filter_map(|(lo, hi)| ray_box(eye, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= reach))
+                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|t| (i, t))
             })
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
         self.line_of_sight(eye, dir, t).then_some(i)
@@ -1252,6 +1270,9 @@ impl Game {
             if animal.kind == AnimalKind::Quail {
                 self.note_quail_killed();
             }
+            if animal.kind == AnimalKind::Parrot {
+                self.note_parrot_killed();
+            }
             if animal.kind == AnimalKind::Bat && self.in_horizen() {
                 self.note_cave_bat_killed();
             }
@@ -1275,7 +1296,79 @@ impl Game {
             self.boss_slain(&animal);
         }
         self.summon_iron_quails();
+        self.summon_bronze_parrots();
         self.summon_vampire_bats();
+    }
+
+    /// The falling stars of the Skylands' nights: one begins to fall every `FALLING_STAR_INTERVAL` seconds, bound for an island the player can
+    /// see (`stars::pick_landing`), and each is dropped from the list once its flash has faded.
+    fn update_falling_stars(&mut self, dt: f32) {
+        for star in &mut self.falling_stars {
+            star.age += dt;
+        }
+        self.falling_stars.retain(|s| !s.done());
+        if !self.in_skylands() || !self.world.night {
+            self.star_timer = 0.0;
+            return;
+        }
+        self.star_timer += dt;
+        if self.star_timer >= FALLING_STAR_INTERVAL {
+            self.star_timer = 0.0;
+            let eye = self.player.pos + vec3(0.0, EYE_HEIGHT, 0.0);
+            let range = FALLING_STAR_RANGE.min((crate::config::render_radius() * CHUNK_SIZE) as f32);
+            if let Some(landing) = stars::pick_landing(self.info.seed, eye, self.player.look_dir(), range, &mut self.rng) {
+                let star = stars::star_for(landing, &mut self.rng);
+                self.falling_stars.push(star);
+            }
+        }
+    }
+
+    /// Poison does its work: each poisoned animal loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds until its poison
+    /// runs out (`POISON_SECONDS` after the arrow that gave it). An animal it kills drops its loot as usual.
+    fn update_poison(&mut self, dt: f32) {
+        let mut dead = Vec::new();
+        for (i, a) in self.animals.iter_mut().enumerate() {
+            if a.poisoned <= 0.0 {
+                continue;
+            }
+            a.poisoned = (a.poisoned - dt).max(0.0);
+            a.poison_tick += dt;
+            if a.poison_tick >= POISON_INTERVAL {
+                a.poison_tick -= POISON_INTERVAL;
+                if a.damage(POISON_DAMAGE) {
+                    dead.push(i);
+                }
+            }
+        }
+        if !dead.is_empty() {
+            self.remove_dead(dead);
+        }
+    }
+
+    /// The records of the Skylands: the world's own when the player is there, else those of the parked Skylands (if they have been).
+    fn skylands_landmarks_mut(&mut self) -> Option<&mut Landmarks> {
+        if self.world.dimension == Dimension::Skylands {
+            return Some(&mut self.world.landmarks);
+        }
+        [&mut self.away, &mut self.shelf].into_iter().flatten().find(|a| a.world.dimension == Dimension::Skylands).map(|a| &mut a.world.landmarks)
+    }
+
+    /// A dead Phoenix rises again `PHOENIX_RESPAWN_SECONDS` after it died, wherever the player is meanwhile: it is alive again in its
+    /// crater (it appears when the player comes near, as it did the first time) and the fire tornadoes come back with it.
+    fn update_phoenix_respawn(&mut self, dt: f32) {
+        let in_skylands = self.in_skylands();
+        let Some(marks) = self.skylands_landmarks_mut() else { return };
+        if !marks.phoenix_slain {
+            return;
+        }
+        marks.phoenix_dead_for += dt;
+        if marks.phoenix_dead_for >= PHOENIX_RESPAWN_SECONDS {
+            marks.phoenix_slain = false;
+            marks.phoenix_dead_for = 0.0;
+            if in_skylands {
+                self.toasts.push("The Phoenix rises again from its crater.".to_string());
+            }
+        }
     }
 
     /// Count a bat killed in the cave: every `BATS_PER_VAMPIRE`th calls a vampire bat.
@@ -1355,6 +1448,39 @@ impl Game {
         }
     }
 
+    /// Count a parrot the player has killed: every `PARROTS_PER_BRONZE_PARROT`th one calls `BRONZE_PARROTS_PER_SUMMON` Bronze Parrots.
+    fn note_parrot_killed(&mut self) {
+        self.parrot_kills += 1;
+        if self.parrot_kills % PARROTS_PER_BRONZE_PARROT == 0 {
+            self.bronze_parrots_owed += BRONZE_PARROTS_PER_SUMMON;
+        }
+    }
+
+    /// Bring out the Bronze Parrots that are due, spread round the player, each `BRONZE_PARROT_SPAWN_DISTANCE` away on open ground. Any
+    /// that finds no place now is tried again with the next wildlife spawn.
+    fn summon_bronze_parrots(&mut self) {
+        let mut came = 0;
+        while self.bronze_parrots_owed > 0 && self.in_overworld() {
+            let p = self.player.pos;
+            let first = self.rng.unit() * std::f32::consts::TAU;
+            let share = std::f32::consts::TAU / BRONZE_PARROTS_PER_SUMMON as f32;
+            let offset = (came % BRONZE_PARROTS_PER_SUMMON as usize) as f32 * share;
+            let placed = (0..24).any(|i| {
+                let a = first + offset + i as f32 * std::f32::consts::TAU / 24.0;
+                let (x, z) = ((p.x + a.cos() * BRONZE_PARROT_SPAWN_DISTANCE).floor() as i32, (p.z + a.sin() * BRONZE_PARROT_SPAWN_DISTANCE).floor() as i32);
+                self.spawn_animal(AnimalKind::BronzeParrot, x, z)
+            });
+            if !placed {
+                break;
+            }
+            self.bronze_parrots_owed -= 1;
+            came += 1;
+        }
+        if came > 0 {
+            self.toasts.push("A glint of bronze in the canopy: the Bronze Parrots come for you.".to_string());
+        }
+    }
+
     /// Swing the stone axe or bronze mallet along `dir` from `eye`. Does nothing without one in hand or before
     /// the previous swing is over. Returns whether it hit an animal.
     pub fn swing_melee(&mut self, eye: Vec3, dir: Vec3) -> bool {
@@ -1423,16 +1549,23 @@ impl Game {
             }
         }
         if alarmed {
-            self.call_ravens(LOCH_NESS_ALARM_RAVENS, LOCH_NESS_MAX_RAVENS + LOCH_NESS_ALARM_RAVENS);
+            self.call_ravens(LOCH_NESS_ALARM_RAVENS, LOCH_NESS_MAX_RAVENS);
         }
     }
 
-    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a Phoenix Arrow
-    /// in preference when there is one in the inventory, and that is never used up.
+    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a poison arrow
+    /// first when there is one in the inventory (it is used up), then a Phoenix Arrow (never used up), then an ordinary arrow.
     fn shoot(&mut self, launcher: ItemKind, eye: Vec3, dir: Vec3) -> bool {
         let Some(ammo) = launcher.ammo() else { return false };
         if self.held_item() != Some(launcher) || self.attack_cooldown > 0.0 {
             return false;
+        }
+        // Poison arrows go first (and are used up); then a Phoenix Arrow if there is one; then the ordinary arrows.
+        if launcher == ItemKind::Bow && self.inventory.remove(ItemKind::PoisonArrow, 1) {
+            self.attack_cooldown = BOW_COOLDOWN;
+            self.arrows.push(Arrow::fired_poison(eye, dir));
+            self.alarm_nessie();
+            return true;
         }
         if launcher == ItemKind::Bow && self.inventory.count(ItemKind::PhoenixArrow) > 0 {
             self.attack_cooldown = BOW_COOLDOWN;
@@ -1461,12 +1594,16 @@ impl Game {
     /// pebble), to be picked up and used again.
     pub fn update_arrows(&mut self, dt: f32) {
         let mut hits = Vec::new();
+        let mut poisoned = Vec::new();
         let mut landed = Vec::new();
         let (world, animals) = (&self.world, &self.animals);
         self.arrows.retain_mut(|arrow| match arrow.update(world, animals, dt) {
             Fate::InFlight => true,
             Fate::HitAnimal(i) => {
                 hits.push((i, arrow.damage()));
+                if arrow.poisons() {
+                    poisoned.push(i);
+                }
                 false
             }
             Fate::HitBlock | Fate::Expired => {
@@ -1477,6 +1614,9 @@ impl Game {
                 false
             }
         });
+        for i in poisoned {
+            self.animals[i].poison();
+        }
         self.hurt_animals(&hits);
         for (kind, spot) in landed {
             self.items.push(DroppedItem::at_rest(kind, spot));
@@ -1529,13 +1669,34 @@ impl Game {
         let phase = self.rng.range(0, 63);
         match event {
             TrekEvent::Lake { at, dir } => {
-                self.world.add_lake(Lake::ahead(at, dir, phase));
-                self.toasts.push("The river opens out ahead into a great lake.".to_string());
+                // Further out along the same line if something already stands where the lake would.
+                let marks = &self.world.landmarks;
+                let site = (0..SITE_PUSH_STEPS).map(|i| {
+                    let mut lake = Lake::ahead(at, dir, phase);
+                    let push = (i * SITE_PUSH_BLOCKS) as f32;
+                    lake.x += (dir.0 * push).round() as i32;
+                    lake.z += (dir.1 * push).round() as i32;
+                    lake
+                }).find(|l| marks.has_room_for_lake(l));
+                if let Some(lake) = site {
+                    self.world.add_lake(lake);
+                    self.toasts.push("The river opens out ahead into a great lake.".to_string());
+                }
             }
             TrekEvent::Mountain { .. } if self.world.landmarks.mountain().is_some() => {}
             TrekEvent::Mountain { at, dir } => {
-                self.world.add_mountain(Mountain::ahead(at, dir, phase));
-                self.toasts.push("The compass has led you north: a great mountain rises ahead. Its needle will point to it from now on.".to_string());
+                let marks = &self.world.landmarks;
+                let site = (0..SITE_PUSH_STEPS).map(|i| {
+                    let mut mountain = Mountain::ahead(at, dir, phase);
+                    let push = (i * SITE_PUSH_BLOCKS) as f32;
+                    mountain.x += (dir.0 * push).round() as i32;
+                    mountain.z += (dir.1 * push).round() as i32;
+                    mountain
+                }).find(|m| marks.has_room_for_mountain(m));
+                if let Some(mountain) = site {
+                    self.world.add_mountain(mountain);
+                    self.toasts.push("The compass has led you north: a great mountain rises ahead. Its needle will point to it from now on.".to_string());
+                }
             }
         }
     }
@@ -1555,8 +1716,10 @@ impl Game {
         }
         let p = self.player.pos;
         let first = self.rng.unit() * std::f32::consts::TAU;
-        let sites: Vec<GrandCastle> = (0..16).map(|i| GrandCastle::ahead((p.x, p.z), first + i as f32 * std::f32::consts::TAU / 16.0)).collect();
-        let site = sites.iter().copied().find(|c| self.world.landmarks.has_room_for(c)).unwrap_or(sites[0]);
+        let marks = &self.world.landmarks;
+        let Some(site) = clear_site(first, |a| GrandCastle::ahead((p.x, p.z), a), |c, dx, dz| GrandCastle { x: c.x + dx, z: c.z + dz }, |c| marks.has_room_for(c)) else {
+            return false;
+        };
         self.world.add_grand_castle(site);
         self.toasts.push("A ghostly trail winds away through the dark.".to_string());
         true
@@ -1571,8 +1734,10 @@ impl Game {
         }
         let p = self.player.pos;
         let facing = self.player.yaw;
-        let sites: Vec<GrandCastle> = (0..16).map(|i| GrandCastle::ahead((p.x, p.z), facing + i as f32 * std::f32::consts::TAU / 16.0)).collect();
-        let site = sites.iter().copied().find(|c| self.world.landmarks.has_room_for_ruins(c)).unwrap_or(sites[0]);
+        let marks = &self.world.landmarks;
+        let Some(site) = clear_site(facing, |a| GrandCastle::ahead((p.x, p.z), a), |c, dx, dz| GrandCastle { x: c.x + dx, z: c.z + dz }, |c| marks.has_room_for_ruins(c)) else {
+            return false;
+        };
         self.world.add_ruined_castle(site);
         self.toasts.push("The crown grows warm. Far ahead, the ruins of a castle wait.".to_string());
         true
@@ -1698,21 +1863,23 @@ impl Game {
         }
         let p = self.player.pos;
         let first = self.rng.unit() * std::f32::consts::TAU;
-        let angle = |i: usize| first + i as f32 * std::f32::consts::TAU / 16.0;
+        let marks = &self.world.landmarks;
         if self.world.night {
             if self.world.landmarks.graveyard.is_some() {
                 return false;
             }
-            let sites: Vec<Graveyard> = (0..16).map(|i| Graveyard::ahead((p.x, p.z), angle(i))).collect();
-            let site = sites.iter().copied().find(|g| self.world.landmarks.has_room_for_graveyard(g)).unwrap_or(sites[0]);
+            let Some(site) = clear_site(first, |a| Graveyard::ahead((p.x, p.z), a), |g, dx, dz| Graveyard { x: g.x + dx, z: g.z + dz }, |g| marks.has_room_for_graveyard(g)) else {
+                return false;
+            };
             self.world.add_graveyard(site);
             self.toasts.push("A sickly green trail winds away through the dark.".to_string());
         } else {
             if self.world.landmarks.well.is_some() {
                 return false;
             }
-            let sites: Vec<Well> = (0..16).map(|i| Well::ahead((p.x, p.z), angle(i))).collect();
-            let site = sites.iter().copied().find(|w| self.world.landmarks.has_room_for_well(w)).unwrap_or(sites[0]);
+            let Some(site) = clear_site(first, |a| Well::ahead((p.x, p.z), a), |w, dx, dz| Well { x: w.x + dx, z: w.z + dz }, |w| marks.has_room_for_well(w)) else {
+                return false;
+            };
             self.world.add_well(site);
             self.toasts.push("A pale trail leads away across the land.".to_string());
         }
@@ -1867,7 +2034,7 @@ impl Game {
             let p = self.player.pos;
             for i in 0..self.animals.len() {
                 let a = &self.animals[i];
-                if !matches!(a.kind, AnimalKind::Quail | AnimalKind::Crow) || vec2(a.pos.x - p.x, a.pos.z - p.z).length() > PIPES_CALL_RANGE {
+                if !matches!(a.kind, AnimalKind::Quail | AnimalKind::Parrot | AnimalKind::Crow) || vec2(a.pos.x - p.x, a.pos.z - p.z).length() > PIPES_CALL_RANGE {
                     continue;
                 }
                 let angle = self.rng.unit() * std::f32::consts::TAU;
@@ -2015,7 +2182,7 @@ impl Game {
             let gap = vec2(p.x - (jx as f32 + 0.5), p.z - (jz as f32 + 0.5)).length();
             if gap <= ORANGUTAN_SPAWN_DISTANCE && self.world.chunks.contains_key(&World::chunk_of(jx + dx, jz + dz)) {
                 let base = self.world.ground_top(jx, jz);
-                let at = vec3((jx + dx) as f32 + 0.5, (base + 1 + dy) as f32 + 0.01, (jz + dz) as f32 + 0.5);
+                let at = vec3((jx + dx) as f32 + 1.0, (base + 1 + dy) as f32 + 0.01, (jz + dz) as f32 + 0.5);
                 let mut ape = Animal::new(AnimalKind::Orangutan, at, &mut self.rng);
                 ape.home = vec3(jx as f32 + 0.5, at.y, jz as f32 + 0.5);
                 self.animals.push(ape);
@@ -2068,13 +2235,14 @@ impl Game {
                 }
             }
             AnimalKind::Orangutan => {
-                self.world.landmarks.orangutan_slain = true;
-                self.toasts.push("The Orangutan is slain.".to_string());
+                self.world.open_temple();
+                self.toasts.push("The Orangutan is slain. The boards over the passage to the idol give way.".to_string());
             }
             AnimalKind::Phoenix => {
                 self.world.landmarks.phoenix_slain = true;
+                self.world.landmarks.phoenix_dead_for = 0.0;
                 self.tornadoes.clear();
-                self.toasts.push("The Phoenix is slain. The fire tornadoes that sweep the islands die away; the crater\'s never does.".to_string());
+                self.toasts.push("The Phoenix is slain. The fire tornadoes that sweep the islands die away; in a minute it will rise again.".to_string());
             }
             kind if kind.is_wild_hunt() => {
                 // The last of the Hunt to fall wins the game.
@@ -2268,8 +2436,9 @@ pub fn enter_skylands(&mut self) {
         if self.player.on_ground
             && p.y <= WELL_FLOOR_Y + 0.05
             && self.world.landmarks.is_well(p.x.floor() as i32, p.z.floor() as i32)
+            && !self.horizen_pending
         {
-            self.enter_horizen();
+            self.begin_horizen_fall();
         }
     }
 
@@ -2299,8 +2468,11 @@ pub fn enter_skylands(&mut self) {
         }
         // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
         self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
-        // A vampire bat left behind in the cave is waiting for the player's next visit; the king's spirits do not leave the castle's cave.
+        self.bronze_parrots_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).count() as u32;
+        // A vampire bat left behind in the cave is waiting for the player's next visit. The king's spirits go with the player, whatever
+        // dimension they travel to (each keeps the arrows it has left).
         self.vampire_bats_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count() as u32;
+        let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
         self.king_dialog = None;
         self.animals.clear();
         self.arrows.clear();
@@ -2311,6 +2483,8 @@ pub fn enter_skylands(&mut self) {
         self.crater_tornado = None;
         self.tornado_timer = 0.0;
         self.cyclone_timer = 0.0;
+        self.falling_stars.clear();
+        self.star_timer = 0.0;
         self.reset_storm();
         self.treks = Treks::new();
         self.world.stream_chunks(self.player.pos);
@@ -2320,36 +2494,73 @@ pub fn enter_skylands(&mut self) {
             self.player.pos = Player::new().pos;
         }
         self.player.lift_out_of_blocks(&self.world);
+        self.bring_spirits(&spirits);
     }
 
-    /// Fall into the Horizen. The player is swapped into its arrival pool while the screen is black.
+    /// Set the king's spirit archers (shots left, place on their circle) down round the player, after a journey between dimensions.
+    fn bring_spirits(&mut self, spirits: &[(u32, f32)]) {
+        let p = self.player.pos;
+        for &(shots, a) in spirits {
+            let mut spirit = Animal::new(AnimalKind::SpiritArcher, p + vec3(a.cos() * SPIRIT_FOLLOW_RADIUS, SPIRIT_FOLLOW_HEIGHT, a.sin() * SPIRIT_FOLLOW_RADIUS), &mut self.rng);
+            spirit.set_orbit(a);
+            spirit.shots_left = shots;
+            self.animals.push(spirit);
+        }
+    }
+
+    /// Begin the fall into the Horizen: the screen fades to black over the well, and the player is moved while it is black
+    /// (`update_horizen_transition`), so the move is never seen.
+    pub fn begin_horizen_fall(&mut self) {
+        if self.in_horizen() || self.horizen_pending {
+            return;
+        }
+        self.horizen_pending = true;
+        self.horizen_transition = Some(0.0);
+        self.toasts.push("You fall through the water into the Horizen.".to_string());
+    }
+
+    /// Move the player into the Horizen now. They always arrive in the arrival pool (never where they last left the cave), and it is
+    /// always day when they do.
     pub fn enter_horizen(&mut self) {
         if self.in_horizen() {
             return;
         }
         self.travel_to(Dimension::Horizen);
+        let (sx, sz) = horizen::spawn_centre();
+        self.player.pos = vec3(sx, (GROUND_TOP + 1) as f32 + 0.01, sz);
+        self.player.vel = Vec3::ZERO;
+        self.world.stream_chunks(self.player.pos);
+        self.world.rebuild_dirty(self.player.pos, usize::MAX);
+        self.player.lift_out_of_blocks(&self.world);
         // Whatever it was when it was left, the cave is day when you come in.
         self.world.set_night(false);
-        self.horizen_transition = Some(0.0);
-        self.toasts.push("You fall through the water into the Horizen.".to_string());
+        self.horizen_pending = false;
+        if self.horizen_transition.is_none() {
+            // Called directly (not by a well fall): the screen is already black, and only fades back in.
+            self.horizen_transition = Some(HORIZEN_TRANSITION_SECONDS * HORIZEN_FADE_SHARE);
+        }
     }
 
-    /// Advance the black screen after a well fall. The player has already appeared in the arrival pool underneath it.
+    /// Advance the black screen of a well fall. The player is moved to the Horizen when it is fully black.
     pub fn update_horizen_transition(&mut self, dt: f32) {
         let Some(mut elapsed) = self.horizen_transition else { return };
         elapsed += dt;
         self.horizen_transition = (elapsed < HORIZEN_TRANSITION_SECONDS).then_some(elapsed);
+        if self.horizen_pending && elapsed >= HORIZEN_TRANSITION_SECONDS * HORIZEN_FADE_SHARE {
+            self.horizen_transition = Some(elapsed);
+            self.enter_horizen();
+        }
     }
 
     /// Darkness of the well transition, from clear to black and back to clear.
     pub fn horizen_transition_darkness(&self) -> f32 {
         let Some(elapsed) = self.horizen_transition else { return 0.0 };
         let t = (elapsed / HORIZEN_TRANSITION_SECONDS).clamp(0.0, 1.0);
-        const FADE_SHARE: f32 = 0.30;
-        if t < FADE_SHARE {
-            t / FADE_SHARE
-        } else if t > 1.0 - FADE_SHARE {
-            (1.0 - t) / FADE_SHARE
+        let fade = HORIZEN_FADE_SHARE;
+        if t < fade {
+            t / fade
+        } else if t > 1.0 - fade {
+            (1.0 - t) / fade
         } else {
             1.0
         }
@@ -2359,6 +2570,10 @@ pub fn enter_skylands(&mut self) {
     /// a lake, or something solid is in the way.
     pub fn spawn_animal(&mut self, kind: AnimalKind, x: i32, z: i32) -> bool {
         if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || self.world.is_wet_column(x, z) {
+            return false;
+        }
+        // The jungle holds only its own creatures.
+        if kind.is_ordinary_wildlife() && self.in_overworld() && crate::terrain::in_jungle(self.info.seed, x, z) {
             return false;
         }
         let ground_y = (self.world.ground_top(x, z) + 1) as f32;
@@ -2392,8 +2607,10 @@ pub fn enter_skylands(&mut self) {
         if self.player_in_mine() {
             self.spawn_mine_bats();
         }
+        // In the jungle only the jungle's own creatures come (jaguars, flying snakes, parrots): none of the ordinary wildlife, no ravens.
         if self.player_in_jungle() {
             self.spawn_jungle_wildlife();
+            return;
         }
         // Ravens come out at night.
         if self.world.night && self.animals.iter().filter(|a| a.kind == AnimalKind::Raven && !a.summoned).count() < MAX_RAVEN && self.rng.next() % 100 < SPAWN_WEIGHT_RAVEN {
@@ -2403,6 +2620,7 @@ pub fn enter_skylands(&mut self) {
         let room = |kind: AnimalKind| match kind {
             AnimalKind::Deer => MAX_DEER,
             AnimalKind::Quail => MAX_QUAIL,
+            AnimalKind::Parrot => MAX_PARROT,
             AnimalKind::Bear => MAX_BEAR,
             AnimalKind::Rabbit => MAX_RABBIT,
             AnimalKind::Moose => MAX_MOOSE,
@@ -2411,7 +2629,7 @@ pub fn enter_skylands(&mut self) {
             AnimalKind::Crow => MAX_CROW,
             AnimalKind::Jaguar => MAX_JAGUAR,
             AnimalKind::FlyingSnake => MAX_FLYING_SNAKE,
-            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::Bat | AnimalKind::Raven | AnimalKind::Phoenix => 0,
+            AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Bat | AnimalKind::Raven | AnimalKind::Phoenix => 0,
             AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::Orangutan => 0,
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => 0,
         }
@@ -2448,6 +2666,9 @@ pub fn enter_skylands(&mut self) {
         let dist = ANIMAL_SPAWN_MIN_DISTANCE + self.rng.unit() * (ANIMAL_SPAWN_MAX_DISTANCE - ANIMAL_SPAWN_MIN_DISTANCE);
         let p = self.player.pos;
         let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
+        if crate::terrain::in_jungle(self.info.seed, x, z) {
+            return;
+        }
         // A covey never takes the kind past its limit.
         let group = if kind == AnimalKind::Quail { self.rng.range(1, 4) as usize } else { 1 }.min(room(kind));
         for _ in 0..group {
@@ -2461,6 +2682,9 @@ pub fn enter_skylands(&mut self) {
     /// of the player and any bear; a bear only ever reacts to the player.
     pub fn update_animals(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+        self.update_poison(dt);
+        self.update_phoenix_respawn(dt);
+        self.update_falling_stars(dt);
         match self.world.dimension {
             // The cave of the Horizen holds bats and nothing else (see `spawn_cave_bats`).
             Dimension::Horizen => {}
@@ -2533,7 +2757,7 @@ pub fn enter_skylands(&mut self) {
             events.extend(a.take_events());
             if a.ready_to_shoot(player) {
                 // An archer (or an Iron Quail) shoots if it can see the player, leading them a little and allowing for the missile's fall.
-                let quail = a.kind == AnimalKind::IronQuail;
+                let quail = a.kind.is_metal_bird();
                 let (speed, spread) = if quail { (IRON_FEATHER_SPEED, IRON_FEATHER_SPREAD) } else { (HUNT_ARROW_SPEED, HUNT_ARROW_SPREAD) };
                 let origin = a.pos + vec3(a.heading.cos() * 0.5, if quail { 0.8 } else { 1.5 }, a.heading.sin() * 0.5);
                 let gap = (player + vec3(0.0, 1.0, 0.0) - origin).length();
@@ -2583,6 +2807,7 @@ pub fn enter_skylands(&mut self) {
             self.spawn_wildlife();
             self.spawn_bosses();
             self.summon_iron_quails();
+            self.summon_bronze_parrots();
         }
     }
 
@@ -2864,12 +3089,23 @@ pub fn enter_skylands(&mut self) {
     /// sight a good way from the player, in the jungle.
     fn spawn_jungle_wildlife(&mut self) {
         let count = |g: &Game, k: AnimalKind| g.animals.iter().filter(|a| a.kind == k).count();
-        let kind = if self.rng.next() % 100 < SPAWN_WEIGHT_JAGUAR + SPAWN_WEIGHT_FLYING_SNAKE {
-            if self.rng.next() % (SPAWN_WEIGHT_JAGUAR + SPAWN_WEIGHT_FLYING_SNAKE) < SPAWN_WEIGHT_JAGUAR { AnimalKind::Jaguar } else { AnimalKind::FlyingSnake }
-        } else {
+        let total = SPAWN_WEIGHT_JAGUAR + SPAWN_WEIGHT_FLYING_SNAKE + SPAWN_WEIGHT_PARROT;
+        if self.rng.next() % 100 >= total {
             return;
+        }
+        let roll = self.rng.next() % total;
+        let kind = if roll < SPAWN_WEIGHT_JAGUAR {
+            AnimalKind::Jaguar
+        } else if roll < SPAWN_WEIGHT_JAGUAR + SPAWN_WEIGHT_FLYING_SNAKE {
+            AnimalKind::FlyingSnake
+        } else {
+            AnimalKind::Parrot
         };
-        let max = if kind == AnimalKind::Jaguar { MAX_JAGUAR } else { MAX_FLYING_SNAKE };
+        let max = match kind {
+            AnimalKind::Jaguar => MAX_JAGUAR,
+            AnimalKind::FlyingSnake => MAX_FLYING_SNAKE,
+            _ => MAX_PARROT,
+        };
         if count(self, kind) >= max {
             return;
         }
@@ -2881,7 +3117,7 @@ pub fn enter_skylands(&mut self) {
             if !crate::terrain::in_jungle(self.info.seed, x, z) {
                 continue;
             }
-            let placed = if kind == AnimalKind::Jaguar { self.spawn_animal(kind, x, z) } else { self.spawn_flyer(kind, x, z, SNAKE_SPIRAL_HEIGHT + 2.0).is_some() };
+            let placed = if kind == AnimalKind::FlyingSnake { self.spawn_flyer(kind, x, z, SNAKE_SPIRAL_HEIGHT + 2.0).is_some() } else { self.spawn_animal(kind, x, z) };
             if placed {
                 return;
             }
@@ -6207,6 +6443,7 @@ mod totem_horizen_and_wear_tests {
         for _ in 0..240 {
             g.player.update(&g.world, 1.0 / 60.0, &MoveInput::default());
             g.update_landmarks();
+            g.update_horizen_transition(1.0 / 60.0);
             if g.in_horizen() {
                 break;
             }
@@ -6229,8 +6466,53 @@ mod totem_horizen_and_wear_tests {
         assert!(!g.in_horizen(), "a shallow fall does not count");
         g.player.pos.y = WELL_FLOOR_Y;
         g.update_dimension();
-        assert!(g.in_horizen(), "the floor collision completes the fall");
-        assert!(g.horizen_transition.is_some(), "the transfer starts blacked out");
+        assert!(!g.in_horizen() && g.horizen_pending, "the floor collision starts the fall, behind a fading screen");
+        assert!(g.horizen_transition.is_some());
+        g.update_horizen_transition(HORIZEN_TRANSITION_SECONDS * HORIZEN_FADE_SHARE + 0.01);
+        assert!(g.in_horizen(), "the player is moved once the screen is black");
+        assert!(g.horizen_transition.is_some(), "and the screen then fades back in");
+    }
+
+    #[test]
+    fn the_well_fall_moves_the_player_only_while_the_screen_is_black_and_always_to_the_arrival_pool() {
+        let mut g = game(30);
+        fall_in_the_well(&mut g);
+        assert!(g.in_horizen());
+        // Wander off, leave by dying, and fall in again: the arrival is the same place every time.
+        let arrival = g.player.pos;
+        g.player.pos = vec3(arrival.x + 60.0, arrival.y, arrival.z + 5.0);
+        g.hurt_player(MAX_HEALTH, "gone");
+        assert!(!g.in_horizen());
+        fall_in_the_well(&mut g);
+        assert!(g.in_horizen());
+        let (sx, sz) = horizen::spawn_centre();
+        assert!((g.player.pos.x - sx).abs() < 1.0 && (g.player.pos.z - sz).abs() < 1.0, "back in the arrival pool: {:?}", g.player.pos);
+        // Every frame of the fall before the world changes is already darkening, and the world changes only at full black.
+        let mut h = game(31);
+        let well = Well { x: 40, z: 40 };
+        h.world.add_well(well);
+        for cz in 1..=3 {
+            for cx in 1..=3 {
+                h.world.ensure_chunk(cx, cz);
+            }
+        }
+        h.player.pos = vec3(41.5, WELL_FLOOR_Y, 41.5);
+        h.player.on_ground = true;
+        h.update_dimension();
+        let mut last = -1.0;
+        let mut dark_at_switch = None;
+        for _ in 0..200 {
+            let was_in = h.in_horizen();
+            h.update_horizen_transition(1.0 / 60.0);
+            if !was_in && h.in_horizen() {
+                dark_at_switch = Some(h.horizen_transition_darkness());
+            }
+            if !h.in_horizen() {
+                assert!(h.horizen_transition_darkness() >= last, "it only darkens until the move");
+                last = h.horizen_transition_darkness();
+            }
+        }
+        assert!(dark_at_switch.expect("the player was moved") > 0.95, "the move happens when it is black: {dark_at_switch:?}");
     }
 
     #[test]
@@ -6311,7 +6593,9 @@ mod totem_horizen_and_wear_tests {
         assert!(g.animals.is_empty(), "no creature of the overworld comes along");
         // Land and sky of the new world: flat, with ponds; the player appears on the dedicated arrival pool.
         g.world.stream_chunks(g.player.pos);
-        g.player.update(&g.world, 0.5, &MoveInput::default());
+        for _ in 0..60 {
+            g.player.update(&g.world, 1.0 / 60.0, &MoveInput::default());
+        }
         assert!(g.world.is_wet_column(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32));
         assert!((g.player.pos.y - GROUND_TOP as f32).abs() < 0.2, "on the arrival pool: {}", g.player.pos.y);
         assert!(g.world.chunks.values().all(|c| !c.blocks.contains(&Block::Wood) && !c.blocks.contains(&Block::Bush)), "nothing grows there");
@@ -8533,7 +8817,7 @@ mod boss_update_tests {
     }
 
     #[test]
-    fn nessie_keeps_five_blocks_from_the_shore_however_the_player_tempts_her() {
+    fn nessie_keeps_her_distance_from_the_shore_however_the_player_tempts_her() {
         let mut g = at_the_shore();
         let start = clearance(&g, nessie(&g).pos.x, nessie(&g).pos.z);
         let floor = start.min(LOCH_NESS_SHORE_MARGIN) - 0.8;
@@ -8548,6 +8832,34 @@ mod boss_update_tests {
             closest_to_player = closest_to_player.min((m.pos - g.player.pos).length());
         }
         assert!(closest_to_player > AnimalKind::LochNessMonster.half_width() + PLAYER_HALF_WIDTH + LOCH_NESS_REACH, "so her neck can never reach a player on the shore: {closest_to_player}");
+    }
+
+    #[test]
+    fn nessie_turns_back_into_the_lake_at_the_edge_of_her_water_and_never_stands_stuck_there() {
+        let mut g = at_the_shore();
+        g.world.night = false;
+        let (mut last, mut mark, mut still, mut worst) = (nessie(&g).pos, 0.0_f32, 0.0_f32, 0.0_f32);
+        let mut turned = false;
+        let mut max_ravens = 0;
+        for frame in 0..(180.0 * 60.0) as i32 {
+            g.health = MAX_HEALTH;
+            g.update_animals(DT);
+            stand_on_ground(&mut g);
+            let m = nessie(&g);
+            max_ravens = max_ravens.max(g.animals.iter().filter(|a| a.kind == AnimalKind::Raven && a.summoned).count());
+            let t = frame as f32 / 60.0;
+            if t - mark >= 2.0 {
+                let moved = (m.pos - last).length();
+                still = if moved < 0.5 { still + 2.0 } else { 0.0 };
+                worst = worst.max(still);
+                turned |= clearance(&g, m.pos.x, m.pos.z) < LOCH_NESS_SHORE_MARGIN + 3.0;
+                last = m.pos;
+                mark = t;
+            }
+        }
+        assert!(worst < 4.1, "she stood still against the boundary for {worst} s");
+        assert!(turned, "she did come to the edge of her water");
+        assert!(max_ravens <= LOCH_NESS_MAX_RAVENS && LOCH_NESS_MAX_RAVENS == 4, "at most four ravens: {max_ravens}");
     }
 
     #[test]
@@ -8953,7 +9265,7 @@ mod boss_update_tests {
     }
 
     #[test]
-    fn killing_the_phoenix_ends_the_fire_tornadoes_for_good_and_drops_a_feather_that_makes_a_phoenix_arrow() {
+    fn killing_the_phoenix_ends_the_fire_tornadoes_until_it_rises_again_and_drops_a_feather_that_makes_a_phoenix_arrow() {
         let mut g = on_the_giant_island();
         for _ in 0..40 {
             g.update_animals(1.0);
@@ -8968,11 +9280,11 @@ mod boss_update_tests {
         assert!(g.world.landmarks.phoenix_slain);
         assert!(g.tornadoes.is_empty(), "the tornadoes stop");
         assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::PhoenixFeather).count(), PHOENIX_FEATHER_DROP as usize);
-        for _ in 0..80 {
+        for _ in 0..50 {
             g.update_animals(1.0);
             g.spawn_bosses();
         }
-        assert!(g.tornadoes.is_empty(), "and none comes again, by day");
+        assert!(g.tornadoes.is_empty(), "and none comes while it is dead, by day");
         assert!(g.animals.iter().all(|a| a.kind != AnimalKind::Phoenix), "nor does it");
         // The feather, a stick and a pebble make the arrow.
         give(&mut g, 3, ItemKind::PhoenixFeather, 1);
@@ -8987,9 +9299,35 @@ mod boss_update_tests {
         assert!(text.lines().any(|l| l.ends_with("phoenixslain")), "it is saved");
         let mut again = Game::from_save(info, parse_save(&text), 3);
         assert!(again.in_skylands() && again.world.landmarks.phoenix_slain);
+        assert!(again.world.landmarks.phoenix_dead_for > 49.0, "and so is how long it has been dead: {}", again.world.landmarks.phoenix_dead_for);
         again.world.night = false;
-        again.update_animals(30.0);
+        again.update_animals(5.0);
         assert!(again.tornadoes.is_empty());
+        // Sixty seconds after its death it rises again, in the crater, and the tornadoes return with it.
+        again.update_animals(6.0);
+        assert!(!again.world.landmarks.phoenix_slain && again.world.landmarks.phoenix_dead_for == 0.0);
+        for _ in 0..20 {
+            again.spawn_bosses();
+        }
+        assert_eq!(again.animals.iter().filter(|a| a.kind == AnimalKind::Phoenix).count(), 1, "the Phoenix is back");
+        for _ in 0..40 {
+            again.update_animals(1.0);
+            again.health = MAX_HEALTH;
+        }
+        assert!(!again.tornadoes.is_empty(), "and the tornadoes with it");
+    }
+
+    #[test]
+    fn a_dead_phoenix_is_counted_dead_for_sixty_seconds_even_while_the_player_is_in_another_dimension() {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.world.landmarks.phoenix_slain = true;
+        g.travel_to(Dimension::Overworld);
+        assert!(g.parked(Dimension::Skylands).map_or(false, |a| a.world.landmarks.phoenix_slain));
+        g.update_animals(PHOENIX_RESPAWN_SECONDS - 1.0);
+        assert!(g.parked(Dimension::Skylands).map_or(false, |a| a.world.landmarks.phoenix_slain), "not yet");
+        g.update_animals(1.5);
+        assert!(g.parked(Dimension::Skylands).map_or(false, |a| !a.world.landmarks.phoenix_slain), "alive again after sixty seconds");
     }
 
     #[test]
@@ -9025,6 +9363,7 @@ mod upgrade_tests {
     use super::*;
     use crate::chunk::idx;
     use crate::animal::{AirPhase, Pounce};
+    const DT: f32 = 1.0 / 60.0;
     use crate::item::ItemStack;
     use std::path::PathBuf;
 
@@ -9132,13 +9471,13 @@ mod upgrade_tests {
     }
 
     #[test]
-    fn every_twentieth_cave_bat_killed_brings_a_vampire_bat_that_only_swoops() {
+    fn every_tenth_cave_bat_killed_brings_a_vampire_bat_that_only_swoops() {
         let mut g = in_cave_at(HORIZEN_SPAWN.0, HORIZEN_SPAWN.1 + 6);
-        kill_cave_bats(&mut g, 19);
-        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::VampireBat), "not before the twentieth");
+        kill_cave_bats(&mut g, 9);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::VampireBat), "not before the tenth");
         kill_cave_bats(&mut g, 1);
-        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count(), 1, "the twentieth brings one");
-        assert_eq!(g.bat_kills, 20);
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count(), 1, "the tenth brings one");
+        assert_eq!(g.bat_kills, 10);
         assert!(g.boss_bar().map_or(false, |(n, _)| n == "The Vampire Bat"), "with a health bar");
         // It circles, swoops, bites once and flies off: it never strikes outside a dive.
         g.player.pos = vec3(HORIZEN_SPAWN.0 as f32 + 0.5, GROUND_TOP as f32 + 1.01, HORIZEN_SPAWN.1 as f32 + 0.5 + 6.0);
@@ -9159,9 +9498,9 @@ mod upgrade_tests {
         }
         assert!(dives >= 3, "it keeps swooping: {dives}");
         assert!(!struck_outside_dive);
-        // Another twenty kills bring another once the first is dead.
+        // Another ten kills bring another once the first is dead.
         g.animals.clear();
-        kill_cave_bats(&mut g, 20);
+        kill_cave_bats(&mut g, 10);
         assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count(), 1);
     }
 
@@ -9595,6 +9934,220 @@ mod upgrade_tests {
     }
 
     #[test]
+    fn a_flying_snake_is_long_thick_slow_and_loops_through_the_air() {
+        let mut g = game();
+        open_sky(&mut g);
+        // Four times the old length (sixteen segments of 0.26), and thicker.
+        assert!(SNAKE_SEGMENTS >= 4 * 16 && SNAKE_SEGMENTS as f32 * SNAKE_SEGMENT_SPACING >= 4.0 * 16.0 * 0.26 * 0.99);
+        let at = g.player.pos + vec3(10.0, 6.0, 0.0);
+        g.animals.push(Animal::new(AnimalKind::FlyingSnake, at, &mut Rng::new(4)));
+        let (mut travelled, mut turned, mut last_heading, mut last_pos) = (0.0_f32, 0.0_f32, None, at);
+        let mut peak = 0.0_f32;
+        let seconds = 90.0;
+        for _ in 0..(seconds * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.health = MAX_HEALTH;
+            let s = g.animals.iter().find(|a| a.kind == AnimalKind::FlyingSnake).unwrap();
+            let step = (s.pos - last_pos).length();
+            travelled += step;
+            peak = peak.max(step * 60.0);
+            last_pos = s.pos;
+            let h = s.heading;
+            if let Some(prev) = last_heading {
+                let mut d: f32 = h - prev;
+                while d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+                while d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+                turned += d.abs();
+            }
+            last_heading = Some(h);
+        }
+        assert!(peak < 9.0, "it never darts: top speed {peak} blocks a second");
+        assert!(travelled / seconds < 6.0, "it drifts slowly: {} blocks a second", travelled / seconds);
+        assert!(turned > 4.0 * std::f32::consts::TAU, "it goes round and round in loops: it turned through {turned} radians");
+        // Its body is as long as it is said to be, along the path its head flew.
+        let s = g.animals.iter().find(|a| a.kind == AnimalKind::FlyingSnake).unwrap();
+        let body = s.body_points();
+        assert_eq!(body.len(), SNAKE_SEGMENTS);
+        let arc: f32 = body.windows(2).map(|w| (w[0] - w[1]).length()).sum();
+        assert!(arc > SNAKE_SEGMENTS as f32 * SNAKE_SEGMENT_SPACING * 0.95, "about seventeen blocks long: {arc}");
+        assert!(AnimalKind::FlyingSnake.half_width() >= 0.5, "thicker");
+    }
+
+    #[test]
+    fn a_dead_snake_drops_fangs_and_arrows_can_hit_any_part_of_its_long_body() {
+        let mut g = game();
+        open_sky(&mut g);
+        let mut snake = Animal::new(AnimalKind::FlyingSnake, g.player.pos + vec3(6.0, 5.0, 0.0), &mut Rng::new(4));
+        snake.heading = 0.0;
+        g.animals.push(snake);
+        let boxes = g.animals[0].hitboxes();
+        assert!(boxes.len() > 10, "a box along the body: {}", boxes.len());
+        // Aim at the middle of the body, well behind the head.
+        let mid = g.animals[0].body_points()[SNAKE_SEGMENTS / 2];
+        let from = mid + vec3(0.0, 0.0, -6.0);
+        let mut arrow = Arrow::fired(from, vec3(0.0, 0.0, 1.0));
+        let animals = g.animals.clone();
+        let fate = (0..120).map(|_| arrow.update(&g.world, &animals, DT)).find(|f| *f != Fate::InFlight);
+        assert_eq!(fate, Some(Fate::HitAnimal(0)), "the body can be hit");
+        g.hurt_animals(&[(0, FLYING_SNAKE_HEALTH)]);
+        let fangs = g.items.iter().filter(|i| i.kind == ItemKind::SnakeFang).count() as u32;
+        assert!((SNAKE_FANG_DROP_MIN..=SNAKE_FANG_DROP_MAX).contains(&fangs), "{fangs} fangs");
+    }
+
+    #[test]
+    fn snake_fangs_make_poison_arrows_that_the_bow_shoots_first_and_that_poison_what_they_hit() {
+        let r = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::PoisonArrow).expect("a recipe");
+        assert_eq!(r.inputs, &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)]);
+        let mut inv = crate::inventory::Inventory::new();
+        for (k, n) in [(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)] {
+            inv.add(k, n);
+        }
+        assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::PoisonArrow) == 1);
+
+        let mut g = game();
+        open_sky(&mut g);
+        hold_bow(&mut g);
+        g.inventory.add(ItemKind::PoisonArrow, 2);
+        g.inventory.add(ItemKind::PhoenixArrow, 1);
+        g.inventory.add(ItemKind::Arrow, 3);
+        let eye = g.player.eye();
+        for n in 0..2 {
+            g.attack_cooldown = 0.0;
+            assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
+            assert_eq!(g.inventory.count(ItemKind::PoisonArrow), 1 - n, "each poison arrow is used up");
+            assert_eq!((g.inventory.count(ItemKind::PhoenixArrow), g.inventory.count(ItemKind::Arrow)), (1, 3), "poison goes before the phoenix arrow and the plain ones");
+        }
+        assert!(g.arrows.iter().all(|a| a.kind == ItemKind::PoisonArrow));
+        g.attack_cooldown = 0.0;
+        assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
+        assert_eq!(g.arrows.last().map(|a| a.kind), Some(ItemKind::PhoenixArrow), "then the phoenix arrow");
+        g.inventory.remove(ItemKind::PhoenixArrow, 1);
+        g.attack_cooldown = 0.0;
+        assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
+        assert_eq!(g.arrows.last().map(|a| a.kind), Some(ItemKind::Arrow), "then the plain arrows");
+
+        // A poison arrow poisons a bear (tough enough to live through it), which then loses a point a second until the poison runs out.
+        let mut g = game();
+        open_sky(&mut g);
+        let mut bear = Animal::new(AnimalKind::Bear, g.player.pos + vec3(5.0, 0.0, 0.0), &mut Rng::new(1));
+        bear.health = 100;
+        g.animals.push(bear);
+        let hit = vec3(g.player.pos.x + 5.0, g.player.pos.y + 0.5, g.player.pos.z);
+        g.arrows.push(Arrow::fired_poison(hit - vec3(2.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0)));
+        for _ in 0..30 {
+            g.update_arrows(DT);
+        }
+        let after_blow = g.animals[0].health;
+        assert_eq!(after_blow, 100 - ARROW_DAMAGE, "the blow");
+        assert!(g.animals[0].poisoned > 0.0, "and it is poisoned");
+        assert!(g.arrows.is_empty() && g.items.iter().all(|i| i.kind != ItemKind::PoisonArrow), "the arrow is spent");
+        g.player.pos = vec3(-100.0, g.player.pos.y, -100.0);
+        for _ in 0..(POISON_SECONDS * 60.0) as i32 + 60 {
+            g.update_poison(DT);
+        }
+        let lost = after_blow - g.animals[0].health;
+        let full = (POISON_SECONDS / POISON_INTERVAL) as i32 * POISON_DAMAGE;
+        assert!((full - POISON_DAMAGE..=full).contains(&lost), "poison took {lost} points over its course (about {full})");
+        assert_eq!(g.animals[0].poisoned, 0.0);
+    }
+
+    fn hold_bow(g: &mut Game) {
+        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::Bow, count: 1 });
+        g.select_slot(0);
+    }
+
+    #[test]
+    fn salt_makes_a_jerky_of_each_raw_meat_that_heals_like_the_cooked_meat_while_stew_still_heals_double() {
+        for (raw, jerky, cooked, stew) in [
+            (ItemKind::Venison, ItemKind::VenisonJerky, ItemKind::CookedVenison, ItemKind::VenisonStew),
+            (ItemKind::Poultry, ItemKind::PoultryJerky, ItemKind::CookedPoultry, ItemKind::PoultryStew),
+            (ItemKind::BearMeat, ItemKind::BearJerky, ItemKind::CookedBearMeat, ItemKind::BearStew),
+            (ItemKind::RabbitMeat, ItemKind::RabbitJerky, ItemKind::CookedRabbit, ItemKind::RabbitStew),
+            (ItemKind::MooseMeat, ItemKind::MooseJerky, ItemKind::CookedMoose, ItemKind::MooseStew),
+        ] {
+            let r = crate::recipe::RECIPES.iter().find(|r| r.output == jerky).expect("a recipe");
+            assert_eq!(r.inputs, &[(raw, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)], "{jerky:?}");
+            assert_eq!(raw.cured(), Some(jerky));
+            assert_eq!(jerky.heal_amount(), cooked.heal_amount(), "{jerky:?} heals as much as {cooked:?}");
+            assert!(jerky.heal_amount().is_some());
+            assert_eq!(stew.heal_amount(), cooked.heal_amount().map(|h| h * STEW_HEAL_FACTOR), "stew still heals double");
+            let mut inv = crate::inventory::Inventory::new();
+            inv.add(raw, 2);
+            assert!(!crate::recipe::craft(&mut inv, r), "no salt, no jerky");
+            inv.add(ItemKind::PinkSalt, 1);
+            assert!(crate::recipe::craft(&mut inv, r));
+            assert_eq!((inv.count(jerky), inv.count(raw), inv.count(ItemKind::PinkSalt)), (1, 1, 0));
+        }
+        assert!(ItemKind::ALL.iter().all(|k| ItemKind::from_id(k.id()) == Some(*k)), "every item has its own save id");
+        // Eating it heals the player.
+        let mut g = game();
+        g.health = 1;
+        hold(&mut g, ItemKind::MooseJerky, 1);
+        assert!(g.eat_held());
+        assert_eq!(g.health, 1 + MOOSE_MEAT_HEAL);
+    }
+
+    #[test]
+    fn the_kings_spirits_go_with_the_player_between_dimensions_with_the_arrows_they_have_left() {
+        let mut g = game();
+        for (n, shots) in [(0, 10), (1, 4)] {
+            let mut sp = Animal::new(AnimalKind::SpiritArcher, g.player.pos + vec3(2.0, 1.0, 0.0), &mut Rng::new(n));
+            sp.shots_left = shots;
+            sp.set_orbit(n as f32 * 2.4);
+            g.animals.push(sp);
+        }
+        g.animals.push(Animal::new(AnimalKind::Deer, g.player.pos + vec3(9.0, 0.0, 0.0), &mut Rng::new(9)));
+        for target in [Dimension::Skylands, Dimension::Overworld] {
+            g.travel_to(target);
+            assert_eq!(g.spirit_count(), 2, "both spirits arrive in {target:?}");
+            assert!(g.animals.iter().all(|a| a.kind == AnimalKind::SpiritArcher), "nothing else crosses");
+            let mut left: Vec<u32> = g.animals.iter().map(|a| a.shots_left).collect();
+            left.sort();
+            assert_eq!(left, vec![4, 10]);
+            assert!(g.animals.iter().all(|a| (a.pos - g.player.pos).length() < 6.0), "they are at the player's side");
+        }
+        g.enter_horizen();
+        assert_eq!(g.spirit_count(), 2, "and into the Horizen");
+        g.hurt_player(MAX_HEALTH, "gone");
+        assert_eq!(g.spirit_count(), 0, "death still ends them");
+    }
+
+    #[test]
+    fn the_skylands_have_falling_stars_every_ten_seconds_at_night_landing_on_visible_islands() {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.world.night = true;
+        g.player.yaw = 0.0;
+        for _ in 0..(FALLING_STAR_INTERVAL as i32 - 1) {
+            g.update_falling_stars(1.0);
+        }
+        assert!(g.falling_stars.is_empty(), "not yet");
+        g.update_falling_stars(1.0);
+        assert_eq!(g.falling_stars.len(), 1, "one after ten seconds");
+        let star = g.falling_stars[0];
+        assert!(star.from.y > star.to.y + 100.0, "from high in the sky");
+        let island = skylands::island_at(g.info.seed, star.to.x.floor() as i32, star.to.z.floor() as i32).expect("it lands on an island");
+        assert!((star.to.y - (island.surface_y(star.to.x.floor() as i32, star.to.z.floor() as i32) as f32 + 1.0)).abs() < 1e-3);
+        // It reaches the ground, flashes and is cleared away; by day none fall.
+        for _ in 0..(FALLING_STAR_FALL_SECONDS + FALLING_STAR_FLASH_SECONDS) as i32 + 1 {
+            g.update_falling_stars(1.0);
+            g.falling_stars.retain(|s| s.age > 0.0);
+        }
+        g.falling_stars.clear();
+        g.world.night = false;
+        for _ in 0..30 {
+            g.update_falling_stars(1.0);
+        }
+        assert!(g.falling_stars.is_empty(), "none by day");
+        let mut o = game();
+        o.world.night = true;
+        for _ in 0..30 {
+            o.update_falling_stars(1.0);
+        }
+        assert!(o.falling_stars.is_empty(), "none in the overworld");
+    }
+
+    #[test]
     fn jaguars_and_snakes_live_only_in_the_jungle() {
         let (mut g, _, _) = in_jungle_game();
         assert!(g.player_in_jungle());
@@ -9619,4 +10172,238 @@ mod upgrade_tests {
         assert_eq!(ItemKind::from_id("deer_bone"), Some(ItemKind::Bone), "old saves still load");
         assert_eq!(ItemKind::from_id("bone"), Some(ItemKind::Bone));
     }
+
+    // --- the update: bats, the Orangutan, Nessie, parrots, structures ---
+
+    #[test]
+    fn a_vampire_bat_in_a_low_cave_never_pins_itself_against_the_ceiling() {
+        let seed = 1;
+        // Low places in the cave: the air above the floor is the least the cave has.
+        let (sx, sz) = HORIZEN_SPAWN;
+        let mut low: Vec<(i32, i32)> = Vec::new();
+        for z in (sz - 90..sz + 90).step_by(2) {
+            for x in (sx - 90..sx + 90).step_by(2) {
+                let air = horizen::air_height(seed, x, z);
+                if (HORIZEN_MIN_AIR..=HORIZEN_MIN_AIR + 1).contains(&air) && (1..=2).all(|k| horizen::air_height(seed, x + 3 * k, z) >= HORIZEN_MIN_AIR) {
+                    low.push((x, z));
+                }
+            }
+        }
+        assert!(!low.is_empty(), "the cave has low ceilings");
+        for &(x, z) in low.iter().step_by((low.len() / 6).max(1)).take(6) {
+            let mut g = in_cave_at(x, z);
+            g.world.stream_chunks(g.player.pos);
+            let ground = g.world.ground_top(x, z) as f32 + 1.0;
+            let at = vec3(x as f32 + 3.5, ground + horizen::air_height(seed, x + 3, z) as f32 - VAMPIRE_BAT_HEIGHT - 0.2, z as f32 + 0.5);
+            g.animals.push(Animal::new(AnimalKind::VampireBat, at, &mut Rng::new(5)));
+            let (mut still, mut worst, mut last) = (0, 0, at);
+            for _ in 0..(40.0 * 60.0) as i32 {
+                g.update_animals(1.0 / 60.0);
+                g.health = MAX_HEALTH;
+                g.player.vel = Vec3::ZERO;
+                let b = g.animals.iter().find(|a| a.kind == AnimalKind::VampireBat).unwrap();
+                let half = vec3(VAMPIRE_BAT_HALF_WIDTH - 0.01, 0.0, VAMPIRE_BAT_HALF_WIDTH - 0.01);
+                assert!(!g.world.box_blocked(b.pos - half + vec3(0.0, 0.01, 0.0), b.pos + half + vec3(0.0, VAMPIRE_BAT_HEIGHT - 0.01, 0.0)), "never inside the rock at {:?}", b.pos);
+                still = if (b.pos - last).length() < 0.01 { still + 1 } else { 0 };
+                worst = worst.max(still);
+                last = b.pos;
+            }
+            assert!(worst < 90, "at ({x},{z}) it was pinned for {worst} frames");
+        }
+    }
+
+    #[test]
+    fn the_orangutan_leaps_high_and_lands_beside_the_player_to_smash() {
+        let mut g = game();
+        open_sky(&mut g);
+        let ground = g.world.ground_top(10, 10) as f32 + 1.01;
+        g.player.pos = vec3(10.5, ground, 10.5);
+        let start = g.player.pos + vec3(14.0, 0.0, 0.0);
+        g.animals.push(Animal::new(AnimalKind::Orangutan, start, &mut Rng::new(2)));
+        g.animals[0].home = start;
+        let (mut top, mut landed_at) = (0.0_f32, None);
+        for _ in 0..(12.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.health = MAX_HEALTH;
+            g.player.pos = vec3(10.5, ground, 10.5);
+            let a = &g.animals[0];
+            top = top.max(a.pos.y - ground);
+            if landed_at.is_none() {
+                if let Some(b) = g.bursts.iter().find(|b| b.shape == BurstShape::OrangutanSmash) {
+                    landed_at = Some(b.pos);
+                }
+            }
+        }
+        assert!(top > ORANGUTAN_LEAP_APEX - 1.0, "it jumped high: {top}");
+        let at = landed_at.expect("and smashed");
+        let gap = vec2(at.x - g.player.pos.x, at.z - g.player.pos.z).length();
+        assert!(gap < ORANGUTAN_LEAP_LAND_GAP + 1.5 && gap > 0.5, "landing beside the player: {gap}");
+    }
+
+    /// Longest run (seconds) in which the Orangutan, charging with nothing to do, got nowhere.
+    fn longest_standstill(g: &mut Game, player_at: Vec3, seconds: f32) -> f32 {
+        let (mut still, mut worst) = (0.0_f32, 0.0_f32);
+        let mut last = g.animals.iter().find(|a| a.kind == AnimalKind::Orangutan).unwrap().pos;
+        let mut mark = 0.0;
+        for frame in 0..(seconds * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.health = MAX_HEALTH;
+            g.player.pos = player_at;
+            g.player.vel = Vec3::ZERO;
+            let Some(a) = g.animals.iter().find(|a| a.kind == AnimalKind::Orangutan) else { break };
+            let busy = a.action != crate::animal::BossAction::None;
+            let t = frame as f32 / 60.0;
+            if t - mark >= 1.0 {
+                let moved = (a.pos - last).length();
+                still = if moved < 0.5 && !busy { still + 1.0 } else { 0.0 };
+                worst = worst.max(still);
+                last = a.pos;
+                mark = t;
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn the_orangutan_does_not_get_stuck_chasing_a_player_round_the_temple() {
+        let (mut g, jx, jz) = in_jungle_game();
+        let base = g.world.ground_top(jx, jz) as f32 + 1.01;
+        let spots = [(0, 26), (0, -26), (26, 0), (-26, 0), (19, 19), (-19, -19), (0, 21), (8, 12), (0, 4)];
+        for (dx, dz) in spots {
+            g.animals.clear();
+            g.spawn_bosses();
+            assert!(g.animals.iter().any(|a| a.kind == AnimalKind::Orangutan));
+            let me = vec3(jx as f32 + 0.5 + dx as f32, base, jz as f32 + 0.5 + dz as f32);
+            g.player.pos = me;
+            g.player.pos.y = g.world.ground_top(me.x.floor() as i32, me.z.floor() as i32) as f32 + 1.01;
+            let at = g.player.pos;
+            g.world.stream_chunks(at);
+            let worst = longest_standstill(&mut g, at, 60.0);
+            assert!(worst < 5.0, "player at ({dx},{dz}): it stood still for {worst} s");
+        }
+    }
+
+    #[test]
+    fn the_idol_passage_is_boarded_up_until_the_orangutan_is_dead() {
+        let (mut g, jx, jz) = in_jungle_game();
+        let base = g.world.ground_top(jx, jz);
+        let mouth = (jx, base + 1, jz - TEMPLE_BASE_HALF);
+        assert_eq!(g.world.block_at(mouth.0, mouth.1, mouth.2), Block::CastleDoor, "boards over the mouth of the passage");
+        assert_eq!(g.world.block_at(mouth.0, mouth.1 + 1, mouth.2 + 1), Block::CastleDoor);
+        assert!(!Block::CastleDoor.hand_breakable(), "and they cannot be broken");
+        g.spawn_bosses();
+        let i = g.animals.iter().position(|a| a.kind == AnimalKind::Orangutan).unwrap();
+        g.hurt_animals(&[(i, 100_000)]);
+        assert_eq!(g.world.block_at(mouth.0, mouth.1, mouth.2), Block::Air, "the boards come down");
+        assert_eq!(g.world.block_at(jx, base + 1, jz - TEMPLE_BASE_HALF + 3), Block::Air);
+    }
+
+    #[test]
+    fn the_jungle_holds_no_ordinary_wildlife() {
+        let (mut g, jx, jz) = in_jungle_game();
+        for _ in 0..600 {
+            g.spawn_wildlife();
+        }
+        assert!(g.animals.iter().all(|a| !a.kind.is_ordinary_wildlife()), "{:?}", g.animals.iter().map(|a| a.kind).collect::<Vec<_>>());
+        assert!(g.animals.iter().any(|a| a.kind == AnimalKind::Parrot), "parrots live there");
+        assert!(!g.spawn_animal(AnimalKind::Deer, jx + 10, jz + 60));
+        g.world.night = true;
+        for _ in 0..300 {
+            g.spawn_wildlife();
+        }
+        assert!(g.animals.iter().all(|a| !a.kind.is_ordinary_wildlife() && a.kind != AnimalKind::Raven));
+        assert!(g.animals.iter().filter(|a| a.kind == AnimalKind::Parrot).count() <= MAX_PARROT);
+    }
+
+    #[test]
+    fn ten_parrots_killed_bring_three_bronze_parrots_that_fight_like_iron_quails() {
+        let (mut g, _, _) = in_jungle_game();
+        g.animals.clear();
+        let kill = |g: &mut Game, n: usize| {
+            for _ in 0..n {
+                let at = g.player.pos + vec3(3.0, 0.0, 0.0);
+                g.animals.push(Animal::new(AnimalKind::Parrot, at, &mut Rng::new(1)));
+                let i = g.animals.len() - 1;
+                g.hurt_animals(&[(i, 999)]);
+            }
+        };
+        kill(&mut g, 9);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::BronzeParrot), "not before the tenth");
+        kill(&mut g, 1);
+        let bronze: Vec<&Animal> = g.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).collect();
+        assert_eq!(bronze.len(), BRONZE_PARROTS_PER_SUMMON as usize);
+        assert!(bronze.iter().all(|a| a.kind.is_boss() && a.kind.never_gives_up()));
+        assert!(g.boss_bar().map_or(false, |(n, _)| n == "The Bronze Parrot"));
+        // They strike and shoot feathers at the player, as the Iron Quail does.
+        g.player.pos.y += 0.0;
+        let (mut hurt, mut feathers) = (false, false);
+        for _ in 0..(30.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            hurt |= g.health < MAX_HEALTH;
+            feathers |= !g.hostile_arrows.is_empty();
+            g.health = MAX_HEALTH;
+        }
+        assert!(hurt && feathers, "they bite and shoot: {hurt} {feathers}");
+        // The count is saved.
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        assert_eq!(again.parrot_kills, 10);
+        // Dying sends them away.
+        assert_eq!(AnimalKind::BronzeParrot.drops(&mut Rng::new(1)), vec![ItemKind::Bronze; BRONZE_PARROT_BRONZE_DROP as usize]);
+    }
+
+    fn test_mountain() -> Mountain {
+        Mountain { x: 30, z: -500, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(WORLD_HEIGHT as i32 - 10), phase: 7 }
+    }
+
+    #[test]
+    fn a_structure_is_never_put_down_on_another_or_on_stonehenge_or_the_temple() {
+        let g = game();
+        // Wherever the totem is held, the well keeps clear of the mountain, Stonehenge and the jungle's middle.
+        for k in 0..40 {
+            let mut g = game();
+            g.world.add_mountain(Mountain { x: 100 + 7 * k, z: 40 - 3 * k, ..test_mountain() });
+            g.world.night = false;
+            g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::BoneTotem, count: 1 });
+            g.select_slot(0);
+            for _ in 0..4 {
+                g.try_show_well_or_graveyard();
+            }
+            let well = g.world.landmarks.well.expect("a well came out");
+            let marks = &g.world.landmarks;
+            let (wx0, wz0, wx1, wz1) = well.bounds(0);
+            for m in &marks.mountains {
+                let (mx0, mz0, mx1, mz1) = m.bounds(0);
+                assert!(wx1 < mx0 || wx0 > mx1 || wz1 < mz0 || wz0 > mz1, "well {well:?} on the mountain {m:?}");
+            }
+            for &(x0, z0, x1, z1) in &marks.reserved.0 {
+                assert!(wx1 < x0 || wx0 > x1 || wz1 < z0 || wz0 > z1, "well {well:?} on reserved ground");
+            }
+        }
+        // Reserved ground is really kept clear for a lake and a mountain too.
+        let reserved = g.world.landmarks.reserved.0.clone();
+        let (x0, z0, x1, z1) = reserved[0];
+        let on_it = Lake { x: (x0 + x1) / 2, z: (z0 + z1) / 2, radius: LAKE_RADIUS, phase: 1, from: ((x0 + x1) / 2, (z0 + z1) / 2) };
+        assert!(!g.world.landmarks.has_room_for_lake(&on_it));
+        assert!(!g.world.landmarks.has_room_for_mountain(&Mountain { x: (x0 + x1) / 2, z: (z0 + z1) / 2, ..test_mountain() }));
+    }
+}
+
+
+/// The first spot, going round the compass from `first` (16 headings) at the usual distance and then at `SITE_PUSH_BLOCKS` further out
+/// each time (`SITE_PUSH_STEPS` rings), where `fits` says a structure has room. `make` builds the structure ahead at a heading and
+/// `shift` moves it by (dx, dz). `None` if nowhere is clear (the caller waits and tries again with other headings): a structure is
+/// never put down on top of another.
+fn clear_site<T: Copy>(first: f32, make: impl Fn(f32) -> T, shift: impl Fn(T, i32, i32) -> T, fits: impl Fn(&T) -> bool) -> Option<T> {
+    for ring in 0..SITE_PUSH_STEPS {
+        for i in 0..16 {
+            let a = first + i as f32 * std::f32::consts::TAU / 16.0;
+            let push = (ring * SITE_PUSH_BLOCKS) as f32;
+            let site = shift(make(a), (a.cos() * push).round() as i32, (a.sin() * push).round() as i32);
+            if fits(&site) {
+                return Some(site);
+            }
+        }
+    }
+    None
 }

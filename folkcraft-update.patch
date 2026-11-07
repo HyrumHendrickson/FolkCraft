@@ -1,0 +1,2094 @@
+diff --git a/README.md b/README.md
+index 4318d53..a30f591 100644
+--- a/README.md
++++ b/README.md
+@@ -681,3 +681,24 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
+ - **Jungle**: no ordinary wildlife (`AnimalKind::is_ordinary_wildlife`) spawns in it or is brought in by `spawn_animal`, and no ravens; only jaguars, flying snakes and **parrots** (`AnimalKind::Parrot`, quail behaviour,
+   colourful model, `MAX_PARROT`). Every `PARROTS_PER_BRONZE_PARROT` parrots killed (`Game::parrot_kills`, saved as `parrotkills`) `BRONZE_PARROTS_PER_SUMMON` **Bronze Parrots** (`AnimalKind::BronzeParrot`, `is_metal_bird`,
+   same behaviour as the Iron Quail, bronze model, drop Bronze) come (`summon_bronze_parrots`, `bronze_parrots_owed`). Their feather missile is the Iron Feather.
++
++## Update: long snakes, poison arrows, jerky, falling stars, the Phoenix's return and varied caves
++
++- **Flying snakes** (`animal.rs`, `animal_draw.rs`): `SNAKE_SEGMENTS` (64) segments of `SNAKE_SEGMENT_SPACING`, about 17 blocks, and thicker (`SNAKE_HALF_WIDTH`).
++  The head's path is kept in `Animal::trail` (`lay_trail`); `body_points` is the body, drawn by `snake_body_boxes` and hit-tested by `Animal::hitboxes`
++  (arrows and melee use every box). Flight is slow (`SNAKE_SPIRAL_SPEED`, `SNAKE_DIVE_SPEED`): a wide circle (`SNAKE_SPIRAL_RADIUS`, `SNAKE_LOOP_RATE`) with a
++  smaller one riding on it (`SNAKE_COIL_*`) makes the loops. A dead snake drops `SNAKE_FANG_DROP_MIN..=MAX` **Snake Fangs**.
++- **Poison arrows**: Pebble + Stick + Feather + Snake Fang. `Game::shoot` fires poison first, then Phoenix, then ordinary arrows. A poison arrow is used up and
++  vanishes where it lands (`Arrow::vanishes_on_landing`); a hit calls `Animal::poison`, and `Game::update_poison` takes `POISON_DAMAGE` every `POISON_INTERVAL`
++  for `POISON_SECONDS`.
++- **Jerky**: Raw meat + `JERKY_SALT_COST` Pink Salt (`recipe.rs`), one per meat (`ItemKind::cured`). `heal_amount` is the cooked meat's (`jerky_base`); stews still double.
++- **Spirits** cross dimensions: `Game::travel_to` collects them (with `shots_left`) and `bring_spirits` sets them down round the player.
++- **Entering the Horizen**: `Game::begin_horizen_fall` starts the fade (`horizen_pending`); `update_horizen_transition` moves the player at full black
++  (`HORIZEN_FADE_SHARE`) by `enter_horizen`, which always puts them in the arrival pool.
++- **Cave kinds** (`horizen::CaveKind`): ordinary caves are Plain, Mossy (`moss_pools`, `moss_at`: floor, walls and pool water are tinted by `mesh.rs`),
++  River (`river_at`, a meandering band) or Crystal (`crystal_at`, `Block::RedCrystal`: solid, not breakable, not saved). Rivers and pools count as ponds (`is_pond`).
++- **Silver key**: `mines::furnish` fills the column under the key stand with dirt, so it rests on the ground.
++- **Phoenix**: `Landmarks::phoenix_dead_for` (saved as `phoenixdead`) counts up while it is dead, in whichever dimension the player is in; at
++  `PHOENIX_RESPAWN_SECONDS` `phoenix_slain` clears (`Game::update_phoenix_respawn`) and it returns when the player nears the crater.
++- **Falling stars** (`stars.rs`, `Game::update_falling_stars`, `effects::draw_falling_stars`): in the Skylands at night, one every `FALLING_STAR_INTERVAL`; `pick_landing`
++  chooses an island within range in front of the player (or the one they are on).
+diff --git a/src/animal.rs b/src/animal.rs
+index 478a221..9f24ed8 100644
+--- a/src/animal.rs
++++ b/src/animal.rs
+@@ -428,7 +428,8 @@ impl AnimalKind {
+             AnimalKind::VampireBat => add(ItemKind::Gold, VAMPIRE_BAT_GOLD_DROP),
+             AnimalKind::Orangutan => add(ItemKind::Gold, ORANGUTAN_GOLD_DROP),
+             AnimalKind::Jaguar => add(ItemKind::Leather, 2),
+-            AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => {}
++            AnimalKind::SpiritArcher => {}
++            AnimalKind::FlyingSnake => add(ItemKind::SnakeFang, rng.range(SNAKE_FANG_DROP_MIN as i32, SNAKE_FANG_DROP_MAX as i32 + 1) as u32),
+             // Bats and the ghostly creatures of the Wild Hunt leave nothing behind.
+             AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => {}
+         }
+@@ -621,6 +622,11 @@ pub struct Animal {
+     /// The Orangutan's leap: its horizontal velocity and the seconds it has been in the air.
+     leap_vel: Vec3,
+     leap_age: f32,
++    /// A flying snake: the places its head has been, newest first, `SNAKE_SEGMENT_SPACING` blocks apart. Its body follows them.
++    pub trail: Vec<Vec3>,
++    /// Seconds of poison left (a poison arrow's hit), and the seconds since it last hurt.
++    pub poisoned: f32,
++    pub poison_tick: f32,
+ }
+ 
+ /// How many blocks (up to `limit`) lie between the point (x, z) and the nearest column that is not water: how far from any shore
+@@ -764,6 +770,9 @@ impl Animal {
+             homing: false,
+             leap_vel: Vec3::ZERO,
+             leap_age: 0.0,
++            trail: Vec::new(),
++            poisoned: 0.0,
++            poison_tick: 0.0,
+         };
+         a.circle = a.heading;
+         match kind {
+@@ -808,6 +817,63 @@ impl Animal {
+         (self.pos - vec3(w, 0.0, w), self.pos + vec3(w, h, w))
+     }
+ 
++    /// Every box that can be hit: the one round the animal, and for a flying snake also the boxes along its long body.
++    pub fn hitboxes(&self) -> Vec<(Vec3, Vec3)> {
++        let mut boxes = vec![self.hitbox()];
++        if self.kind == AnimalKind::FlyingSnake {
++            let (w, h) = (self.kind.half_width(), self.kind.height());
++            for p in self.body_points().into_iter().skip(1).step_by(3) {
++                boxes.push((p - vec3(w, h * 0.5, w), p + vec3(w, h * 0.5, w)));
++            }
++        }
++        boxes
++    }
++
++    /// A flying snake's body: `SNAKE_SEGMENTS` points from the head back to the tail, along the path the head has flown (and straight
++    /// back from where the path begins when it has not flown that far yet).
++    pub fn body_points(&self) -> Vec<Vec3> {
++        let head = self.pos + vec3(0.0, SNAKE_HEIGHT * 0.5, 0.0);
++        let mut pts = Vec::with_capacity(SNAKE_SEGMENTS);
++        pts.push(head);
++        for i in 1..SNAKE_SEGMENTS {
++            if let Some(&p) = self.trail.get(i - 1) {
++                pts.push(p + vec3(0.0, SNAKE_HEIGHT * 0.5, 0.0));
++            } else {
++                let last = *pts.last().unwrap_or(&head);
++                let back = match pts.len() {
++                    0 | 1 => vec3(-self.heading.cos(), 0.0, -self.heading.sin()),
++                    n => (pts[n - 1] - pts[n - 2]).normalize_or_zero(),
++                };
++                let back = if back == Vec3::ZERO { vec3(-self.heading.cos(), 0.0, -self.heading.sin()) } else { back };
++                pts.push(last + back * SNAKE_SEGMENT_SPACING);
++            }
++        }
++        pts
++    }
++
++    /// Record where the head has got to: a point goes on the trail each time it is `SNAKE_SEGMENT_SPACING` blocks from the last.
++    fn lay_trail(&mut self) {
++        let mut last = self.trail.first().copied().unwrap_or(self.pos);
++        if self.trail.is_empty() {
++            self.trail.push(last);
++        }
++        let mut guard = 0;
++        while (self.pos - last).length() >= SNAKE_SEGMENT_SPACING && guard < 16 {
++            last += (self.pos - last).normalize_or_zero() * SNAKE_SEGMENT_SPACING;
++            self.trail.insert(0, last);
++            guard += 1;
++        }
++        self.trail.truncate(SNAKE_SEGMENTS);
++    }
++
++    /// Poison the animal for `POISON_SECONDS` (a fresh dose starts the count again, and does not stack).
++    pub fn poison(&mut self) {
++        if self.kind.is_huntable() {
++            self.poisoned = POISON_SECONDS;
++            self.poison_tick = 0.0;
++        }
++    }
++
+     /// Hurt the animal for `amount` and scare it (a bear is enraged instead: it charges the player
+     /// wherever they are). Returns true when it is dead.
+     pub fn damage(&mut self, amount: i32) -> bool {
+@@ -1018,6 +1084,11 @@ impl Animal {
+         true
+     }
+ 
++    /// A spirit archer's own place on the circle it drifts round the player on.
++    pub fn orbit_angle(&self) -> f32 {
++        self.orbit
++    }
++
+     /// Give a spirit archer its own place on the circle it drifts round the player on.
+     pub fn set_orbit(&mut self, angle: f32) {
+         self.orbit = angle;
+@@ -1989,15 +2060,16 @@ impl Animal {
+                 }
+             }
+         } else if self.kind == AnimalKind::FlyingSnake {
+-            // It twists through the air in a helix whose radius and height swell and shrink, round the player if one is near (round its
+-            // home otherwise), dives on them in a wriggling swoop, and spirals up and away again.
++            // It drifts slowly through the air in wide loops: a big circle round the player if one is near (round its home otherwise),
++            // with a smaller circle riding on it, which makes the loops. It swoops down on the player, and loops up and away again.
+             let near = flat_gap < SNAKE_NOTICE_DISTANCE;
+             let centre = if near { threat } else { self.home };
+-            self.circle += dt * 2.1;
++            self.circle += dt * SNAKE_LOOP_RATE;
+             let swirl = |t: f32| {
+-                let radius = SNAKE_SPIRAL_RADIUS * (1.0 + 0.45 * (t * 0.7).sin());
+-                let height = SNAKE_SPIRAL_HEIGHT + 2.5 * (t * 1.3).sin();
+-                vec3(t.cos() * radius, height, t.sin() * radius)
++                let radius = SNAKE_SPIRAL_RADIUS * (1.0 + 0.30 * (t * 0.37).sin());
++                let height = SNAKE_SPIRAL_HEIGHT + 3.5 * (t * 1.9).sin();
++                let coil = t * (SNAKE_COIL_RATE / SNAKE_LOOP_RATE);
++                vec3(t.cos() * radius + coil.cos() * SNAKE_COIL_RADIUS, height + 2.0 * coil.sin(), t.sin() * radius + coil.sin() * SNAKE_COIL_RADIUS)
+             };
+             match self.air_phase {
+                 AirPhase::Circle => {
+@@ -2136,6 +2208,9 @@ impl Animal {
+         } else if flat_gap > 1e-3 {
+             self.heading = (threat.z - self.pos.z).atan2(threat.x - self.pos.x);
+         }
++        if self.kind == AnimalKind::FlyingSnake {
++            self.lay_trail();
++        }
+     }
+ }
+ 
+diff --git a/src/animal_draw.rs b/src/animal_draw.rs
+index 5e8dea2..bee7142 100644
+--- a/src/animal_draw.rs
++++ b/src/animal_draw.rs
+@@ -747,39 +747,59 @@ fn jaguar_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+     parts
+ }
+ 
+-/// A flying snake: a long green body of banded segments that ripples through the air (each segment a little behind the one before it),
+-/// a flat head with red eyes and a flickering tongue, and two small leaf-green wings that beat at the neck.
++/// A flying snake's head: a broad flat head with red eyes and a flickering tongue, and two leaf-green wings beating at the neck. The
++/// head is at the animal's position, half the snake's height up; the long body is drawn by `draw_snake_body`.
+ fn flying_snake_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+-    const SEGMENTS: usize = 16;
+-    let moving = 1.0 + is_moving(a);
+     let mut parts = Vec::new();
+-    for i in 0..SEGMENTS {
+-        let t = i as f32;
+-        let along = t / SEGMENTS as f32;
+-        let wave = time * 7.0 * moving + t * 0.75 + a.phase;
+-        let (side, rise) = (wave.sin() * 0.34 * (0.35 + along), (wave * 0.8 + 1.0).sin() * 0.14 * (0.4 + along));
+-        let size = 0.15 * (1.0 - 0.65 * along) + 0.03;
+-        let band = match i % 4 {
+-            0 => col(0.16, 0.52, 0.20),
+-            1 => col(0.62, 0.74, 0.18),
+-            2 => col(0.12, 0.40, 0.17),
+-            _ => col(0.78, 0.20, 0.14),
+-        };
+-        parts.push(block((-0.26 * t, 0.2 + rise, side), (0.16, size, size), band));
+-    }
+-    let head = (0.22, 0.22, 0.0);
+-    parts.push(block(head, (0.20, 0.09, 0.13), col(0.14, 0.46, 0.18)));
+-    parts.push(block((head.0 + 0.17, head.1 - 0.02, 0.0), (0.06, 0.05, 0.08), col(0.70, 0.78, 0.22)));
++    let y = SNAKE_HEIGHT * 0.5;
++    parts.push(block((0.0, y, 0.0), (0.46, 0.20, 0.32), col(0.14, 0.46, 0.18)));
++    parts.push(block((0.40, y - 0.05, 0.0), (0.16, 0.12, 0.20), col(0.70, 0.78, 0.22)));
+     let flick = (time * 14.0).sin().max(0.0);
+-    parts.push(block((head.0 + 0.30 + 0.06 * flick, head.1 - 0.03, 0.0), (0.08 + 0.05 * flick, 0.008, 0.012), col(0.88, 0.12, 0.16)));
+-    eyes(&mut parts, (head.0 + 0.08, head.1 + 0.04, 0.0), 0.13, 0.03, night, col(0.80, 0.10, 0.12));
++    parts.push(block((0.62 + 0.14 * flick, y - 0.06, 0.0), (0.18 + 0.10 * flick, 0.02, 0.03), col(0.88, 0.12, 0.16)));
++    eyes(&mut parts, (0.18, y + 0.10, 0.0), 0.32, 0.07, night, col(0.80, 0.10, 0.12));
+     let flap = (time * 24.0 + a.phase).sin();
+     for side in [-1.0, 1.0] {
+-        parts.push(tilted((-0.18, 0.28 + 0.12 * flap, 0.28 * side), (0.20, 0.012, 0.24), col(0.30, 0.78, 0.34), -flap * 0.4 * side));
++        parts.push(tilted((-0.42, y + 0.18 + 0.20 * flap, 0.62 * side), (0.44, 0.02, 0.52), col(0.30, 0.78, 0.34), -flap * 0.4 * side));
+     }
+     parts
+ }
+ 
++/// The colours of the bands along a snake's body.
++fn snake_band(i: usize) -> Color {
++    match i % 4 {
++        0 => col(0.16, 0.52, 0.20),
++        1 => col(0.62, 0.74, 0.18),
++        2 => col(0.12, 0.40, 0.17),
++        _ => col(0.78, 0.20, 0.14),
++    }
++}
++
++/// The boxes of a flying snake's body, tail first or head first as `(centre, half extents, yaw, pitch, colour)`: one at each point of
++/// `Animal::body_points`, turned along the line to the next, thickest at the neck and thinning to the tail, rippling from side to side.
++pub fn snake_body_boxes(a: &Animal, time: f32) -> Vec<(Vec3, Vec3, f32, f32, Color)> {
++    let pts = a.body_points();
++    let n = pts.len();
++    let mut out = Vec::with_capacity(n);
++    for i in 1..n {
++        let along = i as f32 / n as f32;
++        let dir = pts[i - 1] - pts[i];
++        let flat = vec2(dir.x, dir.z).length();
++        let (yaw, pitch) = if dir.length() < 1e-4 { (a.heading, 0.0) } else { (dir.z.atan2(dir.x), dir.y.atan2(flat.max(1e-4))) };
++        let thick = 0.34 * (1.0 - 0.7 * along) + 0.06;
++        let ripple = (time * 4.0 + i as f32 * 0.45 + a.phase).sin() * 0.22 * (0.3 + along.min(0.7));
++        let side = vec3(-yaw.sin(), 0.0, yaw.cos()) * ripple;
++        out.push((pts[i] + side, vec3(SNAKE_SEGMENT_SPACING * 0.8, thick, thick), yaw, pitch, snake_band(i)));
++    }
++    out
++}
++
++/// Draw a flying snake's body (its head is drawn as an ordinary model).
++fn draw_snake_body(a: &Animal, time: f32) {
++    for (centre, half, yaw, pitch, color) in snake_body_boxes(a, time) {
++        draw_box_tilted(centre, half, yaw, pitch, color);
++    }
++}
++
+ /// A spirit archer: the Wild Hunt's archer model, made pale blue-white and see-through.
+ fn spirit_parts(a: &Animal, time: f32) -> Vec<Piece> {
+     let mut body = a.clone();
+@@ -988,6 +1008,17 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
+             _ => continue,
+         };
+         let (s, c) = a.heading.sin_cos();
++        if a.kind == AnimalKind::FlyingSnake {
++            draw_snake_body(a, time);
++        }
++        if a.poisoned > 0.0 {
++            // A few green drops rise off a poisoned creature.
++            for k in 0..3 {
++                let t = (time * 0.9 + k as f32 * 0.33 + a.phase).fract();
++                let at = a.pos + vec3((k as f32 - 1.0) * a.kind.half_width() * 0.6, a.kind.height() * (0.7 + 0.5 * t), 0.0);
++                draw_box(at, Vec3::splat(0.07), t * 6.0, Color::new(0.45, 0.85, 0.20, 0.9 * (1.0 - t)));
++            }
++        }
+         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
+             // Turn the model to face the heading: local x runs along it.
+             let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
+diff --git a/src/arrow.rs b/src/arrow.rs
+index 536b2cd..6375ec0 100644
+--- a/src/arrow.rs
++++ b/src/arrow.rs
+@@ -48,6 +48,11 @@ impl Arrow {
+         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+     }
+ 
++    /// A poison arrow shot from a bow: it flies like an arrow, is used up when it is shot and is gone where it lands, and poisons what it hits.
++    pub fn fired_poison(origin: Vec3, dir: Vec3) -> Arrow {
++        Arrow { kind: ItemKind::PoisonArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
++    }
++
+     /// An iron feather thrown by the player from `origin` along the unit vector `dir`, like a throwing star.
+     pub fn thrown_feather(origin: Vec3, dir: Vec3) -> Arrow {
+         Arrow { kind: ItemKind::IronFeather, pos: origin, vel: dir * IRON_FEATHER_SPEED, age: 0.0 }
+@@ -65,9 +70,14 @@ impl Arrow {
+         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+     }
+ 
+-    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow), instead of lying there to be picked up again.
++    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow or a poison arrow), instead of lying there to be picked up again.
+     pub fn vanishes_on_landing(&self) -> bool {
+-        self.kind == ItemKind::PhoenixArrow
++        matches!(self.kind, ItemKind::PhoenixArrow | ItemKind::PoisonArrow)
++    }
++
++    /// Whether what this arrow hits is poisoned.
++    pub fn poisons(&self) -> bool {
++        self.kind == ItemKind::PoisonArrow
+     }
+ 
+     /// An arrow shot by the Wild Hunt's archer from `origin` along the unit vector `dir`. It hurts the player, not animals.
+@@ -112,11 +122,15 @@ impl Arrow {
+                     .iter()
+                     .enumerate()
+                     .filter_map(|(i, a)| {
+-                        let (lo, hi) = a.hitbox();
+                         if !a.kind.is_huntable() {
+                             return None;
+                         }
+-                        ray_box(self.pos, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= length).map(|t| (i, t))
++                        // A flying snake can be hit anywhere along its long body.
++                        a.hitboxes()
++                            .into_iter()
++                            .filter_map(|(lo, hi)| ray_box(self.pos, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= length))
++                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
++                            .map(|t| (i, t))
+                     })
+                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                 if let Some((i, _)) = nearest {
+diff --git a/src/block.rs b/src/block.rs
+index 6a26b97..e6915de 100644
+--- a/src/block.rs
++++ b/src/block.rs
+@@ -100,6 +100,8 @@ pub enum Block {
+     PulledStone,
+     /// The weathered, pale stone of the jungle temple: a solid cube that cannot be broken or made.
+     MayaStone,
++    /// A red crystal in the caves of the Horizen: it looks like a cluster of salt crystals, but it is solid and cannot be mined.
++    RedCrystal,
+     /// Bones scattered on the ground of an altar island in the Skylands. Walk-through; taking them by hand drops a bone.
+     Bones,
+ }
+@@ -314,6 +316,17 @@ const SALT_CRYSTAL_PARTS: &[Part] = &[
+     part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (1.0, 0.86, 0.92)),
+     part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.84, 0.46, 0.60)),
+ ];
++/// A cluster of red crystals standing on a cave floor: the shape of the salt crystals, in deep reds.
++const RED_CRYSTAL_PARTS: &[Part] = &[
++    part([0.18, 0.0, 0.18], [0.82, 0.10, 0.82], (0.46, 0.08, 0.10)),
++    part([0.38, 0.10, 0.38], [0.62, 0.78, 0.62], (0.80, 0.12, 0.16)),
++    part([0.43, 0.78, 0.43], [0.57, 0.95, 0.57], (1.0, 0.45, 0.45)),
++    part([0.20, 0.10, 0.44], [0.36, 0.52, 0.60], (0.68, 0.08, 0.14)),
++    part([0.23, 0.52, 0.48], [0.33, 0.62, 0.56], (0.98, 0.38, 0.40)),
++    part([0.62, 0.10, 0.22], [0.78, 0.42, 0.38], (0.86, 0.16, 0.20)),
++    part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (1.0, 0.50, 0.50)),
++    part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.60, 0.07, 0.12)),
++];
+ /// A few bones lying on the ground: a long one, a short one across it and a rib.
+ const BONES_PARTS: &[Part] = &[
+     part([0.10, 0.0, 0.40], [0.74, 0.07, 0.50], (0.92, 0.89, 0.80)),
+@@ -508,6 +521,7 @@ impl Block {
+             | Block::AncientAltar
+             | Block::PulledStone
+             | Block::MayaStone
++            | Block::RedCrystal
+             | Block::Water
+             | Block::Fire
+             | Block::Embers
+@@ -560,6 +574,7 @@ impl Block {
+                 | Block::TowerDoor
+                 | Block::TowerDoorTop
+                 | Block::PinkSalt
++                | Block::RedCrystal
+                 | Block::KeyStand
+                 | Block::StonePlinth
+                 | Block::HornPlinth
+@@ -626,6 +641,7 @@ impl Block {
+             Block::TowerDoorTop => TOWER_DOOR_TOP_PARTS,
+             Block::KeyStand => KEY_STAND_PARTS,
+             Block::PinkSalt => SALT_CRYSTAL_PARTS,
++            Block::RedCrystal => RED_CRYSTAL_PARTS,
+             Block::Bones => BONES_PARTS,
+             Block::StonePlinth => STONE_PLINTH_PARTS,
+             Block::HornPlinth => HORN_PLINTH_PARTS,
+@@ -722,7 +738,7 @@ impl Block {
+ mod tests {
+     use super::*;
+ 
+-    const ALL: [Block; 51] = [
++    const ALL: [Block; 52] = [
+         Block::Air,
+         Block::Dirt,
+         Block::Stone,
+@@ -774,6 +790,7 @@ mod tests {
+         Block::PulledStone,
+         Block::MayaStone,
+         Block::Bones,
++        Block::RedCrystal,
+     ];
+ 
+     #[test]
+diff --git a/src/config.rs b/src/config.rs
+index ee05070..3be2da9 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -334,6 +334,8 @@ pub const WELL_FLOOR_Y: f32 = STONE_LAYERS as f32;
+ pub const HORIZEN_ARRIVAL_POOL_RADIUS: f32 = 3.5;
+ /// How long the black screen lasts while the player passes through the well.
+ pub const HORIZEN_TRANSITION_SECONDS: f32 = 1.2;
++/// The share of it spent fading to black (and the same again fading back); the player is moved to the Horizen at the black.
++pub const HORIZEN_FADE_SHARE: f32 = 0.30;
+ /// The stone roof of the cave ends at this height (the top of the dimension).
+ pub const HORIZEN_ROOF_Y: i32 = GROUND_TOP + 72;
+ /// The least free height (blocks of air above the floor) any part of the cave has: a player is under two.
+@@ -1256,23 +1258,34 @@ pub const JAGUAR_RETREAT_SECONDS: f32 = 3.5;
+ pub const JAGUAR_RETREAT_SPEED: f32 = 5.0;
+ pub const SPAWN_WEIGHT_JAGUAR: u64 = 10;
+ 
+-/// Flying snakes (jungle only, at most `MAX_FLYING_SNAKE`) twist through the air in a helix round a player within
+-/// `SNAKE_NOTICE_DISTANCE`, its radius and height swelling and shrinking, then swoop down on them for `SNAKE_DAMAGE` and spiral away.
++/// Flying snakes (jungle only, at most `MAX_FLYING_SNAKE`) drift through the air in slow, wide spirals and loops round a player within
++/// `SNAKE_NOTICE_DISTANCE`, then slowly swoop down on them for `SNAKE_DAMAGE` and spiral away. A snake is `SNAKE_SEGMENTS` segments
++/// of `SNAKE_SEGMENT_SPACING` blocks long (about seventeen blocks nose to tail), and its body follows the path its head has flown.
++/// Its loop is a wide circle (`SNAKE_SPIRAL_RADIUS`, `SNAKE_LOOP_RATE` radians a second) with a smaller circle riding on it
++/// (`SNAKE_COIL_RADIUS`, `SNAKE_COIL_RATE`), which is what makes the loops.
+ pub const MAX_FLYING_SNAKE: usize = 5;
+ pub const FLYING_SNAKE_HEALTH: i32 = 6;
+-pub const SNAKE_HALF_WIDTH: f32 = 0.3;
+-pub const SNAKE_HEIGHT: f32 = 0.3;
++pub const SNAKE_HALF_WIDTH: f32 = 0.5;
++pub const SNAKE_HEIGHT: f32 = 0.8;
+ pub const SNAKE_NOTICE_DISTANCE: f32 = 45.0;
+-pub const SNAKE_SPIRAL_SPEED: f32 = 6.0;
+-pub const SNAKE_SPIRAL_RADIUS: f32 = 5.0;
+-pub const SNAKE_SPIRAL_HEIGHT: f32 = 4.5;
+-pub const SNAKE_DIVE_SPEED: f32 = 14.0;
+-pub const SNAKE_DIVE_SECONDS: f32 = 1.2;
+-pub const SNAKE_FLEE_SECONDS: f32 = 1.8;
+-pub const SNAKE_ATTACK_MIN: f32 = 3.0;
+-pub const SNAKE_ATTACK_MAX: f32 = 6.0;
++pub const SNAKE_SPIRAL_SPEED: f32 = 3.2;
++pub const SNAKE_SPIRAL_RADIUS: f32 = 12.0;
++pub const SNAKE_SPIRAL_HEIGHT: f32 = 6.0;
++pub const SNAKE_LOOP_RATE: f32 = 0.28;
++pub const SNAKE_COIL_RADIUS: f32 = 3.6;
++pub const SNAKE_COIL_RATE: f32 = 0.84;
++pub const SNAKE_DIVE_SPEED: f32 = 7.5;
++pub const SNAKE_DIVE_SECONDS: f32 = 2.2;
++pub const SNAKE_FLEE_SECONDS: f32 = 2.4;
++pub const SNAKE_ATTACK_MIN: f32 = 5.0;
++pub const SNAKE_ATTACK_MAX: f32 = 9.0;
+ pub const SNAKE_DAMAGE: u32 = 2;
+-pub const SNAKE_REACH: f32 = 0.6;
++pub const SNAKE_REACH: f32 = 1.1;
++pub const SNAKE_SEGMENTS: usize = 64;
++pub const SNAKE_SEGMENT_SPACING: f32 = 0.27;
++/// Snake fangs a dead snake drops (this many to this many, inclusive).
++pub const SNAKE_FANG_DROP_MIN: u32 = 2;
++pub const SNAKE_FANG_DROP_MAX: u32 = 3;
+ pub const SPAWN_WEIGHT_FLYING_SNAKE: u64 = 12;
+ 
+ 
+@@ -1322,3 +1335,47 @@ pub const BRONZE_PARROT_BRONZE_DROP: u32 = 2;
+ /// A structure that finds something in its way is tried again `SITE_PUSH_BLOCKS` further out, up to `SITE_PUSH_STEPS` times in all.
+ pub const SITE_PUSH_BLOCKS: i32 = 40;
+ pub const SITE_PUSH_STEPS: i32 = 40;
++
++// --- Poison arrows, jerky, falling stars, the Phoenix's return ----------------------------------
++
++/// A poison arrow (a stick, a pebble, a feather and a snake fang) is shot before any other arrow and is used up. An animal it hits is
++/// poisoned: it loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds for `POISON_SECONDS` seconds, on top of the arrow's blow.
++pub const POISON_DAMAGE: i32 = 1;
++pub const POISON_INTERVAL: f32 = 1.0;
++pub const POISON_SECONDS: f32 = 6.0;
++
++/// Meat jerky: raw meat and a lump of pink salt, cured. It heals as much as the cooked meat does (a stew still heals double).
++pub const JERKY_SALT_COST: u32 = 1;
++
++/// Falling stars cross the night sky of the Skylands, one about every `FALLING_STAR_INTERVAL` seconds, and land on an island the player
++/// can see (within `FALLING_STAR_RANGE` blocks, in front of them). A star starts `FALLING_STAR_START_HEIGHT` blocks above its landing
++/// place and `FALLING_STAR_SLANT` blocks to one side, and falls for `FALLING_STAR_FALL_SECONDS` seconds. Its flash lasts `FALLING_STAR_FLASH_SECONDS`.
++pub const FALLING_STAR_INTERVAL: f32 = 10.0;
++pub const FALLING_STAR_RANGE: f32 = 220.0;
++pub const FALLING_STAR_START_HEIGHT: f32 = 140.0;
++pub const FALLING_STAR_SLANT: f32 = 70.0;
++pub const FALLING_STAR_FALL_SECONDS: f32 = 3.2;
++pub const FALLING_STAR_FLASH_SECONDS: f32 = 2.0;
++pub const FALLING_STAR_TRAIL_LENGTH: f32 = 26.0;
++/// The widest angle (degrees) from the player's line of sight at which an island counts as seen.
++pub const FALLING_STAR_VIEW_DEGREES: f32 = 55.0;
++
++/// A Phoenix that has been killed rises again in its crater after this many seconds (the fire tornadoes return with it).
++pub const PHOENIX_RESPAWN_SECONDS: f32 = 60.0;
++
++/// The Horizen's ordinary caves come in four kinds (see `horizen::CaveKind`): plain, mossy with pools, with a river through them, and
++/// studded with red crystals that cannot be mined. This many percent of them are each of the three special kinds (the rest are plain).
++pub const HORIZEN_MOSSY_PERCENT: u64 = 24;
++pub const HORIZEN_RIVER_PERCENT: u64 = 24;
++pub const HORIZEN_CRYSTAL_PERCENT: u64 = 24;
++/// Mossy caves hold `HORIZEN_MOSS_POOLS` pools of radius `HORIZEN_MOSS_POOL_MIN` to `HORIZEN_MOSS_POOL_MAX`, with moss `HORIZEN_MOSS_RING` blocks round each.
++pub const HORIZEN_MOSS_POOLS: i32 = 3;
++pub const HORIZEN_MOSS_POOL_MIN: f32 = 2.0;
++pub const HORIZEN_MOSS_POOL_MAX: f32 = 4.0;
++pub const HORIZEN_MOSS_RING: f32 = 3.0;
++/// A river crosses its cave `HORIZEN_RIVER_HALF_WIDTH` blocks to each side of a meandering line.
++pub const HORIZEN_RIVER_HALF_WIDTH: f32 = 2.0;
++pub const HORIZEN_RIVER_MEANDER: f32 = 3.5;
++/// Red crystals stand on this many thousandths of a crystal cave's floor (never near its middle, where the tunnels meet).
++pub const HORIZEN_CRYSTAL_PER_MILLE: u64 = 55;
++pub const HORIZEN_CRYSTAL_CLEAR_RADIUS: f32 = 3.5;
+diff --git a/src/dropped.rs b/src/dropped.rs
+index 44d65e5..3e0c967 100644
+--- a/src/dropped.rs
++++ b/src/dropped.rs
+@@ -82,6 +82,9 @@ impl ItemKind {
+             ItemKind::PhoenixArrow => 0.03,
+             ItemKind::BootsOfTheSky => 0.07,
+             ItemKind::CursedIdol => 0.10,
++            ItemKind::SnakeFang => 0.03,
++            ItemKind::PoisonArrow => 0.03,
++            ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => 0.03,
+         }
+     }
+ 
+@@ -144,6 +147,9 @@ impl ItemKind {
+             ItemKind::PhoenixArrow => vec3(0.26, 0.03, 0.03),
+             ItemKind::BootsOfTheSky => vec3(0.17, 0.07, 0.09),
+             ItemKind::CursedIdol => vec3(0.10, 0.10, 0.10),
++            ItemKind::SnakeFang => vec3(0.10, 0.03, 0.04),
++            ItemKind::PoisonArrow => vec3(0.26, 0.03, 0.03),
++            ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => vec3(0.16, 0.03, 0.06),
+         }
+     }
+ }
+diff --git a/src/effects.rs b/src/effects.rs
+index 133d9f6..0f19ea3 100644
+--- a/src/effects.rs
++++ b/src/effects.rs
+@@ -783,3 +783,39 @@ pub fn draw_acid(world: &World, acid: &[crate::hazard::AcidCell], time: f32) {
+         draw_box(vec3(cell.x as f32 + 0.5, y, cell.z as f32 + 0.5), vec3(0.5, 0.02 + shimmer.abs(), 0.5), 0.0, Color::new(0.45, 0.28, 0.10, 0.62 * fade));
+     }
+ }
++
++// --- Falling stars ----------------------------------------------------------------------------
++
++/// Draw the falling stars of the Skylands' nights: a bright white-gold head with a halo and a long fading tail while a star falls, and where
++/// it lands a flash that swells and fades, a pillar of light and a ring of sparks. Call while the 3D camera is active, with the other
++/// translucent things.
++pub fn draw_falling_stars(stars: &[crate::stars::FallingStar], time: f32) {
++    for star in stars {
++        if !star.landed() {
++            let head = star.pos();
++            let back = -star.direction();
++            draw_sphere(head, 1.1, None, Color::new(1.0, 1.0, 0.95, 1.0));
++            draw_sphere(head, 1.9 + 0.2 * (time * 30.0).sin(), None, Color::new(1.0, 0.92, 0.55, 0.35));
++            draw_sphere(head, 3.2, None, Color::new(0.80, 0.88, 1.0, 0.12));
++            const TAIL: usize = 14;
++            for i in 1..=TAIL {
++                let f = i as f32 / TAIL as f32;
++                let at = head + back * (f * FALLING_STAR_TRAIL_LENGTH);
++                let fade = (1.0 - f).powf(1.3);
++                draw_sphere(at, 0.95 * (1.0 - 0.7 * f), None, Color::new(1.0, 0.90 - 0.25 * f, 0.55 - 0.2 * f, 0.75 * fade));
++            }
++        } else {
++            let t = (star.flash_age() / FALLING_STAR_FLASH_SECONDS).clamp(0.0, 1.0);
++            let fade = (1.0 - t) * (1.0 - t);
++            let at = star.to;
++            draw_sphere(at + vec3(0.0, 0.6, 0.0), 1.0 + 3.5 * t.sqrt(), None, Color::new(1.0, 0.95, 0.70, 0.45 * fade));
++            draw_sphere(at + vec3(0.0, 0.6, 0.0), 0.8 * (1.0 - t * 0.5), None, Color::new(1.0, 1.0, 0.95, 0.9 * fade));
++            draw_box(at + vec3(0.0, 9.0, 0.0), vec3(0.18 + 0.25 * (1.0 - t), 9.0, 0.18 + 0.25 * (1.0 - t)), 0.0, Color::new(1.0, 0.95, 0.75, 0.35 * fade));
++            for i in 0..10 {
++                let a = i as f32 * std::f32::consts::TAU / 10.0 + t * 1.5;
++                let r = 0.5 + 4.5 * t.sqrt();
++                draw_box(at + vec3(a.cos() * r, 0.3 + 1.6 * t * (1.0 + (i % 3) as f32 * 0.4), a.sin() * r), Vec3::splat(0.12), a, Color::new(1.0, 0.92, 0.6, 0.9 * fade));
++            }
++        }
++    }
++}
+diff --git a/src/game.rs b/src/game.rs
+index 9244efb..37113e9 100644
+--- a/src/game.rs
++++ b/src/game.rs
+@@ -16,8 +16,9 @@ use crate::item::{drops_for_with_bonuses, drops_for_with_berries, Hearth, ItemKi
+ use crate::horizen::{self, Dimension};
+ use crate::tower::Tower;
+ use crate::skylands;
++use crate::stars::{self, FallingStar};
+ use crate::{ghosts, stonehenge};
+-use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
++use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Landmarks, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
+ use crate::player::Player;
+ use crate::rng::{clock_seed, Rng};
+ use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
+@@ -211,6 +212,8 @@ pub struct Game {
+     storm_lightning_pos: Vec3,
+     /// Fade in progress after the player reaches the bottom of the well.
+     pub horizen_transition: Option<f32>,
++    /// A well fall is under way and the player has not yet been moved to the Horizen: that happens when the screen is black.
++    pub horizen_pending: bool,
+     /// Quail the player has killed. An Iron Quail comes for every `QUAIL_KILLS_PER_IRON_QUAIL`.
+     pub quail_kills: u32,
+     /// Parrots the player has killed (Bronze Parrots come for every `PARROTS_PER_BRONZE_PARROT`), and Bronze Parrots due but not yet out.
+@@ -241,6 +244,9 @@ pub struct Game {
+     /// made acid.
+     pub projectiles: Vec<Projectile>,
+     pub bursts: Vec<ShownBurst>,
++    /// The falling stars of the Skylands' nights, and the seconds since the last one began to fall.
++    pub falling_stars: Vec<FallingStar>,
++    star_timer: f32,
+     pub acid: Vec<AcidCell>,
+     /// Seconds the player has stood in acid water since it last burned them.
+     acid_burn: f32,
+@@ -353,6 +359,7 @@ impl Game {
+             storm_lightning_flash: 0.0,
+             storm_lightning_pos: Vec3::ZERO,
+             horizen_transition: None,
++            horizen_pending: false,
+             quail_kills: data.quail_kills,
+             parrot_kills: data.parrot_kills,
+             bronze_parrots_owed: 0,
+@@ -368,6 +375,8 @@ impl Game {
+             victory: None,
+             projectiles: Vec::new(),
+             bursts: Vec::new(),
++            falling_stars: Vec::new(),
++            star_timer: 0.0,
+             acid: Vec::new(),
+             acid_burn: 0.0,
+             hunt_total: 0,
+@@ -1201,8 +1210,11 @@ impl Game {
+             .enumerate()
+             .filter(|(_, a)| a.kind.is_huntable())
+             .filter_map(|(i, a)| {
+-                let (lo, hi) = a.hitbox();
+-                ray_box(eye, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= reach).map(|t| (i, t))
++                a.hitboxes()
++                    .into_iter()
++                    .filter_map(|(lo, hi)| ray_box(eye, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= reach))
++                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
++                    .map(|t| (i, t))
+             })
+             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))?;
+         self.line_of_sight(eye, dir, t).then_some(i)
+@@ -1288,6 +1300,77 @@ impl Game {
+         self.summon_vampire_bats();
+     }
+ 
++    /// The falling stars of the Skylands' nights: one begins to fall every `FALLING_STAR_INTERVAL` seconds, bound for an island the player can
++    /// see (`stars::pick_landing`), and each is dropped from the list once its flash has faded.
++    fn update_falling_stars(&mut self, dt: f32) {
++        for star in &mut self.falling_stars {
++            star.age += dt;
++        }
++        self.falling_stars.retain(|s| !s.done());
++        if !self.in_skylands() || !self.world.night {
++            self.star_timer = 0.0;
++            return;
++        }
++        self.star_timer += dt;
++        if self.star_timer >= FALLING_STAR_INTERVAL {
++            self.star_timer = 0.0;
++            let eye = self.player.pos + vec3(0.0, EYE_HEIGHT, 0.0);
++            let range = FALLING_STAR_RANGE.min((crate::config::render_radius() * CHUNK_SIZE) as f32);
++            if let Some(landing) = stars::pick_landing(self.info.seed, eye, self.player.look_dir(), range, &mut self.rng) {
++                let star = stars::star_for(landing, &mut self.rng);
++                self.falling_stars.push(star);
++            }
++        }
++    }
++
++    /// Poison does its work: each poisoned animal loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds until its poison
++    /// runs out (`POISON_SECONDS` after the arrow that gave it). An animal it kills drops its loot as usual.
++    fn update_poison(&mut self, dt: f32) {
++        let mut dead = Vec::new();
++        for (i, a) in self.animals.iter_mut().enumerate() {
++            if a.poisoned <= 0.0 {
++                continue;
++            }
++            a.poisoned = (a.poisoned - dt).max(0.0);
++            a.poison_tick += dt;
++            if a.poison_tick >= POISON_INTERVAL {
++                a.poison_tick -= POISON_INTERVAL;
++                if a.damage(POISON_DAMAGE) {
++                    dead.push(i);
++                }
++            }
++        }
++        if !dead.is_empty() {
++            self.remove_dead(dead);
++        }
++    }
++
++    /// The records of the Skylands: the world's own when the player is there, else those of the parked Skylands (if they have been).
++    fn skylands_landmarks_mut(&mut self) -> Option<&mut Landmarks> {
++        if self.world.dimension == Dimension::Skylands {
++            return Some(&mut self.world.landmarks);
++        }
++        [&mut self.away, &mut self.shelf].into_iter().flatten().find(|a| a.world.dimension == Dimension::Skylands).map(|a| &mut a.world.landmarks)
++    }
++
++    /// A dead Phoenix rises again `PHOENIX_RESPAWN_SECONDS` after it died, wherever the player is meanwhile: it is alive again in its
++    /// crater (it appears when the player comes near, as it did the first time) and the fire tornadoes come back with it.
++    fn update_phoenix_respawn(&mut self, dt: f32) {
++        let in_skylands = self.in_skylands();
++        let Some(marks) = self.skylands_landmarks_mut() else { return };
++        if !marks.phoenix_slain {
++            return;
++        }
++        marks.phoenix_dead_for += dt;
++        if marks.phoenix_dead_for >= PHOENIX_RESPAWN_SECONDS {
++            marks.phoenix_slain = false;
++            marks.phoenix_dead_for = 0.0;
++            if in_skylands {
++                self.toasts.push("The Phoenix rises again from its crater.".to_string());
++            }
++        }
++    }
++
+     /// Count a bat killed in the cave: every `BATS_PER_VAMPIRE`th calls a vampire bat.
+     fn note_cave_bat_killed(&mut self) {
+         self.bat_kills += 1;
+@@ -1470,13 +1553,20 @@ impl Game {
+         }
+     }
+ 
+-    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a Phoenix Arrow
+-    /// in preference when there is one in the inventory, and that is never used up.
++    /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a poison arrow
++    /// first when there is one in the inventory (it is used up), then a Phoenix Arrow (never used up), then an ordinary arrow.
+     fn shoot(&mut self, launcher: ItemKind, eye: Vec3, dir: Vec3) -> bool {
+         let Some(ammo) = launcher.ammo() else { return false };
+         if self.held_item() != Some(launcher) || self.attack_cooldown > 0.0 {
+             return false;
+         }
++        // Poison arrows go first (and are used up); then a Phoenix Arrow if there is one; then the ordinary arrows.
++        if launcher == ItemKind::Bow && self.inventory.remove(ItemKind::PoisonArrow, 1) {
++            self.attack_cooldown = BOW_COOLDOWN;
++            self.arrows.push(Arrow::fired_poison(eye, dir));
++            self.alarm_nessie();
++            return true;
++        }
+         if launcher == ItemKind::Bow && self.inventory.count(ItemKind::PhoenixArrow) > 0 {
+             self.attack_cooldown = BOW_COOLDOWN;
+             self.arrows.push(Arrow::fired_phoenix(eye, dir));
+@@ -1504,12 +1594,16 @@ impl Game {
+     /// pebble), to be picked up and used again.
+     pub fn update_arrows(&mut self, dt: f32) {
+         let mut hits = Vec::new();
++        let mut poisoned = Vec::new();
+         let mut landed = Vec::new();
+         let (world, animals) = (&self.world, &self.animals);
+         self.arrows.retain_mut(|arrow| match arrow.update(world, animals, dt) {
+             Fate::InFlight => true,
+             Fate::HitAnimal(i) => {
+                 hits.push((i, arrow.damage()));
++                if arrow.poisons() {
++                    poisoned.push(i);
++                }
+                 false
+             }
+             Fate::HitBlock | Fate::Expired => {
+@@ -1520,6 +1614,9 @@ impl Game {
+                 false
+             }
+         });
++        for i in poisoned {
++            self.animals[i].poison();
++        }
+         self.hurt_animals(&hits);
+         for (kind, spot) in landed {
+             self.items.push(DroppedItem::at_rest(kind, spot));
+@@ -2143,8 +2240,9 @@ impl Game {
+             }
+             AnimalKind::Phoenix => {
+                 self.world.landmarks.phoenix_slain = true;
++                self.world.landmarks.phoenix_dead_for = 0.0;
+                 self.tornadoes.clear();
+-                self.toasts.push("The Phoenix is slain. The fire tornadoes that sweep the islands die away; the crater\'s never does.".to_string());
++                self.toasts.push("The Phoenix is slain. The fire tornadoes that sweep the islands die away; in a minute it will rise again.".to_string());
+             }
+             kind if kind.is_wild_hunt() => {
+                 // The last of the Hunt to fall wins the game.
+@@ -2323,8 +2421,9 @@ impl Game {
+         if self.player.on_ground
+             && p.y <= WELL_FLOOR_Y + 0.05
+             && self.world.landmarks.is_well(p.x.floor() as i32, p.z.floor() as i32)
++            && !self.horizen_pending
+         {
+-            self.enter_horizen();
++            self.begin_horizen_fall();
+         }
+     }
+ 
+@@ -2355,8 +2454,10 @@ impl Game {
+         // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
+         self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
+         self.bronze_parrots_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).count() as u32;
+-        // A vampire bat left behind in the cave is waiting for the player's next visit; the king's spirits do not leave the castle's cave.
++        // A vampire bat left behind in the cave is waiting for the player's next visit. The king's spirits go with the player, whatever
++        // dimension they travel to (each keeps the arrows it has left).
+         self.vampire_bats_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count() as u32;
++        let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
+         self.king_dialog = None;
+         self.animals.clear();
+         self.arrows.clear();
+@@ -2367,6 +2468,8 @@ impl Game {
+         self.crater_tornado = None;
+         self.tornado_timer = 0.0;
+         self.cyclone_timer = 0.0;
++        self.falling_stars.clear();
++        self.star_timer = 0.0;
+         self.reset_storm();
+         self.treks = Treks::new();
+         self.world.stream_chunks(self.player.pos);
+@@ -2376,36 +2479,73 @@ impl Game {
+             self.player.pos = Player::new().pos;
+         }
+         self.player.lift_out_of_blocks(&self.world);
++        self.bring_spirits(&spirits);
+     }
+ 
+-    /// Fall into the Horizen. The player is swapped into its arrival pool while the screen is black.
++    /// Set the king's spirit archers (shots left, place on their circle) down round the player, after a journey between dimensions.
++    fn bring_spirits(&mut self, spirits: &[(u32, f32)]) {
++        let p = self.player.pos;
++        for &(shots, a) in spirits {
++            let mut spirit = Animal::new(AnimalKind::SpiritArcher, p + vec3(a.cos() * SPIRIT_FOLLOW_RADIUS, SPIRIT_FOLLOW_HEIGHT, a.sin() * SPIRIT_FOLLOW_RADIUS), &mut self.rng);
++            spirit.set_orbit(a);
++            spirit.shots_left = shots;
++            self.animals.push(spirit);
++        }
++    }
++
++    /// Begin the fall into the Horizen: the screen fades to black over the well, and the player is moved while it is black
++    /// (`update_horizen_transition`), so the move is never seen.
++    pub fn begin_horizen_fall(&mut self) {
++        if self.in_horizen() || self.horizen_pending {
++            return;
++        }
++        self.horizen_pending = true;
++        self.horizen_transition = Some(0.0);
++        self.toasts.push("You fall through the water into the Horizen.".to_string());
++    }
++
++    /// Move the player into the Horizen now. They always arrive in the arrival pool (never where they last left the cave), and it is
++    /// always day when they do.
+     pub fn enter_horizen(&mut self) {
+         if self.in_horizen() {
+             return;
+         }
+         self.travel_to(Dimension::Horizen);
++        let (sx, sz) = horizen::spawn_centre();
++        self.player.pos = vec3(sx, (GROUND_TOP + 1) as f32 + 0.01, sz);
++        self.player.vel = Vec3::ZERO;
++        self.world.stream_chunks(self.player.pos);
++        self.world.rebuild_dirty(self.player.pos, usize::MAX);
++        self.player.lift_out_of_blocks(&self.world);
+         // Whatever it was when it was left, the cave is day when you come in.
+         self.world.set_night(false);
+-        self.horizen_transition = Some(0.0);
+-        self.toasts.push("You fall through the water into the Horizen.".to_string());
++        self.horizen_pending = false;
++        if self.horizen_transition.is_none() {
++            // Called directly (not by a well fall): the screen is already black, and only fades back in.
++            self.horizen_transition = Some(HORIZEN_TRANSITION_SECONDS * HORIZEN_FADE_SHARE);
++        }
+     }
+ 
+-    /// Advance the black screen after a well fall. The player has already appeared in the arrival pool underneath it.
++    /// Advance the black screen of a well fall. The player is moved to the Horizen when it is fully black.
+     pub fn update_horizen_transition(&mut self, dt: f32) {
+         let Some(mut elapsed) = self.horizen_transition else { return };
+         elapsed += dt;
+         self.horizen_transition = (elapsed < HORIZEN_TRANSITION_SECONDS).then_some(elapsed);
++        if self.horizen_pending && elapsed >= HORIZEN_TRANSITION_SECONDS * HORIZEN_FADE_SHARE {
++            self.horizen_transition = Some(elapsed);
++            self.enter_horizen();
++        }
+     }
+ 
+     /// Darkness of the well transition, from clear to black and back to clear.
+     pub fn horizen_transition_darkness(&self) -> f32 {
+         let Some(elapsed) = self.horizen_transition else { return 0.0 };
+         let t = (elapsed / HORIZEN_TRANSITION_SECONDS).clamp(0.0, 1.0);
+-        const FADE_SHARE: f32 = 0.30;
+-        if t < FADE_SHARE {
+-            t / FADE_SHARE
+-        } else if t > 1.0 - FADE_SHARE {
+-            (1.0 - t) / FADE_SHARE
++        let fade = HORIZEN_FADE_SHARE;
++        if t < fade {
++            t / fade
++        } else if t > 1.0 - fade {
++            (1.0 - t) / fade
+         } else {
+             1.0
+         }
+@@ -2527,6 +2667,9 @@ impl Game {
+     /// of the player and any bear; a bear only ever reacts to the player.
+     pub fn update_animals(&mut self, dt: f32) {
+         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
++        self.update_poison(dt);
++        self.update_phoenix_respawn(dt);
++        self.update_falling_stars(dt);
+         match self.world.dimension {
+             // The cave of the Horizen holds bats and nothing else (see `spawn_cave_bats`).
+             Dimension::Horizen => {}
+@@ -6285,6 +6428,7 @@ mod totem_horizen_and_wear_tests {
+         for _ in 0..240 {
+             g.player.update(&g.world, 1.0 / 60.0, &MoveInput::default());
+             g.update_landmarks();
++            g.update_horizen_transition(1.0 / 60.0);
+             if g.in_horizen() {
+                 break;
+             }
+@@ -6307,8 +6451,53 @@ mod totem_horizen_and_wear_tests {
+         assert!(!g.in_horizen(), "a shallow fall does not count");
+         g.player.pos.y = WELL_FLOOR_Y;
+         g.update_dimension();
+-        assert!(g.in_horizen(), "the floor collision completes the fall");
+-        assert!(g.horizen_transition.is_some(), "the transfer starts blacked out");
++        assert!(!g.in_horizen() && g.horizen_pending, "the floor collision starts the fall, behind a fading screen");
++        assert!(g.horizen_transition.is_some());
++        g.update_horizen_transition(HORIZEN_TRANSITION_SECONDS * HORIZEN_FADE_SHARE + 0.01);
++        assert!(g.in_horizen(), "the player is moved once the screen is black");
++        assert!(g.horizen_transition.is_some(), "and the screen then fades back in");
++    }
++
++    #[test]
++    fn the_well_fall_moves_the_player_only_while_the_screen_is_black_and_always_to_the_arrival_pool() {
++        let mut g = game(30);
++        fall_in_the_well(&mut g);
++        assert!(g.in_horizen());
++        // Wander off, leave by dying, and fall in again: the arrival is the same place every time.
++        let arrival = g.player.pos;
++        g.player.pos = vec3(arrival.x + 60.0, arrival.y, arrival.z + 5.0);
++        g.hurt_player(MAX_HEALTH, "gone");
++        assert!(!g.in_horizen());
++        fall_in_the_well(&mut g);
++        assert!(g.in_horizen());
++        let (sx, sz) = horizen::spawn_centre();
++        assert!((g.player.pos.x - sx).abs() < 1.0 && (g.player.pos.z - sz).abs() < 1.0, "back in the arrival pool: {:?}", g.player.pos);
++        // Every frame of the fall before the world changes is already darkening, and the world changes only at full black.
++        let mut h = game(31);
++        let well = Well { x: 40, z: 40 };
++        h.world.add_well(well);
++        for cz in 1..=3 {
++            for cx in 1..=3 {
++                h.world.ensure_chunk(cx, cz);
++            }
++        }
++        h.player.pos = vec3(41.5, WELL_FLOOR_Y, 41.5);
++        h.player.on_ground = true;
++        h.update_dimension();
++        let mut last = -1.0;
++        let mut dark_at_switch = None;
++        for _ in 0..200 {
++            let was_in = h.in_horizen();
++            h.update_horizen_transition(1.0 / 60.0);
++            if !was_in && h.in_horizen() {
++                dark_at_switch = Some(h.horizen_transition_darkness());
++            }
++            if !h.in_horizen() {
++                assert!(h.horizen_transition_darkness() >= last, "it only darkens until the move");
++                last = h.horizen_transition_darkness();
++            }
++        }
++        assert!(dark_at_switch.expect("the player was moved") > 0.95, "the move happens when it is black: {dark_at_switch:?}");
+     }
+ 
+     #[test]
+@@ -6389,7 +6578,9 @@ mod totem_horizen_and_wear_tests {
+         assert!(g.animals.is_empty(), "no creature of the overworld comes along");
+         // Land and sky of the new world: flat, with ponds; the player appears on the dedicated arrival pool.
+         g.world.stream_chunks(g.player.pos);
+-        g.player.update(&g.world, 0.5, &MoveInput::default());
++        for _ in 0..60 {
++            g.player.update(&g.world, 1.0 / 60.0, &MoveInput::default());
++        }
+         assert!(g.world.is_wet_column(g.player.pos.x.floor() as i32, g.player.pos.z.floor() as i32));
+         assert!((g.player.pos.y - GROUND_TOP as f32).abs() < 0.2, "on the arrival pool: {}", g.player.pos.y);
+         assert!(g.world.chunks.values().all(|c| !c.blocks.contains(&Block::Wood) && !c.blocks.contains(&Block::Bush)), "nothing grows there");
+@@ -9059,7 +9250,7 @@ mod boss_update_tests {
+     }
+ 
+     #[test]
+-    fn killing_the_phoenix_ends_the_fire_tornadoes_for_good_and_drops_a_feather_that_makes_a_phoenix_arrow() {
++    fn killing_the_phoenix_ends_the_fire_tornadoes_until_it_rises_again_and_drops_a_feather_that_makes_a_phoenix_arrow() {
+         let mut g = on_the_giant_island();
+         for _ in 0..40 {
+             g.update_animals(1.0);
+@@ -9074,11 +9265,11 @@ mod boss_update_tests {
+         assert!(g.world.landmarks.phoenix_slain);
+         assert!(g.tornadoes.is_empty(), "the tornadoes stop");
+         assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::PhoenixFeather).count(), PHOENIX_FEATHER_DROP as usize);
+-        for _ in 0..80 {
++        for _ in 0..50 {
+             g.update_animals(1.0);
+             g.spawn_bosses();
+         }
+-        assert!(g.tornadoes.is_empty(), "and none comes again, by day");
++        assert!(g.tornadoes.is_empty(), "and none comes while it is dead, by day");
+         assert!(g.animals.iter().all(|a| a.kind != AnimalKind::Phoenix), "nor does it");
+         // The feather, a stick and a pebble make the arrow.
+         give(&mut g, 3, ItemKind::PhoenixFeather, 1);
+@@ -9093,9 +9284,35 @@ mod boss_update_tests {
+         assert!(text.lines().any(|l| l.ends_with("phoenixslain")), "it is saved");
+         let mut again = Game::from_save(info, parse_save(&text), 3);
+         assert!(again.in_skylands() && again.world.landmarks.phoenix_slain);
++        assert!(again.world.landmarks.phoenix_dead_for > 49.0, "and so is how long it has been dead: {}", again.world.landmarks.phoenix_dead_for);
+         again.world.night = false;
+-        again.update_animals(30.0);
++        again.update_animals(5.0);
+         assert!(again.tornadoes.is_empty());
++        // Sixty seconds after its death it rises again, in the crater, and the tornadoes return with it.
++        again.update_animals(6.0);
++        assert!(!again.world.landmarks.phoenix_slain && again.world.landmarks.phoenix_dead_for == 0.0);
++        for _ in 0..20 {
++            again.spawn_bosses();
++        }
++        assert_eq!(again.animals.iter().filter(|a| a.kind == AnimalKind::Phoenix).count(), 1, "the Phoenix is back");
++        for _ in 0..40 {
++            again.update_animals(1.0);
++            again.health = MAX_HEALTH;
++        }
++        assert!(!again.tornadoes.is_empty(), "and the tornadoes with it");
++    }
++
++    #[test]
++    fn a_dead_phoenix_is_counted_dead_for_sixty_seconds_even_while_the_player_is_in_another_dimension() {
++        let mut g = game();
++        g.travel_to(Dimension::Skylands);
++        g.world.landmarks.phoenix_slain = true;
++        g.travel_to(Dimension::Overworld);
++        assert!(g.parked(Dimension::Skylands).map_or(false, |a| a.world.landmarks.phoenix_slain));
++        g.update_animals(PHOENIX_RESPAWN_SECONDS - 1.0);
++        assert!(g.parked(Dimension::Skylands).map_or(false, |a| a.world.landmarks.phoenix_slain), "not yet");
++        g.update_animals(1.5);
++        assert!(g.parked(Dimension::Skylands).map_or(false, |a| !a.world.landmarks.phoenix_slain), "alive again after sixty seconds");
+     }
+ 
+     #[test]
+@@ -9131,6 +9348,7 @@ mod upgrade_tests {
+     use super::*;
+     use crate::chunk::idx;
+     use crate::animal::{AirPhase, Pounce};
++    const DT: f32 = 1.0 / 60.0;
+     use crate::item::ItemStack;
+     use std::path::PathBuf;
+ 
+@@ -9700,6 +9918,220 @@ mod upgrade_tests {
+         assert!(dived && hurt, "and swoops down to bite");
+     }
+ 
++    #[test]
++    fn a_flying_snake_is_long_thick_slow_and_loops_through_the_air() {
++        let mut g = game();
++        open_sky(&mut g);
++        // Four times the old length (sixteen segments of 0.26), and thicker.
++        assert!(SNAKE_SEGMENTS >= 4 * 16 && SNAKE_SEGMENTS as f32 * SNAKE_SEGMENT_SPACING >= 4.0 * 16.0 * 0.26 * 0.99);
++        let at = g.player.pos + vec3(10.0, 6.0, 0.0);
++        g.animals.push(Animal::new(AnimalKind::FlyingSnake, at, &mut Rng::new(4)));
++        let (mut travelled, mut turned, mut last_heading, mut last_pos) = (0.0_f32, 0.0_f32, None, at);
++        let mut peak = 0.0_f32;
++        let seconds = 90.0;
++        for _ in 0..(seconds * 60.0) as i32 {
++            g.update_animals(1.0 / 60.0);
++            g.health = MAX_HEALTH;
++            let s = g.animals.iter().find(|a| a.kind == AnimalKind::FlyingSnake).unwrap();
++            let step = (s.pos - last_pos).length();
++            travelled += step;
++            peak = peak.max(step * 60.0);
++            last_pos = s.pos;
++            let h = s.heading;
++            if let Some(prev) = last_heading {
++                let mut d: f32 = h - prev;
++                while d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
++                while d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
++                turned += d.abs();
++            }
++            last_heading = Some(h);
++        }
++        assert!(peak < 9.0, "it never darts: top speed {peak} blocks a second");
++        assert!(travelled / seconds < 6.0, "it drifts slowly: {} blocks a second", travelled / seconds);
++        assert!(turned > 4.0 * std::f32::consts::TAU, "it goes round and round in loops: it turned through {turned} radians");
++        // Its body is as long as it is said to be, along the path its head flew.
++        let s = g.animals.iter().find(|a| a.kind == AnimalKind::FlyingSnake).unwrap();
++        let body = s.body_points();
++        assert_eq!(body.len(), SNAKE_SEGMENTS);
++        let arc: f32 = body.windows(2).map(|w| (w[0] - w[1]).length()).sum();
++        assert!(arc > SNAKE_SEGMENTS as f32 * SNAKE_SEGMENT_SPACING * 0.95, "about seventeen blocks long: {arc}");
++        assert!(AnimalKind::FlyingSnake.half_width() >= 0.5, "thicker");
++    }
++
++    #[test]
++    fn a_dead_snake_drops_fangs_and_arrows_can_hit_any_part_of_its_long_body() {
++        let mut g = game();
++        open_sky(&mut g);
++        let mut snake = Animal::new(AnimalKind::FlyingSnake, g.player.pos + vec3(6.0, 5.0, 0.0), &mut Rng::new(4));
++        snake.heading = 0.0;
++        g.animals.push(snake);
++        let boxes = g.animals[0].hitboxes();
++        assert!(boxes.len() > 10, "a box along the body: {}", boxes.len());
++        // Aim at the middle of the body, well behind the head.
++        let mid = g.animals[0].body_points()[SNAKE_SEGMENTS / 2];
++        let from = mid + vec3(0.0, 0.0, -6.0);
++        let mut arrow = Arrow::fired(from, vec3(0.0, 0.0, 1.0));
++        let animals = g.animals.clone();
++        let fate = (0..120).map(|_| arrow.update(&g.world, &animals, DT)).find(|f| *f != Fate::InFlight);
++        assert_eq!(fate, Some(Fate::HitAnimal(0)), "the body can be hit");
++        g.hurt_animals(&[(0, FLYING_SNAKE_HEALTH)]);
++        let fangs = g.items.iter().filter(|i| i.kind == ItemKind::SnakeFang).count() as u32;
++        assert!((SNAKE_FANG_DROP_MIN..=SNAKE_FANG_DROP_MAX).contains(&fangs), "{fangs} fangs");
++    }
++
++    #[test]
++    fn snake_fangs_make_poison_arrows_that_the_bow_shoots_first_and_that_poison_what_they_hit() {
++        let r = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::PoisonArrow).expect("a recipe");
++        assert_eq!(r.inputs, &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)]);
++        let mut inv = crate::inventory::Inventory::new();
++        for (k, n) in [(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)] {
++            inv.add(k, n);
++        }
++        assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::PoisonArrow) == 1);
++
++        let mut g = game();
++        open_sky(&mut g);
++        hold_bow(&mut g);
++        g.inventory.add(ItemKind::PoisonArrow, 2);
++        g.inventory.add(ItemKind::PhoenixArrow, 1);
++        g.inventory.add(ItemKind::Arrow, 3);
++        let eye = g.player.eye();
++        for n in 0..2 {
++            g.attack_cooldown = 0.0;
++            assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
++            assert_eq!(g.inventory.count(ItemKind::PoisonArrow), 1 - n, "each poison arrow is used up");
++            assert_eq!((g.inventory.count(ItemKind::PhoenixArrow), g.inventory.count(ItemKind::Arrow)), (1, 3), "poison goes before the phoenix arrow and the plain ones");
++        }
++        assert!(g.arrows.iter().all(|a| a.kind == ItemKind::PoisonArrow));
++        g.attack_cooldown = 0.0;
++        assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
++        assert_eq!(g.arrows.last().map(|a| a.kind), Some(ItemKind::PhoenixArrow), "then the phoenix arrow");
++        g.inventory.remove(ItemKind::PhoenixArrow, 1);
++        g.attack_cooldown = 0.0;
++        assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
++        assert_eq!(g.arrows.last().map(|a| a.kind), Some(ItemKind::Arrow), "then the plain arrows");
++
++        // A poison arrow poisons a bear (tough enough to live through it), which then loses a point a second until the poison runs out.
++        let mut g = game();
++        open_sky(&mut g);
++        let mut bear = Animal::new(AnimalKind::Bear, g.player.pos + vec3(5.0, 0.0, 0.0), &mut Rng::new(1));
++        bear.health = 100;
++        g.animals.push(bear);
++        let hit = vec3(g.player.pos.x + 5.0, g.player.pos.y + 0.5, g.player.pos.z);
++        g.arrows.push(Arrow::fired_poison(hit - vec3(2.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0)));
++        for _ in 0..30 {
++            g.update_arrows(DT);
++        }
++        let after_blow = g.animals[0].health;
++        assert_eq!(after_blow, 100 - ARROW_DAMAGE, "the blow");
++        assert!(g.animals[0].poisoned > 0.0, "and it is poisoned");
++        assert!(g.arrows.is_empty() && g.items.iter().all(|i| i.kind != ItemKind::PoisonArrow), "the arrow is spent");
++        g.player.pos = vec3(-100.0, g.player.pos.y, -100.0);
++        for _ in 0..(POISON_SECONDS * 60.0) as i32 + 60 {
++            g.update_poison(DT);
++        }
++        let lost = after_blow - g.animals[0].health;
++        let full = (POISON_SECONDS / POISON_INTERVAL) as i32 * POISON_DAMAGE;
++        assert!((full - POISON_DAMAGE..=full).contains(&lost), "poison took {lost} points over its course (about {full})");
++        assert_eq!(g.animals[0].poisoned, 0.0);
++    }
++
++    fn hold_bow(g: &mut Game) {
++        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::Bow, count: 1 });
++        g.select_slot(0);
++    }
++
++    #[test]
++    fn salt_makes_a_jerky_of_each_raw_meat_that_heals_like_the_cooked_meat_while_stew_still_heals_double() {
++        for (raw, jerky, cooked, stew) in [
++            (ItemKind::Venison, ItemKind::VenisonJerky, ItemKind::CookedVenison, ItemKind::VenisonStew),
++            (ItemKind::Poultry, ItemKind::PoultryJerky, ItemKind::CookedPoultry, ItemKind::PoultryStew),
++            (ItemKind::BearMeat, ItemKind::BearJerky, ItemKind::CookedBearMeat, ItemKind::BearStew),
++            (ItemKind::RabbitMeat, ItemKind::RabbitJerky, ItemKind::CookedRabbit, ItemKind::RabbitStew),
++            (ItemKind::MooseMeat, ItemKind::MooseJerky, ItemKind::CookedMoose, ItemKind::MooseStew),
++        ] {
++            let r = crate::recipe::RECIPES.iter().find(|r| r.output == jerky).expect("a recipe");
++            assert_eq!(r.inputs, &[(raw, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)], "{jerky:?}");
++            assert_eq!(raw.cured(), Some(jerky));
++            assert_eq!(jerky.heal_amount(), cooked.heal_amount(), "{jerky:?} heals as much as {cooked:?}");
++            assert!(jerky.heal_amount().is_some());
++            assert_eq!(stew.heal_amount(), cooked.heal_amount().map(|h| h * STEW_HEAL_FACTOR), "stew still heals double");
++            let mut inv = crate::inventory::Inventory::new();
++            inv.add(raw, 2);
++            assert!(!crate::recipe::craft(&mut inv, r), "no salt, no jerky");
++            inv.add(ItemKind::PinkSalt, 1);
++            assert!(crate::recipe::craft(&mut inv, r));
++            assert_eq!((inv.count(jerky), inv.count(raw), inv.count(ItemKind::PinkSalt)), (1, 1, 0));
++        }
++        assert!(ItemKind::ALL.iter().all(|k| ItemKind::from_id(k.id()) == Some(*k)), "every item has its own save id");
++        // Eating it heals the player.
++        let mut g = game();
++        g.health = 1;
++        hold(&mut g, ItemKind::MooseJerky, 1);
++        assert!(g.eat_held());
++        assert_eq!(g.health, 1 + MOOSE_MEAT_HEAL);
++    }
++
++    #[test]
++    fn the_kings_spirits_go_with_the_player_between_dimensions_with_the_arrows_they_have_left() {
++        let mut g = game();
++        for (n, shots) in [(0, 10), (1, 4)] {
++            let mut sp = Animal::new(AnimalKind::SpiritArcher, g.player.pos + vec3(2.0, 1.0, 0.0), &mut Rng::new(n));
++            sp.shots_left = shots;
++            sp.set_orbit(n as f32 * 2.4);
++            g.animals.push(sp);
++        }
++        g.animals.push(Animal::new(AnimalKind::Deer, g.player.pos + vec3(9.0, 0.0, 0.0), &mut Rng::new(9)));
++        for target in [Dimension::Skylands, Dimension::Overworld] {
++            g.travel_to(target);
++            assert_eq!(g.spirit_count(), 2, "both spirits arrive in {target:?}");
++            assert!(g.animals.iter().all(|a| a.kind == AnimalKind::SpiritArcher), "nothing else crosses");
++            let mut left: Vec<u32> = g.animals.iter().map(|a| a.shots_left).collect();
++            left.sort();
++            assert_eq!(left, vec![4, 10]);
++            assert!(g.animals.iter().all(|a| (a.pos - g.player.pos).length() < 6.0), "they are at the player's side");
++        }
++        g.enter_horizen();
++        assert_eq!(g.spirit_count(), 2, "and into the Horizen");
++        g.hurt_player(MAX_HEALTH, "gone");
++        assert_eq!(g.spirit_count(), 0, "death still ends them");
++    }
++
++    #[test]
++    fn the_skylands_have_falling_stars_every_ten_seconds_at_night_landing_on_visible_islands() {
++        let mut g = game();
++        g.travel_to(Dimension::Skylands);
++        g.world.night = true;
++        g.player.yaw = 0.0;
++        for _ in 0..(FALLING_STAR_INTERVAL as i32 - 1) {
++            g.update_falling_stars(1.0);
++        }
++        assert!(g.falling_stars.is_empty(), "not yet");
++        g.update_falling_stars(1.0);
++        assert_eq!(g.falling_stars.len(), 1, "one after ten seconds");
++        let star = g.falling_stars[0];
++        assert!(star.from.y > star.to.y + 100.0, "from high in the sky");
++        let island = skylands::island_at(g.info.seed, star.to.x.floor() as i32, star.to.z.floor() as i32).expect("it lands on an island");
++        assert!((star.to.y - (island.surface_y(star.to.x.floor() as i32, star.to.z.floor() as i32) as f32 + 1.0)).abs() < 1e-3);
++        // It reaches the ground, flashes and is cleared away; by day none fall.
++        for _ in 0..(FALLING_STAR_FALL_SECONDS + FALLING_STAR_FLASH_SECONDS) as i32 + 1 {
++            g.update_falling_stars(1.0);
++            g.falling_stars.retain(|s| s.age > 0.0);
++        }
++        g.falling_stars.clear();
++        g.world.night = false;
++        for _ in 0..30 {
++            g.update_falling_stars(1.0);
++        }
++        assert!(g.falling_stars.is_empty(), "none by day");
++        let mut o = game();
++        o.world.night = true;
++        for _ in 0..30 {
++            o.update_falling_stars(1.0);
++        }
++        assert!(o.falling_stars.is_empty(), "none in the overworld");
++    }
++
+     #[test]
+     fn jaguars_and_snakes_live_only_in_the_jungle() {
+         let (mut g, _, _) = in_jungle_game();
+diff --git a/src/help.rs b/src/help.rs
+index e68400b..a9796c1 100644
+--- a/src/help.rs
++++ b/src/help.rs
+@@ -105,13 +105,16 @@ pub fn help_lines() -> Vec<Line> {
+         item(format!("Ravens. At night ravens circle you at a distance, then swoop down for {RAVEN_DAMAGE} and fly away again. They go with the dawn.")),
+         item(format!("Iron Quail feathers. Each Iron Quail (three come every {QUAIL_KILLS_PER_IRON_QUAIL} quail) strikes you, and from a distance shoots iron feathers for {IRON_FEATHER_DAMAGE}. A feather that misses lies on the ground: pick it up, hold it and click to throw it like a throwing star ({IRON_FEATHER_THROW_DAMAGE} damage). It is used up only when it hits an animal. If you already have a Silver Key, or one lies on the ground, anything that would drop another drops a gold bar instead.")),
+         item(format!("Cave bats and the Vampire Bat. Bats now come into the Horizen's caves half as often as they did. For every {BATS_PER_VAMPIRE} bats you kill in the caves a Vampire Bat ({VAMPIRE_BAT_HEALTH} health) comes out of the dark. It has one attack: it circles you, swoops down for {VAMPIRE_BAT_DAMAGE}, flies off and comes again. It drops {VAMPIRE_BAT_GOLD_DROP} Gold.")),
+-        item(format!("The King's castle. In the Horizen a giant cave, {KING_CAVE_CELLS} cave-squares from where you arrive, holds the largest castle in the game: an outer wall {} blocks across with a gate on the south side, four towers and a great keep. Hold a Bone Totem in the Horizen and its trail leads through the caves to it. Play Musical Pipes inside the walls and the ghost of the king speaks: \"I am the king eternal. Give me gold and I shall send my spirits to guard you.\" A pop-up lets you give him gold: for every {GOLD_PER_SPIRIT} gold one spirit archer follows you. Each shoots {SPIRIT_SHOTS} arrows at whatever you have hit lately, then vanishes. In the middle of the keep, on a dais, are the Boots of the Sky.", KING_WALL_HALF * 2 + 1)),
++        item(format!("The King's castle. In the Horizen a giant cave, {KING_CAVE_CELLS} cave-squares from where you arrive, holds the largest castle in the game: an outer wall {} blocks across with a gate on the south side, four towers and a great keep. Hold a Bone Totem in the Horizen and its trail leads through the caves to it. Play Musical Pipes inside the walls and the ghost of the king speaks: \"I am the king eternal. Give me gold and I shall send my spirits to guard you.\" A pop-up lets you give him gold: for every {GOLD_PER_SPIRIT} gold one spirit archer follows you. Each shoots {SPIRIT_SHOTS} arrows at whatever you have hit lately, then vanishes. They go with you into any other dimension. In the middle of the keep, on a dais, are the Boots of the Sky.", KING_WALL_HALF * 2 + 1)),
+         item(format!("Boots of the Sky. Wear them (right click, or the Worn slot; they share the one worn place) and you run {BOOTS_SPEED_FACTOR} times as fast and jump {BOOTS_JUMP_DISTANCE_FACTOR} times as far.")),
+         item(format!("Parrots and Bronze Parrots. Parrots are colourful quail that live in the jungle, where only the jungle's own creatures come (no deer, quail, bears, rabbits, moose or ravens). Every {PARROTS_PER_BRONZE_PARROT} parrots you kill, {BRONZE_PARROTS_PER_SUMMON} Bronze Parrots ({BRONZE_PARROT_HEALTH} health) come for you and fight like Iron Quails; each leaves {BRONZE_PARROT_BRONZE_DROP} Bronze.")),
+         item(format!("Cursed Idol. Taken from its plinth in the heart of the jungle temple, whose passage is boarded up until the Orangutan is dead. While it is anywhere in your hotbar you deal {IDOL_DAMAGE_FACTOR} times the damage, but nothing can heal you: berries, meat and red stew all refuse.")),
+         item(format!("The Orangutan. A boss ({ORANGUTAN_HEALTH} health) on the upper tiers of the jungle temple, which comes when you are within {ORANGUTAN_SPAWN_DISTANCE:.0} blocks. It walks and climbs after you, hits for {ORANGUTAN_DAMAGE}, hurls rocks from {ORANGUTAN_ROCK_MIN_RANGE:.0} to {ORANGUTAN_ROCK_MAX_RANGE:.0} blocks away (each bursts for {ROCK_BURST_DAMAGE}) and, within {ORANGUTAN_LEAP_MAX_RANGE:.0} blocks, crouches, leaps high and comes down beside you to smash the ground: everything within {ORANGUTAN_SMASH_RADIUS:.0} blocks takes {ORANGUTAN_SMASH_DAMAGE} and is thrown {ORANGUTAN_SMASH_KNOCKBACK:.0} blocks. Once dead it never returns, and leaves {ORANGUTAN_GOLD_DROP} Gold.")),
+-        item(format!("Jaguars and flying snakes. In the jungle jaguars (at most {MAX_JAGUAR}) creep up on you, crouch, then pounce for {JAGUAR_DAMAGE} and slink away. Flying snakes (at most {MAX_FLYING_SNAKE}) twist in spirals through the air round you and swoop down to bite for {SNAKE_DAMAGE}.")),
+-        item(format!("The Phoenix. Hold a Peep Stone in the Skylands and its trail leads to a giant island, with a volcano on it. The Phoenix ({PHOENIX_HEALTH} health) lives in the crater: it throws fireballs ({FIREBALL_DAMAGE} in a burst) and swoops down on you for {PHOENIX_SWOOP_DAMAGE}. When it dies the wandering fire tornadoes stop (the crater's does not) and it drops a Phoenix Feather. A Pebble, a Stick and the feather make a Phoenix Arrow: shoot it from a bow and it is never used up, and it never lands on the ground. Skylands islands may be wooded, ruined, hilly or have an ancient altar with bones; one in {SKY_LARGE_ONE_IN} is large.")),
++        item(format!("Jaguars and flying snakes. In the jungle jaguars (at most {MAX_JAGUAR}) creep up on you, crouch, then pounce for {JAGUAR_DAMAGE} and slink away. Flying snakes (at most {MAX_FLYING_SNAKE}) are about seventeen blocks long and drift slowly in wide loops through the air round you, then swoop down to bite for {SNAKE_DAMAGE}. A dead snake drops {SNAKE_FANG_DROP_MIN} to {SNAKE_FANG_DROP_MAX} Snake Fangs; a Pebble, a Stick, a Feather and a fang make a Poison Arrow. A bow shoots Poison Arrows first, then Phoenix Arrows, then ordinary arrows. A poison arrow is used up, and what it hits loses {POISON_DAMAGE} life every {POISON_INTERVAL:.0} second for {POISON_SECONDS:.0} seconds.")),
++        item(format!("The Phoenix. Hold a Peep Stone in the Skylands and its trail leads to a giant island, with a volcano on it. The Phoenix ({PHOENIX_HEALTH} health) lives in the crater: it throws fireballs ({FIREBALL_DAMAGE} in a burst) and swoops down on you for {PHOENIX_SWOOP_DAMAGE}. When it dies the wandering fire tornadoes stop (the crater's does not) and it drops a Phoenix Feather; {PHOENIX_RESPAWN_SECONDS:.0} seconds later it rises again in the crater and the tornadoes come back. A Pebble, a Stick and the feather make a Phoenix Arrow: shoot it from a bow and it is never used up, and it never lands on the ground. Skylands islands may be wooded, ruined, hilly or have an ancient altar with bones; one in {SKY_LARGE_ONE_IN} is large.")),
++        item(format!("Jerky. A Pink Salt and a raw meat make jerky, crafted with no fire: Venison, Poultry, Bear, Rabbit and Moose Jerky. Each heals as much as the cooked meat; stew still heals twice as much.")),
++        item(format!("Falling stars. On a Skylands night a star streaks down from the sky about every {FALLING_STAR_INTERVAL:.0} seconds and lands, in a flash of light, on an island you can see. It is not always the one you are standing on.")),
++        item(format!("Caves of the Horizen. The caves are of four kinds: plain; mossy, with green pools ringed with moss; river caves, with a stream winding across the floor (shallow enough to wade); and crystal caves, with red crystals like salt crystals that cannot be mined. You always arrive in the same pool, and the screen goes black before you are moved.")),
+         item(format!(
+             "Grand castle. Hold a Peep Stone at night. The first time you do so in a world, a grand castle rises somewhere beyond the edge of the land, at least {} blocks away, and a ghostly trail leads towards it. It is a great castle of grey stone, about {} blocks across: an outer wall with towers and a gate on the south side, and in the middle a keep of {GRAND_STOREYS} floors with a door on its south side, windows, a stair from each floor to the next, and a roof to walk on. The trail leads to the gate and then to the door of the keep. There is only one grand castle in a world. Castle stone cannot be broken.",
+             grand_distance(), GRAND_REACH * 2 + 1
+diff --git a/src/horizen.rs b/src/horizen.rs
+index c928380..72db3c3 100644
+--- a/src/horizen.rs
++++ b/src/horizen.rs
+@@ -165,6 +165,19 @@ fn cavern_air(seed: i64, wx: i32, wz: i32) -> i32 {
+     dome_air((dx * dx + dz * dz).sqrt(), cavern_radius(seed, dz.atan2(dx)), HORIZEN_CAVERN_HEIGHT)
+ }
+ 
++/// What an ordinary cave of the Horizen is like. The arrival chamber, the great cavern and the king's cave are always plain.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum CaveKind {
++    /// Bare earth and rock (with the odd pond).
++    Plain,
++    /// Moss on the floor and walls, and a few pools of green water ringed with moss.
++    Mossy,
++    /// A river winds across the floor from wall to wall.
++    River,
++    /// Red crystals, like salt crystals, stand on the floor. They cannot be mined.
++    Crystal,
++}
++
+ /// One of the Horizen's caves: its square of the grid, its middle, its radius and the air above its middle.
+ #[derive(Clone, Copy, Debug, PartialEq)]
+ pub struct Cave {
+@@ -177,6 +190,8 @@ pub struct Cave {
+     pub great: bool,
+     /// The king's giant cave with the largest castle in the game (its shape is `king_air`).
+     pub king: bool,
++    /// What it is like (see `CaveKind`).
++    pub kind: CaveKind,
+ }
+ 
+ // --- The king's cave ------------------------------------------------------------------------
+@@ -263,15 +278,15 @@ fn cavern_cell(seed: i64) -> (i32, i32) {
+ pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
+     let (sx, sz) = spawn_centre();
+     if (ci, cj) == (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL)) {
+-        return Cave { cell: (ci, cj), x: sx, z: sz, radius: HORIZEN_CHAMBER_RADIUS, height: HORIZEN_CHAMBER_HEIGHT, great: false, king: false };
++        return Cave { cell: (ci, cj), x: sx, z: sz, radius: HORIZEN_CHAMBER_RADIUS, height: HORIZEN_CHAMBER_HEIGHT, great: false, king: false, kind: CaveKind::Plain };
+     }
+     if (ci, cj) == king_cell(seed) {
+         let (x, z) = king_centre(seed);
+-        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: KING_CAVE_RADIUS, height: KING_CAVE_HEIGHT, great: false, king: true };
++        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: KING_CAVE_RADIUS, height: KING_CAVE_HEIGHT, great: false, king: true, kind: CaveKind::Plain };
+     }
+     if (ci, cj) == cavern_cell(seed) {
+         let (x, z) = cavern_centre(seed);
+-        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: HORIZEN_CAVERN_RADIUS, height: HORIZEN_CAVERN_HEIGHT, great: true, king: false };
++        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: HORIZEN_CAVERN_RADIUS, height: HORIZEN_CAVERN_HEIGHT, great: true, king: false, kind: CaveKind::Plain };
+     }
+     let h = hash3(seed, ci, cj, 0x4341);
+     let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
+@@ -285,7 +300,88 @@ pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
+         height: HORIZEN_CAVE_MIN_HEIGHT + (unit(48) * (HORIZEN_CAVE_MAX_HEIGHT - HORIZEN_CAVE_MIN_HEIGHT + 1) as f32) as i32,
+         great: false,
+         king: false,
++        kind: match hash3(seed, ci, cj, 0x4B49) % 100 {
++            r if r < HORIZEN_MOSSY_PERCENT => CaveKind::Mossy,
++            r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT => CaveKind::River,
++            r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT + HORIZEN_CRYSTAL_PERCENT => CaveKind::Crystal,
++            _ => CaveKind::Plain,
++        },
++    }
++}
++
++fn cave_of_column(seed: i64, wx: i32, wz: i32) -> Cave {
++    cave_in_cell(seed, wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL))
++}
++
++/// The pools of a mossy cave: `HORIZEN_MOSS_POOLS` ovals of green water, scattered about its middle.
++pub fn moss_pools(seed: i64, cave: &Cave) -> Vec<Pond> {
++    (0..HORIZEN_MOSS_POOLS)
++        .map(|i| {
++            let h = hash3(seed, cave.cell.0 * 11 + i, cave.cell.1, 0x4D4F);
++            let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
++            let angle = unit(0) * std::f32::consts::TAU;
++            let dist = cave.radius * (0.25 + 0.4 * unit(16));
++            Pond {
++                x: cave.x + angle.cos() * dist,
++                z: cave.z + angle.sin() * dist,
++                rx: HORIZEN_MOSS_POOL_MIN + unit(32) * (HORIZEN_MOSS_POOL_MAX - HORIZEN_MOSS_POOL_MIN),
++                rz: HORIZEN_MOSS_POOL_MIN + unit(48) * (HORIZEN_MOSS_POOL_MAX - HORIZEN_MOSS_POOL_MIN),
++            }
++        })
++        .collect()
++}
++
++/// Whether the column (wx, wz) is in one of the mossy pools of a mossy cave.
++pub fn in_moss_pool(seed: i64, wx: i32, wz: i32) -> bool {
++    let cave = cave_of_column(seed, wx, wz);
++    cave.kind == CaveKind::Mossy && moss_pools(seed, &cave).iter().any(|p| p.contains(wx, wz))
++}
++
++/// Whether the column (wx, wz) is on the mossy floor of a mossy cave: in or within `HORIZEN_MOSS_RING` blocks of a pool.
++pub fn moss_at(seed: i64, wx: i32, wz: i32) -> bool {
++    let cave = cave_of_column(seed, wx, wz);
++    cave.kind == CaveKind::Mossy
++        && moss_pools(seed, &cave).iter().any(|p| Pond { rx: p.rx + HORIZEN_MOSS_RING, rz: p.rz + HORIZEN_MOSS_RING, ..*p }.contains(wx, wz))
++}
++
++/// Whether the column (wx, wz) lies in the rock walls and roof round a mossy cave (which are green with moss).
++pub fn mossy_wall(seed: i64, wx: i32, wz: i32) -> bool {
++    let cave = cave_of_column(seed, wx, wz);
++    cave.kind == CaveKind::Mossy && ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt() <= cave.radius * 1.15
++}
++
++/// Whether the river of a river cave runs over the column (wx, wz): a band that winds across the cave (within its dome) along a line
++/// through its middle, whose direction the cave's cell decides.
++pub fn river_at(seed: i64, wx: i32, wz: i32) -> bool {
++    let cave = cave_of_column(seed, wx, wz);
++    if cave.kind != CaveKind::River {
++        return false;
++    }
++    let h = hash3(seed, cave.cell.0, cave.cell.1, 0x5256);
++    let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
++    let angle = unit(0) * std::f32::consts::PI;
++    let (ux, uz) = (angle.cos(), angle.sin());
++    let (dx, dz) = (wx as f32 + 0.5 - cave.x, wz as f32 + 0.5 - cave.z);
++    if (dx * dx + dz * dz).sqrt() > cave.radius * 1.05 {
++        return false;
+     }
++    let (along, side) = (dx * ux + dz * uz, -dx * uz + dz * ux);
++    let meander = HORIZEN_RIVER_MEANDER * (along * 0.2 + unit(16) * std::f32::consts::TAU).sin();
++    (side - meander).abs() <= HORIZEN_RIVER_HALF_WIDTH * (0.85 + 0.3 * (along * 0.31 + unit(32) * 6.0).sin())
++}
++
++/// Whether a red crystal stands on the floor of the column (wx, wz): in a crystal cave, on dry open floor and clear of its middle.
++pub fn crystal_at(seed: i64, wx: i32, wz: i32) -> bool {
++    let cave = cave_of_column(seed, wx, wz);
++    if cave.kind != CaveKind::Crystal {
++        return false;
++    }
++    let dist = ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt();
++    dist >= HORIZEN_CRYSTAL_CLEAR_RADIUS
++        && dist <= cave.radius * 0.85
++        && hash3(seed, wx, wz, 0x4352) % 1000 < HORIZEN_CRYSTAL_PER_MILLE
++        && air_height(seed, wx, wz) >= HORIZEN_MIN_AIR
++        && !is_pond(seed, wx, wz)
+ }
+ 
+ /// The air over the column (wx, wz) from the dome of `cave` and the tunnels that join it to its east and south neighbours (and
+@@ -332,7 +428,7 @@ pub fn is_open(seed: i64, wx: i32, wz: i32) -> bool {
+     air_height(seed, wx, wz) > 0
+ }
+ 
+-/// Whether a pond covers the column (wx, wz): the arrival pool, or a pond on open floor (none within reach of the tower).
++/// Whether water covers the column (wx, wz): the arrival pool, a pond, a mossy cave's pool or a river cave's river, on open floor (none within reach of the tower).
+ pub fn is_pond(seed: i64, wx: i32, wz: i32) -> bool {
+     let (sx, sz) = spawn_centre();
+     let dx = wx as f32 + 0.5 - sx;
+@@ -350,7 +446,9 @@ pub fn is_pond(seed: i64, wx: i32, wz: i32) -> bool {
+         return false;
+     }
+     is_open(seed, wx, wz)
+-        && pond_in_cell(seed, wx.div_euclid(HORIZEN_POND_CELL), wz.div_euclid(HORIZEN_POND_CELL)).map_or(false, |p| p.contains(wx, wz))
++        && (pond_in_cell(seed, wx.div_euclid(HORIZEN_POND_CELL), wz.div_euclid(HORIZEN_POND_CELL)).map_or(false, |p| p.contains(wx, wz))
++            || in_moss_pool(seed, wx, wz)
++            || river_at(seed, wx, wz))
+ }
+ 
+ /// The corners (x, z) of a ghostly trail through the tunnel for a player standing at `from`: the bends of the tunnel
+@@ -397,6 +495,9 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
+             for y in GROUND_TOP + 1 + air..=HORIZEN_ROOF_Y {
+                 blocks[idx(lx, y, lz)] = Block::Stone;
+             }
++            if crystal_at(seed, wx, wz) {
++                blocks[idx(lx, GROUND_TOP + 1, lz)] = Block::RedCrystal;
++            }
+         }
+     }
+     // The king's castle, on the floor of his cave.
+@@ -438,6 +539,107 @@ mod tests {
+     use super::*;
+     use std::collections::{HashSet, VecDeque};
+ 
++    #[test]
++    fn the_caves_come_in_four_kinds_with_mossy_pools_rivers_and_red_crystals() {
++        let seed = 3;
++        let mut kinds = HashSet::new();
++        let (mut pool_cols, mut river_cols, mut crystal_cols, mut moss_cols) = (0, 0, 0, 0);
++        for cj in -6..7 {
++            for ci in -6..7 {
++                let cave = cave_in_cell(seed, ci, cj);
++                if cave.great || cave.king || (ci, cj) == (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL)) {
++                    assert_eq!(cave.kind, CaveKind::Plain, "the special caves stay plain");
++                    continue;
++                }
++                kinds.insert(cave.kind);
++                let r = cave.radius as i32;
++                for dz in -r..=r {
++                    for dx in -r..=r {
++                        let (x, z) = (cave.x as i32 + dx, cave.z as i32 + dz);
++                        if !is_open(seed, x, z) {
++                            continue;
++                        }
++                        match cave.kind {
++                            CaveKind::Mossy => {
++                                pool_cols += in_moss_pool(seed, x, z) as i32;
++                                moss_cols += moss_at(seed, x, z) as i32;
++                                assert!(!river_at(seed, x, z) && !crystal_at(seed, x, z));
++                            }
++                            CaveKind::River => {
++                                river_cols += river_at(seed, x, z) as i32;
++                                assert!(!in_moss_pool(seed, x, z) && !crystal_at(seed, x, z));
++                            }
++                            CaveKind::Crystal => {
++                                crystal_cols += crystal_at(seed, x, z) as i32;
++                                assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z));
++                            }
++                            CaveKind::Plain => assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z) && !moss_at(seed, x, z) && !crystal_at(seed, x, z)),
++                        }
++                    }
++                }
++            }
++        }
++        assert_eq!(kinds.len(), 4, "all four kinds turn up: {kinds:?}");
++        assert!(pool_cols > 20 && moss_cols > pool_cols, "mossy caves have pools ringed with moss: {pool_cols} pool, {moss_cols} moss");
++        assert!(river_cols > 40, "river caves have rivers: {river_cols}");
++        assert!(crystal_cols > 10, "crystal caves have crystals: {crystal_cols}");
++    }
++
++    #[test]
++    fn rivers_and_pools_are_water_the_player_can_wade_and_crystals_stand_on_dry_floor_only() {
++        let seed = 3;
++        let (mut water, mut crystals) = (0, 0);
++        for cj in -4..5 {
++            for ci in -4..5 {
++                let cave = cave_in_cell(seed, ci, cj);
++                for dz in -20..=20 {
++                    for dx in -20..=20 {
++                        let (x, z) = (cave.x as i32 + dx, cave.z as i32 + dz);
++                        if river_at(seed, x, z) || in_moss_pool(seed, x, z) {
++                            if is_open(seed, x, z) && is_pond(seed, x, z) {
++                                water += 1;
++                                assert_eq!(ground_top(seed, x, z), GROUND_TOP - RIVER_DEPTH, "shallow, like a pond");
++                            }
++                        }
++                        if crystal_at(seed, x, z) {
++                            crystals += 1;
++                            assert!(!is_pond(seed, x, z) && air_height(seed, x, z) >= HORIZEN_MIN_AIR);
++                        }
++                    }
++                }
++            }
++        }
++        assert!(water > 100 && crystals > 20, "{water} water columns, {crystals} crystals");
++    }
++
++    #[test]
++    fn red_crystals_are_generated_into_the_chunks_and_cannot_be_mined() {
++        let seed = 3;
++        let landmarks = Landmarks::default();
++        let mut found = 0;
++        'outer: for cj in -4..5 {
++            for ci in -4..5 {
++                let cave = cave_in_cell(seed, ci, cj);
++                if cave.kind != CaveKind::Crystal {
++                    continue;
++                }
++                let (cx, cz) = ((cave.x as i32).div_euclid(CHUNK_SIZE), (cave.z as i32).div_euclid(CHUNK_SIZE));
++                for dz in -2..=2 {
++                    for dx in -2..=2 {
++                        let blocks = generate_chunk(seed, cx + dx, cz + dz, &landmarks);
++                        found += blocks.iter().filter(|b| **b == Block::RedCrystal).count();
++                    }
++                }
++                if found > 0 {
++                    break 'outer;
++                }
++            }
++        }
++        assert!(found > 0, "red crystals stand in the crystal caves");
++        let b = Block::RedCrystal;
++        assert!(!b.breakable() && !b.hand_breakable() && !b.can_break_with(None) && b.collides() && b.parts().len() >= 6, "solid, crystal-shaped and not minable");
++    }
++
+     #[test]
+     fn the_cave_is_a_pure_function_of_the_seed() {
+         for (x, z) in [(0, 0), (-77, 31), (150, -250), (10, 10)] {
+diff --git a/src/hud.rs b/src/hud.rs
+index ea536fb..7ac2e6d 100644
+--- a/src/hud.rs
++++ b/src/hud.rs
+@@ -748,6 +748,46 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
+                 }
+             }
+         }
++        ItemKind::SnakeFang => {
++            // A curved, pointed fang: wide at the root (upper left), curving down to a sharp tip.
++            let pts = [p(0.30, 0.22), p(0.42, 0.40), p(0.54, 0.58), p(0.62, 0.78)];
++            for (i, w) in pts.windows(2).enumerate() {
++                rod(w[0], w[1], (11.0 - 3.6 * i as f32) * u, color);
++            }
++            tri(pts[3] - vec2(3.0 * u, 0.0), pts[3] + vec2(3.0 * u, 0.0), p(0.64, 0.88), color);
++            ball(pts[0].x, pts[0].y, 6.0 * u, darken(color, 0.78));
++            draw_line(pts[0].x + 2.0 * u, pts[0].y + 2.0 * u, pts[2].x + 1.0 * u, pts[2].y, 1.2, WHITE);
++            ball(p(0.70, 0.60).x, p(0.70, 0.60).y, 1.8 * u, Color::new(0.50, 0.85, 0.22, 1.0));
++        }
++        ItemKind::PoisonArrow => {
++            // An arrow with a green, fang-shaped head and a drip of poison.
++            let (tail, tip) = (p(0.20, 0.80), p(0.76, 0.24));
++            rod(tail, tip, 3.0 * u, ItemKind::Arrow.color());
++            let dir = (tip - tail).normalize();
++            let perp = vec2(-dir.y, dir.x);
++            let head = Color::new(0.42, 0.80, 0.20, 1.0);
++            tri(tip + dir * 10.0 * u, tip + perp * 5.0 * u - dir * 3.0 * u, tip - perp * 5.0 * u - dir * 3.0 * u, head);
++            tri(tip + dir * 6.0 * u, tip + perp * 2.2 * u - dir * 2.0 * u, tip - perp * 2.2 * u - dir * 2.0 * u, ItemKind::SnakeFang.color());
++            ball(tip.x + 4.0 * u, tip.y + 9.0 * u, 2.0 * u, head);
++            for k in 0..3 {
++                let at = tail + dir * (k as f32 * 4.5 * u);
++                for s in [-1.0_f32, 1.0] {
++                    tri(at, at + perp * s * 6.0 * u - dir * 2.0 * u, at + dir * 6.0 * u + perp * s * 1.0, ItemKind::Feather.color());
++                }
++            }
++        }
++        ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => {
++            // A dry, dark strip of meat, twisted a little, flecked with white salt.
++            let (a, b) = (p(0.20, 0.70), p(0.80, 0.34));
++            rod(a, b, 13.0 * u, darken(color, 0.55));
++            rod(a, b, 10.0 * u, color);
++            let mid = (a + b) / 2.0;
++            draw_line(a.x + 4.0 * u, a.y - 2.0 * u, mid.x, mid.y - 3.0 * u, 1.6, lighten(color, 0.22));
++            draw_line(mid.x + 2.0 * u, mid.y + 3.0 * u, b.x - 4.0 * u, b.y + 3.0 * u, 1.4, darken(color, 0.6));
++            for (fx, fy) in [(0.34, 0.56), (0.46, 0.52), (0.58, 0.44), (0.68, 0.42), (0.40, 0.62)] {
++                draw_circle(p(fx, fy).x, p(fx, fy).y, 1.1 * u, Color::new(0.97, 0.94, 0.92, 1.0));
++            }
++        }
+         ItemKind::LeatherBackpack => {
+             // A pack seen from the front: a rounded body, a flap with a buckle, a front pocket and two straps.
+             let (tl, br) = (p(0.24, 0.20), p(0.76, 0.84));
+diff --git a/src/item.rs b/src/item.rs
+index 00ca5c6..a3318cf 100644
+--- a/src/item.rs
++++ b/src/item.rs
+@@ -110,7 +110,7 @@ pub enum ItemKind {
+     /// Found on a stand in the mines under the mountain. Used on the locked door of a silver tower, it opens it for good
+     /// (the key is kept). A ghost in the graveyard gives one too.
+     SilverKey,
+-    /// Broken out of the pink salt crystals that stud the walls of the mines. It has no use yet.
++    /// Broken out of the pink salt crystals that stud the walls of the mines. Raw meat and a lump of it make jerky; held, it kills a bat that strikes it.
+     PinkSalt,
+     /// The relic at the top of the silver tower on the lake's island. It does nothing yet.
+     PhilosophersStone,
+@@ -140,10 +140,20 @@ pub enum ItemKind {
+     BootsOfTheSky,
+     /// The cursed idol from the heart of the jungle temple. While it is in the hotbar the player cannot heal, and deals double damage.
+     CursedIdol,
++    /// Dropped by a flying snake. With a stick, a pebble and a feather it makes a poison arrow.
++    SnakeFang,
++    /// An arrow tipped with a snake fang. A bow shoots these first, they are used up, and what they hit is poisoned.
++    PoisonArrow,
++    /// Raw meat cured with pink salt. It heals as much as the cooked meat does, one kind for each meat.
++    VenisonJerky,
++    PoultryJerky,
++    BearJerky,
++    RabbitJerky,
++    MooseJerky,
+ }
+ 
+ impl ItemKind {
+-    pub const ALL: [ItemKind; 78] = [
++    pub const ALL: [ItemKind; 85] = [
+         ItemKind::Stick,
+         ItemKind::Pebble,
+         ItemKind::Stone,
+@@ -222,6 +232,13 @@ impl ItemKind {
+         ItemKind::PhoenixArrow,
+         ItemKind::BootsOfTheSky,
+         ItemKind::CursedIdol,
++        ItemKind::SnakeFang,
++        ItemKind::PoisonArrow,
++        ItemKind::VenisonJerky,
++        ItemKind::PoultryJerky,
++        ItemKind::BearJerky,
++        ItemKind::RabbitJerky,
++        ItemKind::MooseJerky,
+     ];
+ 
+     /// Display name.
+@@ -305,6 +322,13 @@ impl ItemKind {
+             ItemKind::PhoenixArrow => "Phoenix Arrow",
+             ItemKind::BootsOfTheSky => "Boots of the Sky",
+             ItemKind::CursedIdol => "Cursed Idol",
++            ItemKind::SnakeFang => "Snake Fang",
++            ItemKind::PoisonArrow => "Poison Arrow",
++            ItemKind::VenisonJerky => "Venison Jerky",
++            ItemKind::PoultryJerky => "Poultry Jerky",
++            ItemKind::BearJerky => "Bear Jerky",
++            ItemKind::RabbitJerky => "Rabbit Jerky",
++            ItemKind::MooseJerky => "Moose Jerky",
+         }
+     }
+ 
+@@ -389,6 +413,13 @@ impl ItemKind {
+             ItemKind::PhoenixArrow => "phoenix_arrow",
+             ItemKind::BootsOfTheSky => "boots_of_the_sky",
+             ItemKind::CursedIdol => "cursed_idol",
++            ItemKind::SnakeFang => "snake_fang",
++            ItemKind::PoisonArrow => "poison_arrow",
++            ItemKind::VenisonJerky => "venison_jerky",
++            ItemKind::PoultryJerky => "poultry_jerky",
++            ItemKind::BearJerky => "bear_jerky",
++            ItemKind::RabbitJerky => "rabbit_jerky",
++            ItemKind::MooseJerky => "moose_jerky",
+         }
+     }
+ 
+@@ -484,6 +515,13 @@ impl ItemKind {
+             ItemKind::PhoenixArrow => Color::new(0.96, 0.46, 0.10, 1.0),
+             ItemKind::BootsOfTheSky => Color::new(0.52, 0.76, 0.94, 1.0),
+             ItemKind::CursedIdol => Color::new(0.30, 0.42, 0.26, 1.0),
++            ItemKind::SnakeFang => Color::new(0.92, 0.94, 0.78, 1.0),
++            ItemKind::PoisonArrow => Color::new(0.45, 0.78, 0.22, 1.0),
++            ItemKind::VenisonJerky => Color::new(0.40, 0.18, 0.12, 1.0),
++            ItemKind::PoultryJerky => Color::new(0.62, 0.40, 0.22, 1.0),
++            ItemKind::BearJerky => Color::new(0.32, 0.15, 0.10, 1.0),
++            ItemKind::RabbitJerky => Color::new(0.52, 0.30, 0.20, 1.0),
++            ItemKind::MooseJerky => Color::new(0.36, 0.17, 0.11, 1.0),
+         }
+     }
+ 
+@@ -538,6 +576,31 @@ impl ItemKind {
+         }
+     }
+ 
++    /// For raw meat, the jerky that salt makes of it (crafted with a lump of pink salt, no fire needed).
++    #[allow(dead_code)]
++    pub fn cured(self) -> Option<ItemKind> {
++        match self {
++            ItemKind::Venison => Some(ItemKind::VenisonJerky),
++            ItemKind::Poultry => Some(ItemKind::PoultryJerky),
++            ItemKind::BearMeat => Some(ItemKind::BearJerky),
++            ItemKind::RabbitMeat => Some(ItemKind::RabbitJerky),
++            ItemKind::MooseMeat => Some(ItemKind::MooseJerky),
++            _ => None,
++        }
++    }
++
++    /// For a jerky, the cooked meat it heals as much as.
++    pub fn jerky_base(self) -> Option<ItemKind> {
++        match self {
++            ItemKind::VenisonJerky => Some(ItemKind::CookedVenison),
++            ItemKind::PoultryJerky => Some(ItemKind::CookedPoultry),
++            ItemKind::BearJerky => Some(ItemKind::CookedBearMeat),
++            ItemKind::RabbitJerky => Some(ItemKind::CookedRabbit),
++            ItemKind::MooseJerky => Some(ItemKind::CookedMoose),
++            _ => None,
++        }
++    }
++
+     /// Whether this is an axe: it chops trees and hurts animals.
+     pub fn is_axe(self) -> bool {
+         matches!(self, ItemKind::StoneAxe | ItemKind::CopperAxe | ItemKind::BronzeAxe | ItemKind::IronAxe)
+@@ -657,6 +720,7 @@ impl ItemKind {
+             ItemKind::CookedBearMeat => Some(BEAR_MEAT_HEAL),
+             ItemKind::CookedRabbit => Some(RABBIT_MEAT_HEAL),
+             ItemKind::CookedMoose => Some(MOOSE_MEAT_HEAL),
++            jerky if jerky.jerky_base().is_some() => jerky.jerky_base().and_then(ItemKind::heal_amount),
+             stew => stew.stew_base().and_then(ItemKind::heal_amount).map(|h| h * STEW_HEAL_FACTOR),
+         }
+     }
+@@ -789,6 +853,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
+         | Block::SwordHilt
+         | Block::PulledStone
+         | Block::MayaStone
++        | Block::RedCrystal
+         | Block::Water
+         | Block::Flower
+         | Block::Fire
+diff --git a/src/landmarks.rs b/src/landmarks.rs
+index c2f723c..0dd72c9 100644
+--- a/src/landmarks.rs
++++ b/src/landmarks.rs
+@@ -803,8 +803,10 @@ pub struct Landmarks {
+     pub graveyard_rested: bool,
+     /// Whether the player has beaten the Wild Hunt, and so won the game (they may play on).
+     pub game_won: bool,
+-    /// Whether the Phoenix of the Skylands' volcano is dead: it does not return, and the fire tornadoes have stopped for good.
++    /// Whether the Phoenix of the Skylands' volcano is dead: the fire tornadoes have stopped, until it rises again
++    /// (`PHOENIX_RESPAWN_SECONDS` after its death), and how many seconds it has been dead.
+     pub phoenix_slain: bool,
++    pub phoenix_dead_for: f32,
+     /// The squares of the Horizen's caves the player has entered, in the order they entered them.
+     pub caves_visited: Vec<(i32, i32)>,
+     /// Ground that is already taken by what the seed builds (Stonehenge, the jungle clearing and its temple) as (min x, min z, max x, max z):
+diff --git a/src/main.rs b/src/main.rs
+index cd3fd09..04fd5c6 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -58,6 +58,7 @@ mod settings;
+ mod sky;
+ mod skylands;
+ mod terrain;
++mod stars;
+ mod stonehenge;
+ mod temple;
+ mod tower;
+diff --git a/src/mesh.rs b/src/mesh.rs
+index bd6f80e..4cf83c4 100644
+--- a/src/mesh.rs
++++ b/src/mesh.rs
+@@ -126,7 +126,10 @@ impl World {
+             }
+             let h = hash3(self.seed, wx, y * 8 + fi as i32, wz);
+             let k = face.shade * (0.97 + (h % 1000) as f32 / 1000.0 * 0.06);
+-            let color = Color::new(0.22 * k, 0.47 * k, 0.75 * k, WATER_ALPHA);
++            // The pools of a mossy cave are green.
++            let mossy = self.dimension == crate::horizen::Dimension::Horizen && crate::horizen::in_moss_pool(self.seed, wx, wz);
++            let (wr, wg, wb) = if mossy { (0.18, 0.55, 0.40) } else { (0.22, 0.47, 0.75) };
++            let color = Color::new(wr * k, wg * k, wb * k, WATER_ALPHA);
+             let mut pos = [[0.0_f32; 3]; 4];
+             for (ci, &(ox, oy, oz)) in face.corners.iter().enumerate() {
+                 pos[ci] = [wx as f32 + ox, y as f32 + oy * top, wz as f32 + oz];
+@@ -165,6 +168,9 @@ impl World {
+                 // (Dirt is never covered by anything but air, plants, items and water, so its exposed top is
+                 // always the top of the ground.)
+                 Block::Dirt if fi == 2 && self.block_at(wx, y + 1, wz).is_wet() => (r, g, b) = (0.40, 0.31, 0.22),
++                // The floor round a mossy cave's pools is moss, and the rock of a mossy cave is green.
++                Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Horizen && crate::horizen::moss_at(self.seed, wx, wz) => (r, g, b) = (0.20, 0.46, 0.16),
++                Block::Stone if self.dimension == crate::horizen::Dimension::Horizen && crate::horizen::mossy_wall(self.seed, wx, wz) && h % 100 < 70 => (r, g, b) = (0.28, 0.44, 0.26),
+                 // The floor of the Horizen's cave is bare earth, not grass.
+                 Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Horizen => (r, g, b) = (0.38, 0.34, 0.30),
+                 // The Skylands' islands are grass all the way up, whatever the height.
+diff --git a/src/mines.rs b/src/mines.rs
+index 38e479f..3e9b18d 100644
+--- a/src/mines.rs
++++ b/src/mines.rs
+@@ -366,6 +366,13 @@ pub fn furnish(m: &Mountain, cx: i32, cz: i32, blocks: &mut [Block], tops: &[i32
+             let (lx, lz) = (rx - x0, rz - z0);
+             if (0..CHUNK_SIZE).contains(&lx) && (0..CHUNK_SIZE).contains(&lz) && (1..WORLD_HEIGHT).contains(&floor) {
+                 blocks[idx(lx, floor, lz)] = Block::KeyStand;
++                // The shaft that climbs into the chamber may have been cut under the stand: solid ground goes back under it, so the key
++                // stands on the ground and not over a gap.
++                let mut y = floor - 1;
++                while y >= 1 && blocks[idx(lx, y, lz)] == Block::Air {
++                    blocks[idx(lx, y, lz)] = Block::Dirt;
++                    y -= 1;
++                }
+             }
+         }
+     }
+@@ -563,6 +570,7 @@ mod tests {
+             let (lx, lz) = (rx - cx * CHUNK_SIZE, rz - cz * CHUNK_SIZE);
+             assert_eq!(blocks[idx(lx, floor, lz)], Block::KeyStand, "shaft {shaft}");
+             assert_eq!(blocks[idx(lx, floor + 1, lz)], Block::Air, "room to stand beside it");
++            assert!(blocks[idx(lx, floor - 1, lz)] != Block::Air, "shaft {shaft}: the stand rests on the ground, not over a gap");
+         }
+     }
+ }
+diff --git a/src/play.rs b/src/play.rs
+index 5765d2e..11734a3 100644
+--- a/src/play.rs
++++ b/src/play.rs
+@@ -7,7 +7,7 @@ use crate::config::*;
+ use crate::animal_draw::{draw_animals, draw_arrows, draw_ghosts};
+ use crate::culling::chunks_to_draw;
+ use crate::dropped::draw_dropped_items;
+-use crate::effects::{draw_acid, draw_bursts, draw_projectiles, draw_cyclone, draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
++use crate::effects::{draw_acid, draw_bursts, draw_falling_stars, draw_projectiles, draw_cyclone, draw_fire_tornado, draw_flames, draw_meat, draw_pots, draw_rainbow, draw_storm_lightning, draw_storm_rain, draw_trail, lightning_flash_alpha};
+ use crate::game::Game;
+ use crate::item::ItemKind;
+ use crate::hud::{draw_compass, CompassTarget, draw_hotbar, inventory_screen};
+@@ -300,6 +300,7 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
+     draw_acid(&game.world, &game.acid, get_time() as f32);
+     draw_ghosts(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
+     draw_bursts(&game.bursts);
++    draw_falling_stars(&game.falling_stars, get_time() as f32);
+     if game.storm_active {
+         draw_storm_rain(eye, get_time() as f32);
+         if let Some((pos, flash)) = game.storm_lightning() {
+diff --git a/src/recipe.rs b/src/recipe.rs
+index eec1425..da4c31d 100644
+--- a/src/recipe.rs
++++ b/src/recipe.rs
+@@ -1,6 +1,7 @@
+ //! Crafting recipes. A recipe consumes a fixed number of items; there is no shape or
+ //! placement, only counts. To add a recipe, append an entry to `RECIPES`.
+ 
++use crate::config::JERKY_SALT_COST;
+ use crate::inventory::Inventory;
+ use crate::item::ItemKind;
+ 
+@@ -65,6 +66,17 @@ pub const RECIPES: &[Recipe] = &[
+         output_count: 1,
+         inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::PhoenixFeather, 1)],
+     },
++    Recipe {
++        output: ItemKind::PoisonArrow,
++        output_count: 1,
++        inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)],
++    },
++    // Jerky: raw meat cured with a lump of pink salt, one kind for each meat. No fire is needed.
++    Recipe { output: ItemKind::VenisonJerky, output_count: 1, inputs: &[(ItemKind::Venison, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
++    Recipe { output: ItemKind::PoultryJerky, output_count: 1, inputs: &[(ItemKind::Poultry, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
++    Recipe { output: ItemKind::BearJerky, output_count: 1, inputs: &[(ItemKind::BearMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
++    Recipe { output: ItemKind::RabbitJerky, output_count: 1, inputs: &[(ItemKind::RabbitMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
++    Recipe { output: ItemKind::MooseJerky, output_count: 1, inputs: &[(ItemKind::MooseMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
+ ];
+ 
+ /// The recipe that makes `output`, if there is one.
+diff --git a/src/save.rs b/src/save.rs
+index dfab204..3f56d2e 100644
+--- a/src/save.rs
++++ b/src/save.rs
+@@ -130,6 +130,7 @@ impl SaveData {
+ ///     "ghostrest"               the graveyard's ghost has heard its song and rests
+ ///     "won"                     the player has beaten the Wild Hunt and won the game
+ ///     "phoenixslain"            the Phoenix of the Skylands is dead (written in the Skylands' records, with the `s` prefix)
++///     "phoenixdead <seconds>"   how long it has been dead; it rises again after `PHOENIX_RESPAWN_SECONDS`
+ ///     "worn <item>"             what the player wears: a cloak, the armour, the crown or a backpack (while it is a backpack,
+ ///                               slots 36 to 53 of "inv" belong to the pack)
+ ///     "back <item>"             read only: saves made when the backpack had a place of its own; it is worn now
+@@ -197,6 +198,9 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
+     }
+     if landmarks.phoenix_slain {
+         out.push_str(&format!("{prefix}phoenixslain\n"));
++        if landmarks.phoenix_dead_for > 0.0 {
++            out.push_str(&format!("{prefix}phoenixdead {:.1}\n", landmarks.phoenix_dead_for));
++        }
+     }
+     if landmarks.graveyard_rested {
+         out.push_str(&format!("{prefix}ghostrest\n"));
+@@ -431,6 +435,7 @@ fn apply_line(data: &mut SaveData, line: &str) {
+             Some("ghostrest") => data.landmarks.graveyard_rested = true,
+             Some("won") => data.landmarks.game_won = true,
+             Some("phoenixslain") => data.landmarks.phoenix_slain = true,
++            Some("phoenixdead") => data.landmarks.phoenix_dead_for = t.next().and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0),
+             Some("cavevisit") => {
+                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                 if let [x, z] = v[..] {
+diff --git a/src/skylands.rs b/src/skylands.rs
+index 46d6ae7..fb22244 100644
+--- a/src/skylands.rs
++++ b/src/skylands.rs
+@@ -170,6 +170,20 @@ fn cell_of(w: i32) -> i32 {
+     (w + SKY_CELL / 2).div_euclid(SKY_CELL)
+ }
+ 
++/// The islands whose grid cell lies within `radius` blocks (a square) of the column (x, z), each once (the giant island fills nine cells).
++pub fn islands_near(seed: i64, x: i32, z: i32, radius: i32) -> Vec<Island> {
++    let mut out: Vec<Island> = Vec::new();
++    for cz in cell_of(z - radius)..=cell_of(z + radius) {
++        for cx in cell_of(x - radius)..=cell_of(x + radius) {
++            let island = island_in_cell(seed, cx, cz);
++            if !out.iter().any(|i| (i.x, i.z) == (island.x, island.z)) {
++                out.push(island);
++            }
++        }
++    }
++    out
++}
++
+ /// The island of grid cell (cx, cz). Cell (0, 0) holds the first island, at a fixed place and height.
+ pub fn island_in_cell(seed: i64, cx: i32, cz: i32) -> Island {
+     let h = hash3(seed, cx, cz, 0x5C1A);
+diff --git a/src/stars.rs b/src/stars.rs
+new file mode 100644
+index 0000000..44f256b
+--- /dev/null
++++ b/src/stars.rs
+@@ -0,0 +1,136 @@
++//! Falling stars: on the Skylands' nights a star streaks down out of the sky about every `FALLING_STAR_INTERVAL` seconds and lands on
++//! an island the player can see (not always the one they stand on), where it bursts in a flash of light.
++//!
++//! What is chosen (`pick_landing`) is a pure function of the world, the player's eye and line of sight, and a random roll; only
++//! `effects::draw_falling_stars` touches macroquad.
++
++use macroquad::prelude::*;
++
++use crate::config::*;
++use crate::rng::Rng;
++use crate::skylands;
++
++/// A star falling, or flashing where it has landed.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct FallingStar {
++    /// Where it began high in the sky, and where it lands.
++    pub from: Vec3,
++    pub to: Vec3,
++    /// Seconds since it began to fall.
++    pub age: f32,
++}
++
++impl FallingStar {
++    pub fn new(from: Vec3, to: Vec3) -> FallingStar {
++        FallingStar { from, to, age: 0.0 }
++    }
++
++    /// How far along its fall it is, 0 to 1 (it speeds up as it comes down).
++    pub fn progress(&self) -> f32 {
++        let t = (self.age / FALLING_STAR_FALL_SECONDS).clamp(0.0, 1.0);
++        t * t * 0.5 + t * 0.5
++    }
++
++    /// Where the star is now (at its landing place once it has landed).
++    pub fn pos(&self) -> Vec3 {
++        self.from.lerp(self.to, self.progress())
++    }
++
++    pub fn landed(&self) -> bool {
++        self.age >= FALLING_STAR_FALL_SECONDS
++    }
++
++    /// Seconds since it landed (0 while it is still falling).
++    pub fn flash_age(&self) -> f32 {
++        (self.age - FALLING_STAR_FALL_SECONDS).max(0.0)
++    }
++
++    pub fn done(&self) -> bool {
++        self.flash_age() >= FALLING_STAR_FLASH_SECONDS
++    }
++
++    /// The direction it falls in (unit, pointing down along its path).
++    pub fn direction(&self) -> Vec3 {
++        (self.to - self.from).normalize_or_zero()
++    }
++}
++
++/// Where a new star lands: a point on the surface of an island the player at `eye` can see, which is one in front of them (within
++/// `FALLING_STAR_VIEW_DEGREES` of the way they look, `look`) and within `range` blocks, or the island they stand on. Each such island
++/// is as likely as another, so it is not always the island the player is on. `None` when there is no such island.
++pub fn pick_landing(seed: i64, eye: Vec3, look: Vec3, range: f32, rng: &mut Rng) -> Option<Vec3> {
++    let flat_look = vec2(look.x, look.z).normalize_or_zero();
++    let cos_limit = FALLING_STAR_VIEW_DEGREES.to_radians().cos();
++    let (ex, ez) = (eye.x.floor() as i32, eye.z.floor() as i32);
++    let seen: Vec<_> = skylands::islands_near(seed, ex, ez, range as i32)
++        .into_iter()
++        .filter(|island| {
++            let to = vec2(island.x as f32 + 0.5 - eye.x, island.z as f32 + 0.5 - eye.z);
++            if island.contains(ex, ez) {
++                return true;
++            }
++            let gap = to.length();
++            gap <= range && gap > 1.0 && (flat_look == Vec2::ZERO || to.normalize_or_zero().dot(flat_look) >= cos_limit)
++        })
++        .collect();
++    if seen.is_empty() {
++        return None;
++    }
++    let island = seen[(rng.unit() * seen.len() as f32) as usize % seen.len()];
++    // Somewhere on the island, on its ground (a few tries to find a column that is on it).
++    for _ in 0..16 {
++        let angle = rng.unit() * std::f32::consts::TAU;
++        let dist = island.reach(angle) * 0.75 * rng.unit().sqrt();
++        let (x, z) = ((island.x as f32 + 0.5 + angle.cos() * dist).floor() as i32, (island.z as f32 + 0.5 + angle.sin() * dist).floor() as i32);
++        if island.contains(x, z) {
++            return Some(vec3(x as f32 + 0.5, island.surface_y(x, z) as f32 + 1.0, z as f32 + 0.5));
++        }
++    }
++    Some(vec3(island.x as f32 + 0.5, island.surface_y(island.x, island.z) as f32 + 1.0, island.z as f32 + 0.5))
++}
++
++/// A star that falls to `landing`: it starts high above it and to one side (`rng` picks which), so it crosses the sky on a slant.
++pub fn star_for(landing: Vec3, rng: &mut Rng) -> FallingStar {
++    let side = rng.unit() * std::f32::consts::TAU;
++    FallingStar::new(landing + vec3(side.cos() * FALLING_STAR_SLANT, FALLING_STAR_START_HEIGHT, side.sin() * FALLING_STAR_SLANT), landing)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn a_star_falls_from_high_up_to_its_landing_place_and_then_flashes_and_is_done() {
++        let star = FallingStar::new(vec3(50.0, 200.0, 0.0), vec3(0.0, 60.0, 0.0));
++        assert_eq!(star.pos(), star.from);
++        let mut s = star;
++        s.age = FALLING_STAR_FALL_SECONDS;
++        assert!(s.landed() && (s.pos() - s.to).length() < 1e-3 && !s.done());
++        s.age = FALLING_STAR_FALL_SECONDS + FALLING_STAR_FLASH_SECONDS + 0.01;
++        assert!(s.done());
++        let mid = FallingStar { age: FALLING_STAR_FALL_SECONDS / 2.0, ..star };
++        assert!(mid.pos().y < star.from.y && mid.pos().y > star.to.y);
++    }
++
++    #[test]
++    fn stars_land_on_islands_in_view_and_not_always_the_one_the_player_is_on() {
++        let seed = 12;
++        let eye = vec3(skylands::spawn_point().x, skylands::spawn_point().y + 1.6, skylands::spawn_point().z);
++        let mut rng = Rng::new(5);
++        let mut own = 0;
++        let mut elsewhere = 0;
++        for i in 0..200 {
++            let look = vec3((i as f32 * 0.7).cos(), 0.0, (i as f32 * 0.7).sin());
++            let Some(at) = pick_landing(seed, eye, look, FALLING_STAR_RANGE, &mut rng) else { continue };
++            let island = skylands::island_at(seed, at.x.floor() as i32, at.z.floor() as i32).expect("it lands on an island");
++            assert!((at.y - (island.surface_y(at.x.floor() as i32, at.z.floor() as i32) as f32 + 1.0)).abs() < 1e-3, "on the ground");
++            if island.contains(eye.x.floor() as i32, eye.z.floor() as i32) { own += 1 } else {
++                elsewhere += 1;
++                let to = vec2(island.x as f32 + 0.5 - eye.x, island.z as f32 + 0.5 - eye.z);
++                assert!(to.length() <= FALLING_STAR_RANGE + 1.0);
++                assert!(to.normalize().dot(vec2(look.x, look.z)) >= FALLING_STAR_VIEW_DEGREES.to_radians().cos() - 1e-3, "in front of the player");
++            }
++        }
++        assert!(own > 0 && elsewhere > 0, "own {own}, elsewhere {elsewhere}");
++    }
++}

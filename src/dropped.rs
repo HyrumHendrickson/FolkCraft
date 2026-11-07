@@ -82,6 +82,9 @@ impl ItemKind {
             ItemKind::PhoenixArrow => 0.03,
             ItemKind::BootsOfTheSky => 0.07,
             ItemKind::CursedIdol => 0.10,
+            ItemKind::SnakeFang => 0.03,
+            ItemKind::PoisonArrow => 0.03,
+            ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => 0.03,
         }
     }
 
@@ -144,6 +147,9 @@ impl ItemKind {
             ItemKind::PhoenixArrow => vec3(0.26, 0.03, 0.03),
             ItemKind::BootsOfTheSky => vec3(0.17, 0.07, 0.09),
             ItemKind::CursedIdol => vec3(0.10, 0.10, 0.10),
+            ItemKind::SnakeFang => vec3(0.10, 0.03, 0.04),
+            ItemKind::PoisonArrow => vec3(0.26, 0.03, 0.03),
+            ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => vec3(0.16, 0.03, 0.06),
         }
     }
 }

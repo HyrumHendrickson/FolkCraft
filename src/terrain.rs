@@ -607,7 +607,7 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
                 }
                 for dy in 0..TEMPLE_HEIGHT {
                     if base + 1 + dy < WORLD_HEIGHT {
-                        blocks[idx(lx, base + 1 + dy, lz)] = crate::temple::temple_cell(dx, dz, dy);
+                        blocks[idx(lx, base + 1 + dy, lz)] = crate::temple::temple_cell_boarded(dx, dz, dy, !landmarks.orangutan_slain);
                     }
                 }
             }

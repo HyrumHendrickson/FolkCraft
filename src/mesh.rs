@@ -126,7 +126,10 @@ impl World {
             }
             let h = hash3(self.seed, wx, y * 8 + fi as i32, wz);
             let k = face.shade * (0.97 + (h % 1000) as f32 / 1000.0 * 0.06);
-            let color = Color::new(0.22 * k, 0.47 * k, 0.75 * k, WATER_ALPHA);
+            // The pools of a mossy cave are green.
+            let mossy = self.dimension == crate::horizen::Dimension::Horizen && crate::horizen::in_moss_pool(self.seed, wx, wz);
+            let (wr, wg, wb) = if mossy { (0.18, 0.55, 0.40) } else { (0.22, 0.47, 0.75) };
+            let color = Color::new(wr * k, wg * k, wb * k, WATER_ALPHA);
             let mut pos = [[0.0_f32; 3]; 4];
             for (ci, &(ox, oy, oz)) in face.corners.iter().enumerate() {
                 pos[ci] = [wx as f32 + ox, y as f32 + oy * top, wz as f32 + oz];
@@ -165,6 +168,9 @@ impl World {
                 // (Dirt is never covered by anything but air, plants, items and water, so its exposed top is
                 // always the top of the ground.)
                 Block::Dirt if fi == 2 && self.block_at(wx, y + 1, wz).is_wet() => (r, g, b) = (0.40, 0.31, 0.22),
+                // The floor round a mossy cave's pools is moss, and the rock of a mossy cave is green.
+                Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Horizen && crate::horizen::moss_at(self.seed, wx, wz) => (r, g, b) = (0.20, 0.46, 0.16),
+                Block::Stone if self.dimension == crate::horizen::Dimension::Horizen && crate::horizen::mossy_wall(self.seed, wx, wz) && h % 100 < 70 => (r, g, b) = (0.28, 0.44, 0.26),
                 // The floor of the Horizen's cave is bare earth, not grass.
                 Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Horizen => (r, g, b) = (0.38, 0.34, 0.30),
                 // The Skylands' islands are grass all the way up, whatever the height.

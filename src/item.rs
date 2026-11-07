@@ -110,7 +110,7 @@ pub enum ItemKind {
     /// Found on a stand in the mines under the mountain. Used on the locked door of a silver tower, it opens it for good
     /// (the key is kept). A ghost in the graveyard gives one too.
     SilverKey,
-    /// Broken out of the pink salt crystals that stud the walls of the mines. It has no use yet.
+    /// Broken out of the pink salt crystals that stud the walls of the mines. Raw meat and a lump of it make jerky; held, it kills a bat that strikes it.
     PinkSalt,
     /// The relic at the top of the silver tower on the lake's island. It does nothing yet.
     PhilosophersStone,
@@ -140,10 +140,20 @@ pub enum ItemKind {
     BootsOfTheSky,
     /// The cursed idol from the heart of the jungle temple. While it is in the hotbar the player cannot heal, and deals double damage.
     CursedIdol,
+    /// Dropped by a flying snake. With a stick, a pebble and a feather it makes a poison arrow.
+    SnakeFang,
+    /// An arrow tipped with a snake fang. A bow shoots these first, they are used up, and what they hit is poisoned.
+    PoisonArrow,
+    /// Raw meat cured with pink salt. It heals as much as the cooked meat does, one kind for each meat.
+    VenisonJerky,
+    PoultryJerky,
+    BearJerky,
+    RabbitJerky,
+    MooseJerky,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 78] = [
+    pub const ALL: [ItemKind; 85] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -222,6 +232,13 @@ impl ItemKind {
         ItemKind::PhoenixArrow,
         ItemKind::BootsOfTheSky,
         ItemKind::CursedIdol,
+        ItemKind::SnakeFang,
+        ItemKind::PoisonArrow,
+        ItemKind::VenisonJerky,
+        ItemKind::PoultryJerky,
+        ItemKind::BearJerky,
+        ItemKind::RabbitJerky,
+        ItemKind::MooseJerky,
     ];
 
     /// Display name.
@@ -305,6 +322,13 @@ impl ItemKind {
             ItemKind::PhoenixArrow => "Phoenix Arrow",
             ItemKind::BootsOfTheSky => "Boots of the Sky",
             ItemKind::CursedIdol => "Cursed Idol",
+            ItemKind::SnakeFang => "Snake Fang",
+            ItemKind::PoisonArrow => "Poison Arrow",
+            ItemKind::VenisonJerky => "Venison Jerky",
+            ItemKind::PoultryJerky => "Poultry Jerky",
+            ItemKind::BearJerky => "Bear Jerky",
+            ItemKind::RabbitJerky => "Rabbit Jerky",
+            ItemKind::MooseJerky => "Moose Jerky",
         }
     }
 
@@ -389,6 +413,13 @@ impl ItemKind {
             ItemKind::PhoenixArrow => "phoenix_arrow",
             ItemKind::BootsOfTheSky => "boots_of_the_sky",
             ItemKind::CursedIdol => "cursed_idol",
+            ItemKind::SnakeFang => "snake_fang",
+            ItemKind::PoisonArrow => "poison_arrow",
+            ItemKind::VenisonJerky => "venison_jerky",
+            ItemKind::PoultryJerky => "poultry_jerky",
+            ItemKind::BearJerky => "bear_jerky",
+            ItemKind::RabbitJerky => "rabbit_jerky",
+            ItemKind::MooseJerky => "moose_jerky",
         }
     }
 
@@ -484,6 +515,13 @@ impl ItemKind {
             ItemKind::PhoenixArrow => Color::new(0.96, 0.46, 0.10, 1.0),
             ItemKind::BootsOfTheSky => Color::new(0.52, 0.76, 0.94, 1.0),
             ItemKind::CursedIdol => Color::new(0.30, 0.42, 0.26, 1.0),
+            ItemKind::SnakeFang => Color::new(0.92, 0.94, 0.78, 1.0),
+            ItemKind::PoisonArrow => Color::new(0.45, 0.78, 0.22, 1.0),
+            ItemKind::VenisonJerky => Color::new(0.40, 0.18, 0.12, 1.0),
+            ItemKind::PoultryJerky => Color::new(0.62, 0.40, 0.22, 1.0),
+            ItemKind::BearJerky => Color::new(0.32, 0.15, 0.10, 1.0),
+            ItemKind::RabbitJerky => Color::new(0.52, 0.30, 0.20, 1.0),
+            ItemKind::MooseJerky => Color::new(0.36, 0.17, 0.11, 1.0),
         }
     }
 
@@ -534,6 +572,31 @@ impl ItemKind {
             ItemKind::BearStew => Some(ItemKind::CookedBearMeat),
             ItemKind::RabbitStew => Some(ItemKind::CookedRabbit),
             ItemKind::MooseStew => Some(ItemKind::CookedMoose),
+            _ => None,
+        }
+    }
+
+    /// For raw meat, the jerky that salt makes of it (crafted with a lump of pink salt, no fire needed).
+    #[allow(dead_code)]
+    pub fn cured(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::Venison => Some(ItemKind::VenisonJerky),
+            ItemKind::Poultry => Some(ItemKind::PoultryJerky),
+            ItemKind::BearMeat => Some(ItemKind::BearJerky),
+            ItemKind::RabbitMeat => Some(ItemKind::RabbitJerky),
+            ItemKind::MooseMeat => Some(ItemKind::MooseJerky),
+            _ => None,
+        }
+    }
+
+    /// For a jerky, the cooked meat it heals as much as.
+    pub fn jerky_base(self) -> Option<ItemKind> {
+        match self {
+            ItemKind::VenisonJerky => Some(ItemKind::CookedVenison),
+            ItemKind::PoultryJerky => Some(ItemKind::CookedPoultry),
+            ItemKind::BearJerky => Some(ItemKind::CookedBearMeat),
+            ItemKind::RabbitJerky => Some(ItemKind::CookedRabbit),
+            ItemKind::MooseJerky => Some(ItemKind::CookedMoose),
             _ => None,
         }
     }
@@ -657,6 +720,7 @@ impl ItemKind {
             ItemKind::CookedBearMeat => Some(BEAR_MEAT_HEAL),
             ItemKind::CookedRabbit => Some(RABBIT_MEAT_HEAL),
             ItemKind::CookedMoose => Some(MOOSE_MEAT_HEAL),
+            jerky if jerky.jerky_base().is_some() => jerky.jerky_base().and_then(ItemKind::heal_amount),
             stew => stew.stew_base().and_then(ItemKind::heal_amount).map(|h| h * STEW_HEAL_FACTOR),
         }
     }
@@ -789,6 +853,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::SwordHilt
         | Block::PulledStone
         | Block::MayaStone
+        | Block::RedCrystal
         | Block::Water
         | Block::Flower
         | Block::Fire

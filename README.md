@@ -660,3 +660,45 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
 - **Cursed Idol** (`ItemKind::CursedIdol`, on `Block::IdolPlinth` in a chamber at the temple's heart, reached by a passage in the north face, `temple.rs`): anywhere in the hotbar it doubles the player's damage (`Game::hurt_animals`) and `Game::eat_held` refuses every heal.
 - **Jungle**: `JUNGLE_RADIUS` 180 (was 90: four times the area), `JUNGLE_DISTANCE_CHUNKS` 20 (was 10, so it does not reach the spawn point). **Orangutan** (`AnimalKind::Orangutan`, boss, `temple::orangutan_post`, `Landmarks::orangutan_slain` saved as `orangutanslain`): walks and climbs, hits, hurls rocks (`ProjectileKind::Rock`, `BossEvent::RockThrow`) and smashes (`BossEvent::OrangutanSmash`, `Game::smash`, shared with the Yeti). **Jaguar** (`Pounce`: stalk, crouch, leap, retreat) and **flying snake** (helix, dive, flee) spawn only in the jungle (`Game::spawn_jungle_wildlife`).
 - Save format additions: `batkills <n>`, `orangutanslain`; items `boots_of_the_sky`, `cursed_idol`, `bone` (replacing `deer_bone`).
+
+## Update: ceilings, the leaping Orangutan, Nessie's turn, parrots and clear ground
+
+(Where this contradicts an earlier section, this one holds.)
+
+- **Vampire Bat** now comes for every `BATS_PER_VAMPIRE` (10) cave bats killed. **Ceilings** (`Animal::ceiling_limit`, `floor_hint`, `unwedge`): a flier never aims above the lowest solid block over it
+  (or over its goal), keeping `FLIER_CEILING_CLEARANCE` of air; blocked sideways under a roof it slides round (`strafe`) instead of climbing (it used to raise its goal 8 blocks into the rock and stay pinned), and a body found inside rock is set down. Bats use the same clamp.
+- **Orangutan.** It used to be set down 0.35 blocks inside the wall of the tier above (a 2-wide ledge, centre off the block grid), so it could not move on any axis: it is now set on the ledge's middle
+  (`Game::spawn_bosses`), `ORANGUTAN_HALF_WIDTH` is 0.75, and every walking boss that overlaps blocks moves the shortest way clear (`Animal::free_itself`). Beyond its leash it walks back until within
+  `ORANGUTAN_HOME_RETURN_SHARE` of it (`Animal::homing`). The smash is a **leap**: crouch (`BossAction::Smash`, `ORANGUTAN_LEAP_WINDUP`), then `BossAction::Leap`, a ballistic arc (`Animal::begin_leap`) whose top is
+  `ORANGUTAN_LEAP_APEX` above the higher end, landing `ORANGUTAN_LEAP_LAND_GAP` from the player; landing (or `ORANGUTAN_LEAP_MAX_SECONDS`) raises `BossEvent::OrangutanSmash`. Range `ORANGUTAN_LEAP_MAX_RANGE`.
+- **Idol passage**: the mouth of the passage in the temple's north face is `Block::CastleDoor` (unbreakable planking, `TEMPLE_BOARD_DEPTH` deep) until `Landmarks::orangutan_slain`; `World::open_temple` sets it and makes the temple's chunks again
+  (`temple::temple_cell_boarded`, `terrain::generate_chunk_for`).
+- **Nessie** keeps `LOCH_NESS_SHORE_MARGIN` (8) from the shore. Meeting the edge she turns back toward open water (`Animal::open_water_heading`, biased towards where she came up) for `LOCH_NESS_TURN_SECONDS`
+  instead of stopping; the progress check ignores her. `LOCH_NESS_MAX_RAVENS` is 4 and the shot alarm obeys the same cap.
+- **Structures never overlap**: `Landmarks::has_room` also checks `Landmarks::reserved` (Stonehenge, the jungle's bare middle and temple; set by `World`, not saved), and lakes and mountains from treks are
+  checked (`has_room_for_lake`, `has_room_for_mountain`) and pushed `SITE_PUSH_BLOCKS` further out until clear. The well, graveyard and both castles use `game::clear_site` and no longer fall back to a site that
+  has no room; with none clear the call returns false and tries other headings on a later frame.
+- **Jungle**: no ordinary wildlife (`AnimalKind::is_ordinary_wildlife`) spawns in it or is brought in by `spawn_animal`, and no ravens; only jaguars, flying snakes and **parrots** (`AnimalKind::Parrot`, quail behaviour,
+  colourful model, `MAX_PARROT`). Every `PARROTS_PER_BRONZE_PARROT` parrots killed (`Game::parrot_kills`, saved as `parrotkills`) `BRONZE_PARROTS_PER_SUMMON` **Bronze Parrots** (`AnimalKind::BronzeParrot`, `is_metal_bird`,
+  same behaviour as the Iron Quail, bronze model, drop Bronze) come (`summon_bronze_parrots`, `bronze_parrots_owed`). Their feather missile is the Iron Feather.
+
+## Update: long snakes, poison arrows, jerky, falling stars, the Phoenix's return and varied caves
+
+- **Flying snakes** (`animal.rs`, `animal_draw.rs`): `SNAKE_SEGMENTS` (64) segments of `SNAKE_SEGMENT_SPACING`, about 17 blocks, and thicker (`SNAKE_HALF_WIDTH`).
+  The head's path is kept in `Animal::trail` (`lay_trail`); `body_points` is the body, drawn by `snake_body_boxes` and hit-tested by `Animal::hitboxes`
+  (arrows and melee use every box). Flight is slow (`SNAKE_SPIRAL_SPEED`, `SNAKE_DIVE_SPEED`): a wide circle (`SNAKE_SPIRAL_RADIUS`, `SNAKE_LOOP_RATE`) with a
+  smaller one riding on it (`SNAKE_COIL_*`) makes the loops. A dead snake drops `SNAKE_FANG_DROP_MIN..=MAX` **Snake Fangs**.
+- **Poison arrows**: Pebble + Stick + Feather + Snake Fang. `Game::shoot` fires poison first, then Phoenix, then ordinary arrows. A poison arrow is used up and
+  vanishes where it lands (`Arrow::vanishes_on_landing`); a hit calls `Animal::poison`, and `Game::update_poison` takes `POISON_DAMAGE` every `POISON_INTERVAL`
+  for `POISON_SECONDS`.
+- **Jerky**: Raw meat + `JERKY_SALT_COST` Pink Salt (`recipe.rs`), one per meat (`ItemKind::cured`). `heal_amount` is the cooked meat's (`jerky_base`); stews still double.
+- **Spirits** cross dimensions: `Game::travel_to` collects them (with `shots_left`) and `bring_spirits` sets them down round the player.
+- **Entering the Horizen**: `Game::begin_horizen_fall` starts the fade (`horizen_pending`); `update_horizen_transition` moves the player at full black
+  (`HORIZEN_FADE_SHARE`) by `enter_horizen`, which always puts them in the arrival pool.
+- **Cave kinds** (`horizen::CaveKind`): ordinary caves are Plain, Mossy (`moss_pools`, `moss_at`: floor, walls and pool water are tinted by `mesh.rs`),
+  River (`river_at`, a meandering band) or Crystal (`crystal_at`, `Block::RedCrystal`: solid, not breakable, not saved). Rivers and pools count as ponds (`is_pond`).
+- **Silver key**: `mines::furnish` fills the column under the key stand with dirt, so it rests on the ground.
+- **Phoenix**: `Landmarks::phoenix_dead_for` (saved as `phoenixdead`) counts up while it is dead, in whichever dimension the player is in; at
+  `PHOENIX_RESPAWN_SECONDS` `phoenix_slain` clears (`Game::update_phoenix_respawn`) and it returns when the player nears the crater.
+- **Falling stars** (`stars.rs`, `Game::update_falling_stars`, `effects::draw_falling_stars`): in the Skylands at night, one every `FALLING_STAR_INTERVAL`; `pick_landing`
+  chooses an island within range in front of the player (or the one they are on).

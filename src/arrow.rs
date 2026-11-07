@@ -48,6 +48,11 @@ impl Arrow {
         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
     }
 
+    /// A poison arrow shot from a bow: it flies like an arrow, is used up when it is shot and is gone where it lands, and poisons what it hits.
+    pub fn fired_poison(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::PoisonArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+    }
+
     /// An iron feather thrown by the player from `origin` along the unit vector `dir`, like a throwing star.
     pub fn thrown_feather(origin: Vec3, dir: Vec3) -> Arrow {
         Arrow { kind: ItemKind::IronFeather, pos: origin, vel: dir * IRON_FEATHER_SPEED, age: 0.0 }
@@ -65,9 +70,14 @@ impl Arrow {
         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
     }
 
-    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow), instead of lying there to be picked up again.
+    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow or a poison arrow), instead of lying there to be picked up again.
     pub fn vanishes_on_landing(&self) -> bool {
-        self.kind == ItemKind::PhoenixArrow
+        matches!(self.kind, ItemKind::PhoenixArrow | ItemKind::PoisonArrow)
+    }
+
+    /// Whether what this arrow hits is poisoned.
+    pub fn poisons(&self) -> bool {
+        self.kind == ItemKind::PoisonArrow
     }
 
     /// An arrow shot by the Wild Hunt's archer from `origin` along the unit vector `dir`. It hurts the player, not animals.
@@ -112,11 +122,15 @@ impl Arrow {
                     .iter()
                     .enumerate()
                     .filter_map(|(i, a)| {
-                        let (lo, hi) = a.hitbox();
                         if !a.kind.is_huntable() {
                             return None;
                         }
-                        ray_box(self.pos, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= length).map(|t| (i, t))
+                        // A flying snake can be hit anywhere along its long body.
+                        a.hitboxes()
+                            .into_iter()
+                            .filter_map(|(lo, hi)| ray_box(self.pos, dir, lo.to_array(), hi.to_array()).filter(|&t| t <= length))
+                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .map(|t| (i, t))
                     })
                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                 if let Some((i, _)) = nearest {

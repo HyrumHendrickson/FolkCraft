@@ -334,6 +334,8 @@ pub const WELL_FLOOR_Y: f32 = STONE_LAYERS as f32;
 pub const HORIZEN_ARRIVAL_POOL_RADIUS: f32 = 3.5;
 /// How long the black screen lasts while the player passes through the well.
 pub const HORIZEN_TRANSITION_SECONDS: f32 = 1.2;
+/// The share of it spent fading to black (and the same again fading back); the player is moved to the Horizen at the black.
+pub const HORIZEN_FADE_SHARE: f32 = 0.30;
 /// The stone roof of the cave ends at this height (the top of the dimension).
 pub const HORIZEN_ROOF_Y: i32 = GROUND_TOP + 72;
 /// The least free height (blocks of air above the floor) any part of the cave has: a player is under two.
@@ -1041,13 +1043,13 @@ pub const SPAWN_WEIGHT_RAVEN: u64 = 60;
 /// `ACID_SECONDS` it is brown and acidic, and a player wading in it loses `ACID_DAMAGE` every `ACID_DAMAGE_INTERVAL` seconds.
 /// A bow or a sling shot within `LOCH_NESS_SHOT_HEARING` blocks of her sends her off to the middle of the lake for `LOCH_NESS_FLEE_SECONDS`
 /// and calls `LOCH_NESS_ALARM_RAVENS` more ravens.
-pub const LOCH_NESS_SHORE_MARGIN: f32 = 5.0;
+pub const LOCH_NESS_SHORE_MARGIN: f32 = 8.0;
 pub const LOCH_NESS_RAVEN_RANGE: f32 = 6.0;
 /// She sets ravens and acid on a player anywhere within this many blocks of her (she hunts one within `LOCH_NESS_NOTICE_DISTANCE`).
 pub const LOCH_NESS_RAVEN_DISTANCE: f32 = 90.0;
 pub const LOCH_NESS_RAVENS_PER_CALL: usize = 2;
 pub const LOCH_NESS_RAVEN_INTERVAL: f32 = 9.0;
-pub const LOCH_NESS_MAX_RAVENS: usize = 6;
+pub const LOCH_NESS_MAX_RAVENS: usize = 4;
 pub const LOCH_NESS_ACID_COOLDOWN: f32 = 11.0;
 pub const LOCH_NESS_ACID_LENGTH: f32 = 36.0;
 pub const LOCH_NESS_ACID_WIDTH: f32 = 3.0;
@@ -1134,9 +1136,9 @@ pub const EXCALIBUR_HUNT_FACTOR: i32 = 3;
 /// Cave bats come half as often as they did: the cave tries to bring one in only on every second wildlife spawn tick.
 pub const BAT_CAVE_SPAWN_EVERY: u32 = 2;
 /// A bat that strikes a player holding pink salt dies instead, and takes one lump of salt with it.
-/// For every `BATS_PER_VAMPIRE` bats killed in the Horizen's caves a vampire bat boss comes out of the dark. It has one attack: it
+/// For every `BATS_PER_VAMPIRE` (ten) bats killed in the Horizen's caves a vampire bat boss comes out of the dark. It has one attack: it
 /// circles the player at `VAMPIRE_BAT_ORBIT_RADIUS`, then swoops (`VAMPIRE_BAT_DIVE_SPEED`) for one blow and flies off again.
-pub const BATS_PER_VAMPIRE: u32 = 20;
+pub const BATS_PER_VAMPIRE: u32 = 10;
 pub const VAMPIRE_BAT_HEALTH: i32 = 70;
 pub const VAMPIRE_BAT_HALF_WIDTH: f32 = 0.7;
 pub const VAMPIRE_BAT_HEIGHT: f32 = 0.7;
@@ -1202,13 +1204,15 @@ pub const TEMPLE_CHAMBER_HALF: i32 = 3;
 pub const TEMPLE_CHAMBER_HEIGHT: i32 = 5;
 pub const TEMPLE_PASSAGE_HALF: i32 = 1;
 pub const TEMPLE_PASSAGE_HEIGHT: i32 = 3;
+/// The passage to the idol is boarded up (with `Block::CastleDoor`) this many blocks deep at its mouth until the Orangutan is dead.
+pub const TEMPLE_BOARD_DEPTH: i32 = 2;
 
 /// The orangutan boss on the temple's upper tiers. It walks (and climbs the tiers) towards a player within `ORANGUTAN_NOTICE_DISTANCE`,
 /// never straying more than `ORANGUTAN_LEASH` from the top, hits for `ORANGUTAN_DAMAGE`, hurls rocks from between `ORANGUTAN_ROCK_MIN_RANGE`
 /// and `MAX_RANGE` (a rock bursts for `ROCK_BURST_DAMAGE` within `ROCK_BURST_RADIUS`), and, close up, rears and smashes the ground, hurting
 /// everything within `ORANGUTAN_SMASH_RADIUS` of its body and throwing it `ORANGUTAN_SMASH_KNOCKBACK` blocks.
 pub const ORANGUTAN_HEALTH: i32 = 260;
-pub const ORANGUTAN_HALF_WIDTH: f32 = 0.85;
+pub const ORANGUTAN_HALF_WIDTH: f32 = 0.75;
 pub const ORANGUTAN_HEIGHT: f32 = 2.7;
 pub const ORANGUTAN_WALK_SPEED: f32 = 2.0;
 pub const ORANGUTAN_RUN_SPEED: f32 = 5.0;
@@ -1218,8 +1222,6 @@ pub const ORANGUTAN_REACH: f32 = 1.3;
 pub const ORANGUTAN_NOTICE_DISTANCE: f32 = 45.0;
 pub const ORANGUTAN_LEASH: f32 = 20.0;
 pub const ORANGUTAN_SPAWN_DISTANCE: f32 = 70.0;
-pub const ORANGUTAN_SMASH_TRIGGER_RANGE: f32 = 4.5;
-pub const ORANGUTAN_SMASH_WINDUP: f32 = 0.9;
 pub const ORANGUTAN_SMASH_RADIUS: f32 = 5.0;
 pub const ORANGUTAN_SMASH_DAMAGE: u32 = 3;
 pub const ORANGUTAN_SMASH_KNOCKBACK: f32 = 7.0;
@@ -1256,21 +1258,124 @@ pub const JAGUAR_RETREAT_SECONDS: f32 = 3.5;
 pub const JAGUAR_RETREAT_SPEED: f32 = 5.0;
 pub const SPAWN_WEIGHT_JAGUAR: u64 = 10;
 
-/// Flying snakes (jungle only, at most `MAX_FLYING_SNAKE`) twist through the air in a helix round a player within
-/// `SNAKE_NOTICE_DISTANCE`, its radius and height swelling and shrinking, then swoop down on them for `SNAKE_DAMAGE` and spiral away.
+/// Flying snakes (jungle only, at most `MAX_FLYING_SNAKE`) drift through the air in slow, wide spirals and loops round a player within
+/// `SNAKE_NOTICE_DISTANCE`, then slowly swoop down on them for `SNAKE_DAMAGE` and spiral away. A snake is `SNAKE_SEGMENTS` segments
+/// of `SNAKE_SEGMENT_SPACING` blocks long (about seventeen blocks nose to tail), and its body follows the path its head has flown.
+/// Its loop is a wide circle (`SNAKE_SPIRAL_RADIUS`, `SNAKE_LOOP_RATE` radians a second) with a smaller circle riding on it
+/// (`SNAKE_COIL_RADIUS`, `SNAKE_COIL_RATE`), which is what makes the loops.
 pub const MAX_FLYING_SNAKE: usize = 5;
 pub const FLYING_SNAKE_HEALTH: i32 = 6;
-pub const SNAKE_HALF_WIDTH: f32 = 0.3;
-pub const SNAKE_HEIGHT: f32 = 0.3;
+pub const SNAKE_HALF_WIDTH: f32 = 0.5;
+pub const SNAKE_HEIGHT: f32 = 0.8;
 pub const SNAKE_NOTICE_DISTANCE: f32 = 45.0;
-pub const SNAKE_SPIRAL_SPEED: f32 = 6.0;
-pub const SNAKE_SPIRAL_RADIUS: f32 = 5.0;
-pub const SNAKE_SPIRAL_HEIGHT: f32 = 4.5;
-pub const SNAKE_DIVE_SPEED: f32 = 14.0;
-pub const SNAKE_DIVE_SECONDS: f32 = 1.2;
-pub const SNAKE_FLEE_SECONDS: f32 = 1.8;
-pub const SNAKE_ATTACK_MIN: f32 = 3.0;
-pub const SNAKE_ATTACK_MAX: f32 = 6.0;
+pub const SNAKE_SPIRAL_SPEED: f32 = 3.2;
+pub const SNAKE_SPIRAL_RADIUS: f32 = 12.0;
+pub const SNAKE_SPIRAL_HEIGHT: f32 = 6.0;
+pub const SNAKE_LOOP_RATE: f32 = 0.28;
+pub const SNAKE_COIL_RADIUS: f32 = 3.6;
+pub const SNAKE_COIL_RATE: f32 = 0.84;
+pub const SNAKE_DIVE_SPEED: f32 = 7.5;
+pub const SNAKE_DIVE_SECONDS: f32 = 2.2;
+pub const SNAKE_FLEE_SECONDS: f32 = 2.4;
+pub const SNAKE_ATTACK_MIN: f32 = 5.0;
+pub const SNAKE_ATTACK_MAX: f32 = 9.0;
 pub const SNAKE_DAMAGE: u32 = 2;
-pub const SNAKE_REACH: f32 = 0.6;
+pub const SNAKE_REACH: f32 = 1.1;
+pub const SNAKE_SEGMENTS: usize = 64;
+pub const SNAKE_SEGMENT_SPACING: f32 = 0.27;
+/// Snake fangs a dead snake drops (this many to this many, inclusive).
+pub const SNAKE_FANG_DROP_MIN: u32 = 2;
+pub const SNAKE_FANG_DROP_MAX: u32 = 3;
 pub const SPAWN_WEIGHT_FLYING_SNAKE: u64 = 12;
+
+
+// --- Update: ceilings, the leaping Orangutan, Nessie's turn, parrots and bronze parrots --------------------------------------
+
+/// A flier in the cave keeps `FLIER_CEILING_CLEARANCE` blocks of air between the top of its body and the rock above it (the goal
+/// it flies for is lowered to fit), and one that has somehow ended up wedged against the ceiling is set down by `FLIER_UNWEDGE_STEP`.
+pub const FLIER_CEILING_CLEARANCE: f32 = 0.6;
+pub const FLIER_UNWEDGE_STEP: f32 = 0.5;
+/// How far above itself (in blocks) a flier looks for a ceiling.
+pub const FLIER_CEILING_LOOKUP: f32 = 12.0;
+
+/// Nessie, on meeting the edge of her water (`LOCH_NESS_SHORE_MARGIN` from the shore), turns round for `LOCH_NESS_TURN_SECONDS` and
+/// swims back towards the open middle of the lake before she tries for her goal again.
+pub const LOCH_NESS_TURN_SECONDS: f32 = 2.5;
+
+/// The Orangutan's smash is a leap: it crouches for `ORANGUTAN_LEAP_WINDUP`, springs up (the top of the arc is `ORANGUTAN_LEAP_APEX`
+/// blocks above the higher of where it leaps from and where it comes down) and lands `ORANGUTAN_LEAP_LAND_GAP` blocks from the player,
+/// on the side it came from, smashing the ground as it lands. It leaps at a player up to
+/// `ORANGUTAN_LEAP_MAX_RANGE` away. A leap that has not come down after `ORANGUTAN_LEAP_MAX_SECONDS` smashes where it is.
+pub const ORANGUTAN_LEAP_WINDUP: f32 = 0.6;
+pub const ORANGUTAN_LEAP_APEX: f32 = 7.0;
+pub const ORANGUTAN_LEAP_LAND_GAP: f32 = 2.6;
+pub const ORANGUTAN_LEAP_MAX_RANGE: f32 = 18.0;
+pub const ORANGUTAN_LEAP_MAX_SECONDS: f32 = 3.5;
+/// An Orangutan more than `ORANGUTAN_LEASH` from the temple top walks back and keeps walking until it is within
+/// `ORANGUTAN_HOME_RETURN_SHARE` of the leash (so it does not turn round again at the very edge).
+pub const ORANGUTAN_HOME_RETURN_SHARE: f32 = 0.6;
+
+/// Parrots: colourful quail that live in the jungle (at most `MAX_PARROT`). Every `PARROTS_PER_BRONZE_PARROT` parrots the player kills,
+/// `BRONZE_PARROTS_PER_SUMMON` Bronze Parrots come for them, which fight like Iron Quails.
+pub const PARROT_HEALTH: i32 = 4;
+pub const MAX_PARROT: usize = 9;
+pub const SPAWN_WEIGHT_PARROT: u64 = 40;
+pub const PARROTS_PER_BRONZE_PARROT: u32 = 10;
+pub const BRONZE_PARROTS_PER_SUMMON: u32 = 3;
+pub const BRONZE_PARROT_HEALTH: i32 = 90;
+pub const BRONZE_PARROT_RUN_SPEED: f32 = 6.6;
+pub const BRONZE_PARROT_DAMAGE: u32 = 2;
+pub const BRONZE_PARROT_ATTACK_COOLDOWN: f32 = 1.1;
+pub const BRONZE_PARROT_REACH: f32 = 0.9;
+pub const BRONZE_PARROT_SPAWN_DISTANCE: f32 = 14.0;
+/// A Parrot gives `PARROT_FEATHER_DROP` feathers, a Bronze Parrot `BRONZE_PARROT_BRONZE_DROP` bronze.
+pub const PARROT_FEATHER_DROP: u32 = 3;
+pub const BRONZE_PARROT_BRONZE_DROP: u32 = 2;
+
+/// A structure that finds something in its way is tried again `SITE_PUSH_BLOCKS` further out, up to `SITE_PUSH_STEPS` times in all.
+pub const SITE_PUSH_BLOCKS: i32 = 40;
+pub const SITE_PUSH_STEPS: i32 = 40;
+
+// --- Poison arrows, jerky, falling stars, the Phoenix's return ----------------------------------
+
+/// A poison arrow (a stick, a pebble, a feather and a snake fang) is shot before any other arrow and is used up. An animal it hits is
+/// poisoned: it loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds for `POISON_SECONDS` seconds, on top of the arrow's blow.
+pub const POISON_DAMAGE: i32 = 1;
+pub const POISON_INTERVAL: f32 = 1.0;
+pub const POISON_SECONDS: f32 = 6.0;
+
+/// Meat jerky: raw meat and a lump of pink salt, cured. It heals as much as the cooked meat does (a stew still heals double).
+pub const JERKY_SALT_COST: u32 = 1;
+
+/// Falling stars cross the night sky of the Skylands, one about every `FALLING_STAR_INTERVAL` seconds, and land on an island the player
+/// can see (within `FALLING_STAR_RANGE` blocks, in front of them). A star starts `FALLING_STAR_START_HEIGHT` blocks above its landing
+/// place and `FALLING_STAR_SLANT` blocks to one side, and falls for `FALLING_STAR_FALL_SECONDS` seconds. Its flash lasts `FALLING_STAR_FLASH_SECONDS`.
+pub const FALLING_STAR_INTERVAL: f32 = 10.0;
+pub const FALLING_STAR_RANGE: f32 = 220.0;
+pub const FALLING_STAR_START_HEIGHT: f32 = 140.0;
+pub const FALLING_STAR_SLANT: f32 = 70.0;
+pub const FALLING_STAR_FALL_SECONDS: f32 = 3.2;
+pub const FALLING_STAR_FLASH_SECONDS: f32 = 2.0;
+pub const FALLING_STAR_TRAIL_LENGTH: f32 = 26.0;
+/// The widest angle (degrees) from the player's line of sight at which an island counts as seen.
+pub const FALLING_STAR_VIEW_DEGREES: f32 = 55.0;
+
+/// A Phoenix that has been killed rises again in its crater after this many seconds (the fire tornadoes return with it).
+pub const PHOENIX_RESPAWN_SECONDS: f32 = 60.0;
+
+/// The Horizen's ordinary caves come in four kinds (see `horizen::CaveKind`): plain, mossy with pools, with a river through them, and
+/// studded with red crystals that cannot be mined. This many percent of them are each of the three special kinds (the rest are plain).
+pub const HORIZEN_MOSSY_PERCENT: u64 = 24;
+pub const HORIZEN_RIVER_PERCENT: u64 = 24;
+pub const HORIZEN_CRYSTAL_PERCENT: u64 = 24;
+/// Mossy caves hold `HORIZEN_MOSS_POOLS` pools of radius `HORIZEN_MOSS_POOL_MIN` to `HORIZEN_MOSS_POOL_MAX`, with moss `HORIZEN_MOSS_RING` blocks round each.
+pub const HORIZEN_MOSS_POOLS: i32 = 3;
+pub const HORIZEN_MOSS_POOL_MIN: f32 = 2.0;
+pub const HORIZEN_MOSS_POOL_MAX: f32 = 4.0;
+pub const HORIZEN_MOSS_RING: f32 = 3.0;
+/// A river crosses its cave `HORIZEN_RIVER_HALF_WIDTH` blocks to each side of a meandering line.
+pub const HORIZEN_RIVER_HALF_WIDTH: f32 = 2.0;
+pub const HORIZEN_RIVER_MEANDER: f32 = 3.5;
+/// Red crystals stand on this many thousandths of a crystal cave's floor (never near its middle, where the tunnels meet).
+pub const HORIZEN_CRYSTAL_PER_MILLE: u64 = 55;
+pub const HORIZEN_CRYSTAL_CLEAR_RADIUS: f32 = 3.5;

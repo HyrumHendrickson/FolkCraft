@@ -165,6 +165,19 @@ fn cavern_air(seed: i64, wx: i32, wz: i32) -> i32 {
     dome_air((dx * dx + dz * dz).sqrt(), cavern_radius(seed, dz.atan2(dx)), HORIZEN_CAVERN_HEIGHT)
 }
 
+/// What an ordinary cave of the Horizen is like. The arrival chamber, the great cavern and the king's cave are always plain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CaveKind {
+    /// Bare earth and rock (with the odd pond).
+    Plain,
+    /// Moss on the floor and walls, and a few pools of green water ringed with moss.
+    Mossy,
+    /// A river winds across the floor from wall to wall.
+    River,
+    /// Red crystals, like salt crystals, stand on the floor. They cannot be mined.
+    Crystal,
+}
+
 /// One of the Horizen's caves: its square of the grid, its middle, its radius and the air above its middle.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cave {
@@ -177,6 +190,8 @@ pub struct Cave {
     pub great: bool,
     /// The king's giant cave with the largest castle in the game (its shape is `king_air`).
     pub king: bool,
+    /// What it is like (see `CaveKind`).
+    pub kind: CaveKind,
 }
 
 // --- The king's cave ------------------------------------------------------------------------
@@ -263,15 +278,15 @@ fn cavern_cell(seed: i64) -> (i32, i32) {
 pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
     let (sx, sz) = spawn_centre();
     if (ci, cj) == (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL)) {
-        return Cave { cell: (ci, cj), x: sx, z: sz, radius: HORIZEN_CHAMBER_RADIUS, height: HORIZEN_CHAMBER_HEIGHT, great: false, king: false };
+        return Cave { cell: (ci, cj), x: sx, z: sz, radius: HORIZEN_CHAMBER_RADIUS, height: HORIZEN_CHAMBER_HEIGHT, great: false, king: false, kind: CaveKind::Plain };
     }
     if (ci, cj) == king_cell(seed) {
         let (x, z) = king_centre(seed);
-        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: KING_CAVE_RADIUS, height: KING_CAVE_HEIGHT, great: false, king: true };
+        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: KING_CAVE_RADIUS, height: KING_CAVE_HEIGHT, great: false, king: true, kind: CaveKind::Plain };
     }
     if (ci, cj) == cavern_cell(seed) {
         let (x, z) = cavern_centre(seed);
-        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: HORIZEN_CAVERN_RADIUS, height: HORIZEN_CAVERN_HEIGHT, great: true, king: false };
+        return Cave { cell: (ci, cj), x: x as f32 + 0.5, z: z as f32 + 0.5, radius: HORIZEN_CAVERN_RADIUS, height: HORIZEN_CAVERN_HEIGHT, great: true, king: false, kind: CaveKind::Plain };
     }
     let h = hash3(seed, ci, cj, 0x4341);
     let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
@@ -285,7 +300,88 @@ pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
         height: HORIZEN_CAVE_MIN_HEIGHT + (unit(48) * (HORIZEN_CAVE_MAX_HEIGHT - HORIZEN_CAVE_MIN_HEIGHT + 1) as f32) as i32,
         great: false,
         king: false,
+        kind: match hash3(seed, ci, cj, 0x4B49) % 100 {
+            r if r < HORIZEN_MOSSY_PERCENT => CaveKind::Mossy,
+            r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT => CaveKind::River,
+            r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT + HORIZEN_CRYSTAL_PERCENT => CaveKind::Crystal,
+            _ => CaveKind::Plain,
+        },
     }
+}
+
+fn cave_of_column(seed: i64, wx: i32, wz: i32) -> Cave {
+    cave_in_cell(seed, wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL))
+}
+
+/// The pools of a mossy cave: `HORIZEN_MOSS_POOLS` ovals of green water, scattered about its middle.
+pub fn moss_pools(seed: i64, cave: &Cave) -> Vec<Pond> {
+    (0..HORIZEN_MOSS_POOLS)
+        .map(|i| {
+            let h = hash3(seed, cave.cell.0 * 11 + i, cave.cell.1, 0x4D4F);
+            let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
+            let angle = unit(0) * std::f32::consts::TAU;
+            let dist = cave.radius * (0.25 + 0.4 * unit(16));
+            Pond {
+                x: cave.x + angle.cos() * dist,
+                z: cave.z + angle.sin() * dist,
+                rx: HORIZEN_MOSS_POOL_MIN + unit(32) * (HORIZEN_MOSS_POOL_MAX - HORIZEN_MOSS_POOL_MIN),
+                rz: HORIZEN_MOSS_POOL_MIN + unit(48) * (HORIZEN_MOSS_POOL_MAX - HORIZEN_MOSS_POOL_MIN),
+            }
+        })
+        .collect()
+}
+
+/// Whether the column (wx, wz) is in one of the mossy pools of a mossy cave.
+pub fn in_moss_pool(seed: i64, wx: i32, wz: i32) -> bool {
+    let cave = cave_of_column(seed, wx, wz);
+    cave.kind == CaveKind::Mossy && moss_pools(seed, &cave).iter().any(|p| p.contains(wx, wz))
+}
+
+/// Whether the column (wx, wz) is on the mossy floor of a mossy cave: in or within `HORIZEN_MOSS_RING` blocks of a pool.
+pub fn moss_at(seed: i64, wx: i32, wz: i32) -> bool {
+    let cave = cave_of_column(seed, wx, wz);
+    cave.kind == CaveKind::Mossy
+        && moss_pools(seed, &cave).iter().any(|p| Pond { rx: p.rx + HORIZEN_MOSS_RING, rz: p.rz + HORIZEN_MOSS_RING, ..*p }.contains(wx, wz))
+}
+
+/// Whether the column (wx, wz) lies in the rock walls and roof round a mossy cave (which are green with moss).
+pub fn mossy_wall(seed: i64, wx: i32, wz: i32) -> bool {
+    let cave = cave_of_column(seed, wx, wz);
+    cave.kind == CaveKind::Mossy && ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt() <= cave.radius * 1.15
+}
+
+/// Whether the river of a river cave runs over the column (wx, wz): a band that winds across the cave (within its dome) along a line
+/// through its middle, whose direction the cave's cell decides.
+pub fn river_at(seed: i64, wx: i32, wz: i32) -> bool {
+    let cave = cave_of_column(seed, wx, wz);
+    if cave.kind != CaveKind::River {
+        return false;
+    }
+    let h = hash3(seed, cave.cell.0, cave.cell.1, 0x5256);
+    let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
+    let angle = unit(0) * std::f32::consts::PI;
+    let (ux, uz) = (angle.cos(), angle.sin());
+    let (dx, dz) = (wx as f32 + 0.5 - cave.x, wz as f32 + 0.5 - cave.z);
+    if (dx * dx + dz * dz).sqrt() > cave.radius * 1.05 {
+        return false;
+    }
+    let (along, side) = (dx * ux + dz * uz, -dx * uz + dz * ux);
+    let meander = HORIZEN_RIVER_MEANDER * (along * 0.2 + unit(16) * std::f32::consts::TAU).sin();
+    (side - meander).abs() <= HORIZEN_RIVER_HALF_WIDTH * (0.85 + 0.3 * (along * 0.31 + unit(32) * 6.0).sin())
+}
+
+/// Whether a red crystal stands on the floor of the column (wx, wz): in a crystal cave, on dry open floor and clear of its middle.
+pub fn crystal_at(seed: i64, wx: i32, wz: i32) -> bool {
+    let cave = cave_of_column(seed, wx, wz);
+    if cave.kind != CaveKind::Crystal {
+        return false;
+    }
+    let dist = ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt();
+    dist >= HORIZEN_CRYSTAL_CLEAR_RADIUS
+        && dist <= cave.radius * 0.85
+        && hash3(seed, wx, wz, 0x4352) % 1000 < HORIZEN_CRYSTAL_PER_MILLE
+        && air_height(seed, wx, wz) >= HORIZEN_MIN_AIR
+        && !is_pond(seed, wx, wz)
 }
 
 /// The air over the column (wx, wz) from the dome of `cave` and the tunnels that join it to its east and south neighbours (and
@@ -332,7 +428,7 @@ pub fn is_open(seed: i64, wx: i32, wz: i32) -> bool {
     air_height(seed, wx, wz) > 0
 }
 
-/// Whether a pond covers the column (wx, wz): the arrival pool, or a pond on open floor (none within reach of the tower).
+/// Whether water covers the column (wx, wz): the arrival pool, a pond, a mossy cave's pool or a river cave's river, on open floor (none within reach of the tower).
 pub fn is_pond(seed: i64, wx: i32, wz: i32) -> bool {
     let (sx, sz) = spawn_centre();
     let dx = wx as f32 + 0.5 - sx;
@@ -350,7 +446,9 @@ pub fn is_pond(seed: i64, wx: i32, wz: i32) -> bool {
         return false;
     }
     is_open(seed, wx, wz)
-        && pond_in_cell(seed, wx.div_euclid(HORIZEN_POND_CELL), wz.div_euclid(HORIZEN_POND_CELL)).map_or(false, |p| p.contains(wx, wz))
+        && (pond_in_cell(seed, wx.div_euclid(HORIZEN_POND_CELL), wz.div_euclid(HORIZEN_POND_CELL)).map_or(false, |p| p.contains(wx, wz))
+            || in_moss_pool(seed, wx, wz)
+            || river_at(seed, wx, wz))
 }
 
 /// The corners (x, z) of a ghostly trail through the tunnel for a player standing at `from`: the bends of the tunnel
@@ -397,6 +495,9 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
             for y in GROUND_TOP + 1 + air..=HORIZEN_ROOF_Y {
                 blocks[idx(lx, y, lz)] = Block::Stone;
             }
+            if crystal_at(seed, wx, wz) {
+                blocks[idx(lx, GROUND_TOP + 1, lz)] = Block::RedCrystal;
+            }
         }
     }
     // The king's castle, on the floor of his cave.
@@ -437,6 +538,107 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
 mod tests {
     use super::*;
     use std::collections::{HashSet, VecDeque};
+
+    #[test]
+    fn the_caves_come_in_four_kinds_with_mossy_pools_rivers_and_red_crystals() {
+        let seed = 3;
+        let mut kinds = HashSet::new();
+        let (mut pool_cols, mut river_cols, mut crystal_cols, mut moss_cols) = (0, 0, 0, 0);
+        for cj in -6..7 {
+            for ci in -6..7 {
+                let cave = cave_in_cell(seed, ci, cj);
+                if cave.great || cave.king || (ci, cj) == (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL)) {
+                    assert_eq!(cave.kind, CaveKind::Plain, "the special caves stay plain");
+                    continue;
+                }
+                kinds.insert(cave.kind);
+                let r = cave.radius as i32;
+                for dz in -r..=r {
+                    for dx in -r..=r {
+                        let (x, z) = (cave.x as i32 + dx, cave.z as i32 + dz);
+                        if !is_open(seed, x, z) {
+                            continue;
+                        }
+                        match cave.kind {
+                            CaveKind::Mossy => {
+                                pool_cols += in_moss_pool(seed, x, z) as i32;
+                                moss_cols += moss_at(seed, x, z) as i32;
+                                assert!(!river_at(seed, x, z) && !crystal_at(seed, x, z));
+                            }
+                            CaveKind::River => {
+                                river_cols += river_at(seed, x, z) as i32;
+                                assert!(!in_moss_pool(seed, x, z) && !crystal_at(seed, x, z));
+                            }
+                            CaveKind::Crystal => {
+                                crystal_cols += crystal_at(seed, x, z) as i32;
+                                assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z));
+                            }
+                            CaveKind::Plain => assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z) && !moss_at(seed, x, z) && !crystal_at(seed, x, z)),
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(kinds.len(), 4, "all four kinds turn up: {kinds:?}");
+        assert!(pool_cols > 20 && moss_cols > pool_cols, "mossy caves have pools ringed with moss: {pool_cols} pool, {moss_cols} moss");
+        assert!(river_cols > 40, "river caves have rivers: {river_cols}");
+        assert!(crystal_cols > 10, "crystal caves have crystals: {crystal_cols}");
+    }
+
+    #[test]
+    fn rivers_and_pools_are_water_the_player_can_wade_and_crystals_stand_on_dry_floor_only() {
+        let seed = 3;
+        let (mut water, mut crystals) = (0, 0);
+        for cj in -4..5 {
+            for ci in -4..5 {
+                let cave = cave_in_cell(seed, ci, cj);
+                for dz in -20..=20 {
+                    for dx in -20..=20 {
+                        let (x, z) = (cave.x as i32 + dx, cave.z as i32 + dz);
+                        if river_at(seed, x, z) || in_moss_pool(seed, x, z) {
+                            if is_open(seed, x, z) && is_pond(seed, x, z) {
+                                water += 1;
+                                assert_eq!(ground_top(seed, x, z), GROUND_TOP - RIVER_DEPTH, "shallow, like a pond");
+                            }
+                        }
+                        if crystal_at(seed, x, z) {
+                            crystals += 1;
+                            assert!(!is_pond(seed, x, z) && air_height(seed, x, z) >= HORIZEN_MIN_AIR);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(water > 100 && crystals > 20, "{water} water columns, {crystals} crystals");
+    }
+
+    #[test]
+    fn red_crystals_are_generated_into_the_chunks_and_cannot_be_mined() {
+        let seed = 3;
+        let landmarks = Landmarks::default();
+        let mut found = 0;
+        'outer: for cj in -4..5 {
+            for ci in -4..5 {
+                let cave = cave_in_cell(seed, ci, cj);
+                if cave.kind != CaveKind::Crystal {
+                    continue;
+                }
+                let (cx, cz) = ((cave.x as i32).div_euclid(CHUNK_SIZE), (cave.z as i32).div_euclid(CHUNK_SIZE));
+                for dz in -2..=2 {
+                    for dx in -2..=2 {
+                        let blocks = generate_chunk(seed, cx + dx, cz + dz, &landmarks);
+                        found += blocks.iter().filter(|b| **b == Block::RedCrystal).count();
+                    }
+                }
+                if found > 0 {
+                    break 'outer;
+                }
+            }
+        }
+        assert!(found > 0, "red crystals stand in the crystal caves");
+        let b = Block::RedCrystal;
+        assert!(!b.breakable() && !b.hand_breakable() && !b.can_break_with(None) && b.collides() && b.parts().len() >= 6, "solid, crystal-shaped and not minable");
+    }
 
     #[test]
     fn the_cave_is_a_pure_function_of_the_seed() {

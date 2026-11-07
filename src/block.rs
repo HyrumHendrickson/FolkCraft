@@ -100,6 +100,8 @@ pub enum Block {
     PulledStone,
     /// The weathered, pale stone of the jungle temple: a solid cube that cannot be broken or made.
     MayaStone,
+    /// A red crystal in the caves of the Horizen: it looks like a cluster of salt crystals, but it is solid and cannot be mined.
+    RedCrystal,
     /// Bones scattered on the ground of an altar island in the Skylands. Walk-through; taking them by hand drops a bone.
     Bones,
 }
@@ -314,6 +316,17 @@ const SALT_CRYSTAL_PARTS: &[Part] = &[
     part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (1.0, 0.86, 0.92)),
     part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.84, 0.46, 0.60)),
 ];
+/// A cluster of red crystals standing on a cave floor: the shape of the salt crystals, in deep reds.
+const RED_CRYSTAL_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.10, 0.82], (0.46, 0.08, 0.10)),
+    part([0.38, 0.10, 0.38], [0.62, 0.78, 0.62], (0.80, 0.12, 0.16)),
+    part([0.43, 0.78, 0.43], [0.57, 0.95, 0.57], (1.0, 0.45, 0.45)),
+    part([0.20, 0.10, 0.44], [0.36, 0.52, 0.60], (0.68, 0.08, 0.14)),
+    part([0.23, 0.52, 0.48], [0.33, 0.62, 0.56], (0.98, 0.38, 0.40)),
+    part([0.62, 0.10, 0.22], [0.78, 0.42, 0.38], (0.86, 0.16, 0.20)),
+    part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (1.0, 0.50, 0.50)),
+    part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.60, 0.07, 0.12)),
+];
 /// A few bones lying on the ground: a long one, a short one across it and a rib.
 const BONES_PARTS: &[Part] = &[
     part([0.10, 0.0, 0.40], [0.74, 0.07, 0.50], (0.92, 0.89, 0.80)),
@@ -508,6 +521,7 @@ impl Block {
             | Block::AncientAltar
             | Block::PulledStone
             | Block::MayaStone
+            | Block::RedCrystal
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -560,6 +574,7 @@ impl Block {
                 | Block::TowerDoor
                 | Block::TowerDoorTop
                 | Block::PinkSalt
+                | Block::RedCrystal
                 | Block::KeyStand
                 | Block::StonePlinth
                 | Block::HornPlinth
@@ -626,6 +641,7 @@ impl Block {
             Block::TowerDoorTop => TOWER_DOOR_TOP_PARTS,
             Block::KeyStand => KEY_STAND_PARTS,
             Block::PinkSalt => SALT_CRYSTAL_PARTS,
+            Block::RedCrystal => RED_CRYSTAL_PARTS,
             Block::Bones => BONES_PARTS,
             Block::StonePlinth => STONE_PLINTH_PARTS,
             Block::HornPlinth => HORN_PLINTH_PARTS,
@@ -722,7 +738,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 51] = [
+    const ALL: [Block; 52] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -774,6 +790,7 @@ mod tests {
         Block::PulledStone,
         Block::MayaStone,
         Block::Bones,
+        Block::RedCrystal,
     ];
 
     #[test]

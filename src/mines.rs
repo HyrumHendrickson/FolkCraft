@@ -366,6 +366,13 @@ pub fn furnish(m: &Mountain, cx: i32, cz: i32, blocks: &mut [Block], tops: &[i32
             let (lx, lz) = (rx - x0, rz - z0);
             if (0..CHUNK_SIZE).contains(&lx) && (0..CHUNK_SIZE).contains(&lz) && (1..WORLD_HEIGHT).contains(&floor) {
                 blocks[idx(lx, floor, lz)] = Block::KeyStand;
+                // The shaft that climbs into the chamber may have been cut under the stand: solid ground goes back under it, so the key
+                // stands on the ground and not over a gap.
+                let mut y = floor - 1;
+                while y >= 1 && blocks[idx(lx, y, lz)] == Block::Air {
+                    blocks[idx(lx, y, lz)] = Block::Dirt;
+                    y -= 1;
+                }
             }
         }
     }
@@ -563,6 +570,7 @@ mod tests {
             let (lx, lz) = (rx - cx * CHUNK_SIZE, rz - cz * CHUNK_SIZE);
             assert_eq!(blocks[idx(lx, floor, lz)], Block::KeyStand, "shaft {shaft}");
             assert_eq!(blocks[idx(lx, floor + 1, lz)], Block::Air, "room to stand beside it");
+            assert!(blocks[idx(lx, floor - 1, lz)] != Block::Air, "shaft {shaft}: the stand rests on the ground, not over a gap");
         }
     }
 }

@@ -170,6 +170,20 @@ fn cell_of(w: i32) -> i32 {
     (w + SKY_CELL / 2).div_euclid(SKY_CELL)
 }
 
+/// The islands whose grid cell lies within `radius` blocks (a square) of the column (x, z), each once (the giant island fills nine cells).
+pub fn islands_near(seed: i64, x: i32, z: i32, radius: i32) -> Vec<Island> {
+    let mut out: Vec<Island> = Vec::new();
+    for cz in cell_of(z - radius)..=cell_of(z + radius) {
+        for cx in cell_of(x - radius)..=cell_of(x + radius) {
+            let island = island_in_cell(seed, cx, cz);
+            if !out.iter().any(|i| (i.x, i.z) == (island.x, island.z)) {
+                out.push(island);
+            }
+        }
+    }
+    out
+}
+
 /// The island of grid cell (cx, cz). Cell (0, 0) holds the first island, at a fixed place and height.
 pub fn island_in_cell(seed: i64, cx: i32, cz: i32) -> Island {
     let h = hash3(seed, cx, cz, 0x5C1A);

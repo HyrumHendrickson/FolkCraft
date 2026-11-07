@@ -58,6 +58,7 @@ mod settings;
 mod sky;
 mod skylands;
 mod terrain;
+mod stars;
 mod stonehenge;
 mod temple;
 mod tower;

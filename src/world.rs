@@ -10,7 +10,7 @@ use crate::item::{Hearth, ItemKind};
 use crate::horizen::{self, Dimension};
 use crate::skylands;
 use crate::tower::Tower;
-use crate::landmarks::{GrandCastle, Graveyard, Landmarks, Lake, Mountain, Rainbow, RainbowState, Well};
+use crate::landmarks::{GrandCastle, Graveyard, Landmarks, Lake, Mountain, Rainbow, RainbowState, Reserved, Well};
 use crate::terrain::{berry_bush_is_purple, generate_chunk_for, ground_top_with, is_wet_column};
 
 pub type Pos = (i32, i32, i32);
@@ -165,7 +165,7 @@ impl World {
             released: Vec::new(),
             berry_picked: HashSet::new(),
             night: false,
-            landmarks: Landmarks::default(),
+            landmarks: Landmarks { reserved: Reserved(reserved_zones(seed)), ..Landmarks::default() },
             dimension: Dimension::Overworld,
         }
     }
@@ -187,6 +187,7 @@ impl World {
     /// Restore the saved lakes, mountains and rainbow. Call before any chunk is generated.
     pub fn with_landmarks(mut self, landmarks: Landmarks) -> Self {
         self.landmarks = landmarks;
+        self.landmarks.reserved = Reserved(reserved_zones(self.seed));
         self
     }
 
@@ -300,6 +301,28 @@ impl World {
             .filter(|&(cx, cz)| {
                 let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
                 x - TOWER_REACH <= x0 + CHUNK_SIZE - 1 && x + TOWER_REACH >= x0 && z - TOWER_REACH <= z0 + CHUNK_SIZE - 1 && z + TOWER_REACH >= z0
+            })
+            .collect();
+        for key in &stale {
+            self.chunks.remove(key);
+        }
+        for &(cx, cz) in &stale {
+            self.ensure_chunk(cx, cz);
+        }
+    }
+
+    /// The Orangutan is dead: the boards over the passage to the idol come down. The loaded chunks that hold the temple are made again.
+    pub fn open_temple(&mut self) {
+        self.landmarks.orangutan_slain = true;
+        let (jx, jz) = crate::terrain::jungle_centre(self.seed);
+        let reach = crate::temple::TEMPLE_REACH;
+        let stale: Vec<(i32, i32)> = self
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(cx, cz)| {
+                let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+                jx - reach <= x0 + CHUNK_SIZE - 1 && jx + reach >= x0 && jz - reach <= z0 + CHUNK_SIZE - 1 && jz + reach >= z0
             })
             .collect();
         for key in &stale {
@@ -1492,4 +1515,12 @@ mod tests {
         let hit = w.raycast_hit(vec3(5.5, 6.5, 10.5), vec3(1.0, 0.0, 0.0), 10.0).unwrap();
         assert_eq!((hit.x, hit.block), (8, Block::Dirt));
     }
+}
+
+/// The ground the seed itself builds on, which no landmark may be brought onto: Stonehenge, and the jungle's bare middle (the temple).
+fn reserved_zones(seed: i64) -> Vec<(i32, i32, i32, i32)> {
+    let (sx, sz) = crate::stonehenge::centre(seed);
+    let (jx, jz) = crate::terrain::jungle_centre(seed);
+    let (h, c) = (STONEHENGE_REACH + STONEHENGE_TREE_MARGIN, JUNGLE_CLEARING_RADIUS);
+    vec![(sx - h, sz - h, sx + h, sz + h), (jx - c, jz - c, jx + c, jz + c)]
 }

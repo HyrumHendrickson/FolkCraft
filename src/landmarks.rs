@@ -756,6 +756,17 @@ pub enum RainbowState {
 }
 
 /// Everything the player has added to the world's land and sky.
+/// Ground the seed builds on, as (min x, min z, max x, max z) squares. It is derived from the seed, not saved, so it never makes two
+/// `Landmarks` differ.
+#[derive(Clone, Debug, Default)]
+pub struct Reserved(pub Vec<(i32, i32, i32, i32)>);
+
+impl PartialEq for Reserved {
+    fn eq(&self, _: &Reserved) -> bool {
+        true
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Landmarks {
     pub lakes: Vec<Lake>,
@@ -792,10 +803,15 @@ pub struct Landmarks {
     pub graveyard_rested: bool,
     /// Whether the player has beaten the Wild Hunt, and so won the game (they may play on).
     pub game_won: bool,
-    /// Whether the Phoenix of the Skylands' volcano is dead: it does not return, and the fire tornadoes have stopped for good.
+    /// Whether the Phoenix of the Skylands' volcano is dead: the fire tornadoes have stopped, until it rises again
+    /// (`PHOENIX_RESPAWN_SECONDS` after its death), and how many seconds it has been dead.
     pub phoenix_slain: bool,
+    pub phoenix_dead_for: f32,
     /// The squares of the Horizen's caves the player has entered, in the order they entered them.
     pub caves_visited: Vec<(i32, i32)>,
+    /// Ground that is already taken by what the seed builds (Stonehenge, the jungle clearing and its temple) as (min x, min z, max x, max z):
+    /// a new lake, mountain, well, graveyard or castle keeps clear of it. Set by `World`, not saved.
+    pub reserved: Reserved,
 }
 
 impl Landmarks {
@@ -826,6 +842,19 @@ impl Landmarks {
             && !self.ruined_castle.map_or(false, |c| overlaps(c.bounds(margin)))
             && !self.well.map_or(false, |w| overlaps(w.bounds(margin)))
             && !self.graveyard.map_or(false, |g| overlaps(g.bounds(margin)))
+            && !self.reserved.0.iter().any(|&(x0, z0, x1, z1)| overlaps((x0 - margin, z0 - margin, x1 + margin, z1 + margin)))
+    }
+
+    /// Whether a lake at `lake` would stand clear of everything else in the world. (Only the body of the lake counts, not the channel
+    /// that joins it to the player.)
+    pub fn has_room_for_lake(&self, lake: &Lake) -> bool {
+        let body = Lake { from: (lake.x, lake.z), ..*lake };
+        self.has_room(body.bounds(LANDMARK_BLEND + 4), false)
+    }
+
+    /// The same for a mountain.
+    pub fn has_room_for_mountain(&self, mountain: &Mountain) -> bool {
+        self.has_room(mountain.bounds(LANDMARK_BLEND + 4), false)
     }
 
     /// Whether a grand castle at `castle` would stand clear of every lake and mountain (and of the ground they

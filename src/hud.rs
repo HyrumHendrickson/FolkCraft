@@ -748,6 +748,46 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
                 }
             }
         }
+        ItemKind::SnakeFang => {
+            // A curved, pointed fang: wide at the root (upper left), curving down to a sharp tip.
+            let pts = [p(0.30, 0.22), p(0.42, 0.40), p(0.54, 0.58), p(0.62, 0.78)];
+            for (i, w) in pts.windows(2).enumerate() {
+                rod(w[0], w[1], (11.0 - 3.6 * i as f32) * u, color);
+            }
+            tri(pts[3] - vec2(3.0 * u, 0.0), pts[3] + vec2(3.0 * u, 0.0), p(0.64, 0.88), color);
+            ball(pts[0].x, pts[0].y, 6.0 * u, darken(color, 0.78));
+            draw_line(pts[0].x + 2.0 * u, pts[0].y + 2.0 * u, pts[2].x + 1.0 * u, pts[2].y, 1.2, WHITE);
+            ball(p(0.70, 0.60).x, p(0.70, 0.60).y, 1.8 * u, Color::new(0.50, 0.85, 0.22, 1.0));
+        }
+        ItemKind::PoisonArrow => {
+            // An arrow with a green, fang-shaped head and a drip of poison.
+            let (tail, tip) = (p(0.20, 0.80), p(0.76, 0.24));
+            rod(tail, tip, 3.0 * u, ItemKind::Arrow.color());
+            let dir = (tip - tail).normalize();
+            let perp = vec2(-dir.y, dir.x);
+            let head = Color::new(0.42, 0.80, 0.20, 1.0);
+            tri(tip + dir * 10.0 * u, tip + perp * 5.0 * u - dir * 3.0 * u, tip - perp * 5.0 * u - dir * 3.0 * u, head);
+            tri(tip + dir * 6.0 * u, tip + perp * 2.2 * u - dir * 2.0 * u, tip - perp * 2.2 * u - dir * 2.0 * u, ItemKind::SnakeFang.color());
+            ball(tip.x + 4.0 * u, tip.y + 9.0 * u, 2.0 * u, head);
+            for k in 0..3 {
+                let at = tail + dir * (k as f32 * 4.5 * u);
+                for s in [-1.0_f32, 1.0] {
+                    tri(at, at + perp * s * 6.0 * u - dir * 2.0 * u, at + dir * 6.0 * u + perp * s * 1.0, ItemKind::Feather.color());
+                }
+            }
+        }
+        ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => {
+            // A dry, dark strip of meat, twisted a little, flecked with white salt.
+            let (a, b) = (p(0.20, 0.70), p(0.80, 0.34));
+            rod(a, b, 13.0 * u, darken(color, 0.55));
+            rod(a, b, 10.0 * u, color);
+            let mid = (a + b) / 2.0;
+            draw_line(a.x + 4.0 * u, a.y - 2.0 * u, mid.x, mid.y - 3.0 * u, 1.6, lighten(color, 0.22));
+            draw_line(mid.x + 2.0 * u, mid.y + 3.0 * u, b.x - 4.0 * u, b.y + 3.0 * u, 1.4, darken(color, 0.6));
+            for (fx, fy) in [(0.34, 0.56), (0.46, 0.52), (0.58, 0.44), (0.68, 0.42), (0.40, 0.62)] {
+                draw_circle(p(fx, fy).x, p(fx, fy).y, 1.1 * u, Color::new(0.97, 0.94, 0.92, 1.0));
+            }
+        }
         ItemKind::LeatherBackpack => {
             // A pack seen from the front: a rounded body, a flap with a buckle, a front pocket and two straps.
             let (tl, br) = (p(0.24, 0.20), p(0.76, 0.84));

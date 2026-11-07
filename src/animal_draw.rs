@@ -221,6 +221,22 @@ fn quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     })
 }
 
+/// A parrot: the quail's plump shape in bright colours: a red body and head, blue and yellow wings, a green back and a hooked pale beak.
+fn parrot_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let mut parts = bird_parts(a, time, night, Plumage {
+        feathers: col(0.85, 0.12, 0.12),
+        speckle: col(0.15, 0.45, 0.85),
+        belly: col(0.95, 0.80, 0.15),
+        face: col(0.92, 0.88, 0.80),
+        beak: col(0.95, 0.90, 0.78),
+        legs: col(0.45, 0.45, 0.48),
+    });
+    // A green saddle and a long blue tail streak over the back of the bird.
+    parts.push(tilted((-0.02, 0.32, 0.0), (0.12, 0.015, 0.09), col(0.12, 0.65, 0.22), 0.0));
+    parts.push(tilted((-0.27, 0.25, 0.0), (0.10, 0.02, 0.04), col(0.15, 0.40, 0.90), 0.3));
+    parts
+}
+
 /// A crow: the quail's shape in glossy black, with a dark beak and legs.
 fn crow_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     bird_parts(a, time, night, Plumage {
@@ -237,14 +253,35 @@ fn crow_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
 /// with dark seams between them, a polished ridge along the back, rivets, a brass beak and dark iron feet, and a gleam of
 /// light sweeps over it as the seconds pass, which is what makes steel look like steel when every box is flat-coloured.
 fn iron_quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    metal_bird_parts(a, time, night, false)
+}
+
+/// The Bronze Parrot: the same armoured bird, but in warm brown-gold bronze with a green verdigris seam and a red crest.
+fn bronze_parrot_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    metal_bird_parts(a, time, night, true)
+}
+
+/// A quail of metal, steel (`bronze` false) or bronze.
+fn metal_bird_parts(a: &Animal, time: f32, night: bool, bronze: bool) -> Vec<Piece> {
     const SCALE: f32 = 5.5;
-    let mut parts = bird_parts(a, time, night, Plumage {
-        feathers: col(0.45, 0.49, 0.56),
-        speckle: col(0.25, 0.28, 0.34),
-        belly: col(0.67, 0.71, 0.78),
-        face: col(0.19, 0.21, 0.26),
-        beak: col(0.86, 0.64, 0.24),
-        legs: col(0.30, 0.31, 0.35),
+    let mut parts = bird_parts(a, time, night, if bronze {
+        Plumage {
+            feathers: col(0.62, 0.42, 0.18),
+            speckle: col(0.40, 0.26, 0.10),
+            belly: col(0.80, 0.60, 0.28),
+            face: col(0.30, 0.20, 0.10),
+            beak: col(0.12, 0.10, 0.08),
+            legs: col(0.36, 0.26, 0.12),
+        }
+    } else {
+        Plumage {
+            feathers: col(0.45, 0.49, 0.56),
+            speckle: col(0.25, 0.28, 0.34),
+            belly: col(0.67, 0.71, 0.78),
+            face: col(0.19, 0.21, 0.26),
+            beak: col(0.86, 0.64, 0.24),
+            legs: col(0.30, 0.31, 0.35),
+        }
     });
     for ((off, half, _), _) in parts.iter_mut() {
         *off = (off.0 * SCALE, off.1 * SCALE, off.2 * SCALE);
@@ -266,9 +303,13 @@ fn iron_quail_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     let body = |x: f32, y: f32, z: f32| (x * cl - y * sl, 1.155 + x * sl + y * cl, z);
     let polish = |x: f32, y: f32| {
         let k = 0.55 + 0.45 * gleam(x, y);
-        col(0.78 + 0.2 * k, 0.82 + 0.17 * k, 0.88 + 0.12 * k)
+        if bronze {
+            col(0.80 + 0.2 * k, 0.55 + 0.25 * k, 0.22 + 0.2 * k)
+        } else {
+            col(0.78 + 0.2 * k, 0.82 + 0.17 * k, 0.88 + 0.12 * k)
+        }
     };
-    let seam = col(0.10, 0.11, 0.14);
+    let seam = if bronze { col(0.16, 0.34, 0.26) } else { col(0.10, 0.11, 0.14) };
     // A polished ridge along the back, with a rivet on either side of it every few steps.
     parts.push(tilted(body(0.05, 0.55, 0.0), (0.72, 0.045, 0.30), polish(0.0, 0.6), lean));
     for i in 0..6 {
@@ -362,7 +403,7 @@ struct Plumage {
 
 fn bird_parts(a: &Animal, time: f32, night: bool, p: Plumage) -> Vec<Piece> {
     let Plumage { feathers, speckle, belly, face, beak, legs } = p;
-    let flying = a.mode == Mode::Fly || (a.kind == AnimalKind::IronQuail && a.is_airborne()) || a.kind.flies_always();
+    let flying = a.mode == Mode::Fly || (a.kind.is_metal_bird() && a.is_airborne()) || a.kind.flies_always();
     let moving = is_moving(a);
     let breath = (time * 5.0 + a.phase).sin() * 0.006;
     let peck = if a.mode == Mode::Idle { (time * 1.3 + a.phase * 2.0).sin().powi(11).max(0.0) } else { 0.0 };
@@ -614,7 +655,7 @@ fn orangutan_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     let moving = is_moving(a);
     let swing = (a.phase * 1.6).sin() * 0.55 * moving;
     let breath = (time * 1.6 + a.phase).sin() * 0.02;
-    let smash = a.action == BossAction::Smash;
+    let smash = matches!(a.action, BossAction::Smash | BossAction::Leap);
     let throwing = a.action == BossAction::RockThrow;
     let mut parts = vec![
         tilted((0.0, 1.45 + breath, 0.0), (0.62, 0.72 + breath, 0.55), fur, -0.22),
@@ -706,37 +747,57 @@ fn jaguar_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     parts
 }
 
-/// A flying snake: a long green body of banded segments that ripples through the air (each segment a little behind the one before it),
-/// a flat head with red eyes and a flickering tongue, and two small leaf-green wings that beat at the neck.
+/// A flying snake's head: a broad flat head with red eyes and a flickering tongue, and two leaf-green wings beating at the neck. The
+/// head is at the animal's position, half the snake's height up; the long body is drawn by `draw_snake_body`.
 fn flying_snake_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
-    const SEGMENTS: usize = 16;
-    let moving = 1.0 + is_moving(a);
     let mut parts = Vec::new();
-    for i in 0..SEGMENTS {
-        let t = i as f32;
-        let along = t / SEGMENTS as f32;
-        let wave = time * 7.0 * moving + t * 0.75 + a.phase;
-        let (side, rise) = (wave.sin() * 0.34 * (0.35 + along), (wave * 0.8 + 1.0).sin() * 0.14 * (0.4 + along));
-        let size = 0.15 * (1.0 - 0.65 * along) + 0.03;
-        let band = match i % 4 {
-            0 => col(0.16, 0.52, 0.20),
-            1 => col(0.62, 0.74, 0.18),
-            2 => col(0.12, 0.40, 0.17),
-            _ => col(0.78, 0.20, 0.14),
-        };
-        parts.push(block((-0.26 * t, 0.2 + rise, side), (0.16, size, size), band));
-    }
-    let head = (0.22, 0.22, 0.0);
-    parts.push(block(head, (0.20, 0.09, 0.13), col(0.14, 0.46, 0.18)));
-    parts.push(block((head.0 + 0.17, head.1 - 0.02, 0.0), (0.06, 0.05, 0.08), col(0.70, 0.78, 0.22)));
+    let y = SNAKE_HEIGHT * 0.5;
+    parts.push(block((0.0, y, 0.0), (0.46, 0.20, 0.32), col(0.14, 0.46, 0.18)));
+    parts.push(block((0.40, y - 0.05, 0.0), (0.16, 0.12, 0.20), col(0.70, 0.78, 0.22)));
     let flick = (time * 14.0).sin().max(0.0);
-    parts.push(block((head.0 + 0.30 + 0.06 * flick, head.1 - 0.03, 0.0), (0.08 + 0.05 * flick, 0.008, 0.012), col(0.88, 0.12, 0.16)));
-    eyes(&mut parts, (head.0 + 0.08, head.1 + 0.04, 0.0), 0.13, 0.03, night, col(0.80, 0.10, 0.12));
+    parts.push(block((0.62 + 0.14 * flick, y - 0.06, 0.0), (0.18 + 0.10 * flick, 0.02, 0.03), col(0.88, 0.12, 0.16)));
+    eyes(&mut parts, (0.18, y + 0.10, 0.0), 0.32, 0.07, night, col(0.80, 0.10, 0.12));
     let flap = (time * 24.0 + a.phase).sin();
     for side in [-1.0, 1.0] {
-        parts.push(tilted((-0.18, 0.28 + 0.12 * flap, 0.28 * side), (0.20, 0.012, 0.24), col(0.30, 0.78, 0.34), -flap * 0.4 * side));
+        parts.push(tilted((-0.42, y + 0.18 + 0.20 * flap, 0.62 * side), (0.44, 0.02, 0.52), col(0.30, 0.78, 0.34), -flap * 0.4 * side));
     }
     parts
+}
+
+/// The colours of the bands along a snake's body.
+fn snake_band(i: usize) -> Color {
+    match i % 4 {
+        0 => col(0.16, 0.52, 0.20),
+        1 => col(0.62, 0.74, 0.18),
+        2 => col(0.12, 0.40, 0.17),
+        _ => col(0.78, 0.20, 0.14),
+    }
+}
+
+/// The boxes of a flying snake's body, tail first or head first as `(centre, half extents, yaw, pitch, colour)`: one at each point of
+/// `Animal::body_points`, turned along the line to the next, thickest at the neck and thinning to the tail, rippling from side to side.
+pub fn snake_body_boxes(a: &Animal, time: f32) -> Vec<(Vec3, Vec3, f32, f32, Color)> {
+    let pts = a.body_points();
+    let n = pts.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 1..n {
+        let along = i as f32 / n as f32;
+        let dir = pts[i - 1] - pts[i];
+        let flat = vec2(dir.x, dir.z).length();
+        let (yaw, pitch) = if dir.length() < 1e-4 { (a.heading, 0.0) } else { (dir.z.atan2(dir.x), dir.y.atan2(flat.max(1e-4))) };
+        let thick = 0.34 * (1.0 - 0.7 * along) + 0.06;
+        let ripple = (time * 4.0 + i as f32 * 0.45 + a.phase).sin() * 0.22 * (0.3 + along.min(0.7));
+        let side = vec3(-yaw.sin(), 0.0, yaw.cos()) * ripple;
+        out.push((pts[i] + side, vec3(SNAKE_SEGMENT_SPACING * 0.8, thick, thick), yaw, pitch, snake_band(i)));
+    }
+    out
+}
+
+/// Draw a flying snake's body (its head is drawn as an ordinary model).
+fn draw_snake_body(a: &Animal, time: f32) {
+    for (centre, half, yaw, pitch, color) in snake_body_boxes(a, time) {
+        draw_box_tilted(centre, half, yaw, pitch, color);
+    }
 }
 
 /// A spirit archer: the Wild Hunt's archer model, made pale blue-white and see-through.
@@ -928,6 +989,8 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::Quail => quail_parts(a, time, night),
             AnimalKind::Crow => crow_parts(a, time, night),
             AnimalKind::IronQuail => iron_quail_parts(a, time, night),
+            AnimalKind::BronzeParrot => bronze_parrot_parts(a, time, night),
+            AnimalKind::Parrot => parrot_parts(a, time, night),
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
@@ -945,6 +1008,17 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             _ => continue,
         };
         let (s, c) = a.heading.sin_cos();
+        if a.kind == AnimalKind::FlyingSnake {
+            draw_snake_body(a, time);
+        }
+        if a.poisoned > 0.0 {
+            // A few green drops rise off a poisoned creature.
+            for k in 0..3 {
+                let t = (time * 0.9 + k as f32 * 0.33 + a.phase).fract();
+                let at = a.pos + vec3((k as f32 - 1.0) * a.kind.half_width() * 0.6, a.kind.height() * (0.7 + 0.5 * t), 0.0);
+                draw_box(at, Vec3::splat(0.07), t * 6.0, Color::new(0.45, 0.85, 0.20, 0.9 * (1.0 - t)));
+            }
+        }
         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
             // Turn the model to face the heading: local x runs along it.
             let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
@@ -1025,6 +1099,8 @@ mod tests {
             AnimalKind::Quail => quail_parts(a, time, night),
             AnimalKind::Crow => crow_parts(a, time, night),
             AnimalKind::IronQuail => iron_quail_parts(a, time, night),
+            AnimalKind::BronzeParrot => bronze_parrot_parts(a, time, night),
+            AnimalKind::Parrot => parrot_parts(a, time, night),
             AnimalKind::Bear => bear_parts(a, time, night),
             AnimalKind::Rabbit => rabbit_parts(a, time, night),
             AnimalKind::Moose => moose_parts(a, time, night),
