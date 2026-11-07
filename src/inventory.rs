@@ -181,11 +181,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_backpack_adds_two_rows_that_can_only_be_taken_away_when_what_is_in_them_fits_elsewhere() {
+    fn a_backpack_adds_three_rows_that_can_only_be_taken_away_when_what_is_in_them_fits_elsewhere() {
         let mut inv = Inventory::new();
         assert_eq!(inv.slots.len(), INVENTORY_SLOTS);
         inv.add_pack_rows();
-        assert_eq!(inv.slots.len(), INVENTORY_SLOTS + 2 * HOTBAR_SLOTS);
+        assert_eq!(inv.slots.len(), INVENTORY_SLOTS + BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS);
+        assert_eq!((INVENTORY_SLOTS, BACKPACK_EXTRA_ROWS), (45, 3), "one more row of slots, and one more row from the pack");
         assert!(inv.has_pack_rows());
         // The new slots take items like any other.
         assert_eq!(inv.add(ItemKind::Stone, MAX_STACK * (INVENTORY_SLOTS + BACKPACK_SLOTS) as u32), 0);

@@ -54,6 +54,8 @@ pub enum Block {
     Snow,
     /// The pile of gold at the end of the rainbow. Taking it by hand drops gold and ends the rainbow for good.
     GoldPile,
+    /// A white chunk of stardust a falling star leaves on a Skylands island; it fades after `STARDUST_PILE_SECONDS`.
+    StardustPile,
     /// The grey stone of the castle on a lake's island: a solid cube that cannot be broken or made.
     CastleStone,
     /// A shut gate or door of the grand castle, of dark iron-bound wood: a solid cube that cannot be broken or made. The
@@ -266,6 +268,12 @@ const GOLD_PILE_PARTS: &[Part] = &[
     part([0.20, 0.22, 0.20], [0.80, 0.42, 0.80], (0.95, 0.73, 0.20)),
     part([0.34, 0.42, 0.34], [0.66, 0.58, 0.66], (1.00, 0.85, 0.36)),
 ];
+/// The same three heaps as the gold pile, in white.
+const STARDUST_PILE_PARTS: &[Part] = &[
+    part([0.08, 0.0, 0.10], [0.92, 0.22, 0.90], (0.80, 0.82, 0.90)),
+    part([0.20, 0.22, 0.20], [0.80, 0.42, 0.80], (0.90, 0.92, 0.97)),
+    part([0.34, 0.42, 0.34], [0.66, 0.58, 0.66], (1.00, 1.00, 1.00)),
+];
 /// A low headstone on a footing, with a rounded-looking top block.
 const GRAVESTONE_PARTS: &[Part] = &[
     part([0.18, 0.0, 0.34], [0.82, 0.10, 0.66], (0.46, 0.46, 0.48)),
@@ -403,7 +411,7 @@ const CHARCOAL_PARTS: &[Part] = &[
 
 impl Block {
     /// Blocks that are saved in `World::placed`: the ones a player can create, and the rainbow's pile of gold.
-    pub const PLAYER_MADE: [Block; 16] = [
+    pub const PLAYER_MADE: [Block; 17] = [
         Block::PlacedLog,
         Block::PlacedPebble,
         Block::PlacedStone,
@@ -416,6 +424,7 @@ impl Block {
         Block::ForgeCharged,
         Block::ForgeLit,
         Block::GoldPile,
+        Block::StardustPile,
         Block::GoldBoulder,
         Block::AncientAltar,
         Block::AltarLoadstone,
@@ -443,6 +452,7 @@ impl Block {
                 | Block::ClayForge
                 | Block::ForgeCharged
                 | Block::GoldPile
+                | Block::StardustPile
                 | Block::ArmorStand
                 | Block::PinkSalt
                 | Block::Bones
@@ -498,6 +508,7 @@ impl Block {
             Block::Boulder => BREAK_SECONDS_BOULDER,
             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
+            Block::StardustPile => BREAK_SECONDS_STARDUST,
             Block::ArmorStand => BREAK_SECONDS_ARMOR,
             Block::PinkSalt => BREAK_SECONDS_SALT,
             Block::Bones => BREAK_SECONDS_PLACED,
@@ -634,6 +645,7 @@ impl Block {
             Block::ForgeCharged => FORGE_CHARGED_PARTS,
             Block::ForgeLit => FORGE_LIT_PARTS,
             Block::GoldPile => GOLD_PILE_PARTS,
+            Block::StardustPile => STARDUST_PILE_PARTS,
             Block::Gravestone => GRAVESTONE_PARTS,
             Block::ArmorStand => ARMOR_STAND_PARTS,
             Block::BridgePost => BRIDGE_POST_PARTS,
@@ -701,6 +713,7 @@ impl Block {
             Block::ForgeCharged => Some("forge_charged"),
             Block::ForgeLit => Some("forge_lit"),
             Block::GoldPile => Some("gold_pile"),
+            Block::StardustPile => Some("stardust_pile"),
             Block::GoldBoulder => Some("gold_boulder"),
             Block::AncientAltar => Some("ancient_altar"),
             Block::AltarLoadstone => Some("altar_loadstone"),
@@ -738,7 +751,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 52] = [
+    const ALL: [Block; 53] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -766,6 +779,7 @@ mod tests {
         Block::ForgeLit,
         Block::Snow,
         Block::GoldPile,
+        Block::StardustPile,
         Block::CastleStone,
         Block::CastleDoor,
         Block::Gravestone,

@@ -56,18 +56,25 @@ pub struct Pot {
     pub water: bool,
     /// The raw meat in the pot (not yet a stew).
     pub meat: Option<ItemKind>,
-    /// Seconds of heat the stew still needs; counts down only while the pot holds water and meat.
+    /// Seconds of heat the stew still needs; counts down only while the pot holds water and meat, and the fire burns.
     pub left: f32,
+    /// Servings already taken from the finished stew (the pot holds `STEW_SERVINGS`).
+    pub served: u32,
 }
 
 impl Pot {
     pub fn empty() -> Pot {
-        Pot { water: false, meat: None, left: STEW_SECONDS }
+        Pot { water: false, meat: None, left: STEW_SECONDS, served: 0 }
     }
 
     /// The stew, once it is done.
     pub fn stew(&self) -> Option<ItemKind> {
         if self.left <= 0.0 { self.meat.and_then(ItemKind::stewed) } else { None }
+    }
+
+    /// Servings of finished stew still in the pot (0 until it is done).
+    pub fn servings_left(&self) -> u32 {
+        if self.stew().is_some() { STEW_SERVINGS.saturating_sub(self.served) } else { 0 }
     }
 
     /// How far along the stew is, from 0 to 1.
@@ -394,9 +401,13 @@ impl World {
         self
     }
 
-    /// Put saved pots back on their fires. A pot without a burning fire under it is discarded.
+    /// Put saved pots back on their fires (or on the charcoal or ash of a fire that has gone out). A pot with neither under it is discarded.
     pub fn with_pots(mut self, pots: HashMap<Pos, Pot>) -> Self {
-        self.pots = pots.into_iter().filter(|(pos, _)| self.fires.contains_key(pos)).collect();
+        // A pot stands on a fire, or on the charcoal or ash a fire left.
+        self.pots = pots
+            .into_iter()
+            .filter(|(pos, _)| self.fires.contains_key(pos) || matches!(self.placed.get(pos), Some(Block::Fire | Block::Embers | Block::Charcoal | Block::Ash)))
+            .collect();
         self
     }
 
@@ -598,6 +609,13 @@ impl World {
             self.removed.insert((x, y, z));
         }
         self.fires.remove(&(x, y, z));
+        // A pot standing on the block falls off it: the pot, and any raw meat in it, are released (finished stew is spilled).
+        if let Some(pot) = self.pots.remove(&(x, y, z)) {
+            self.released.push(((x, y, z), ItemKind::TinPot));
+            if let (Some(meat), None) = (pot.meat, pot.stew()) {
+                self.released.push(((x, y, z), meat));
+            }
+        }
         self.dirty_neighbours(key, lx, lz);
     }
 
@@ -721,20 +739,34 @@ impl World {
         }
     }
 
-    /// Ladle the finished stew out of the pot at `pos`; the pot stays on the fire, empty.
+    /// Fill a bowl from the finished stew in the pot at `pos`: one serving comes out. After the last of its `STEW_SERVINGS` the pot is
+    /// empty again (and stays where it is).
     pub fn take_stew(&mut self, pos: Pos) -> Option<ItemKind> {
-        let stew = self.pots.get(&pos)?.stew()?;
-        self.pots.insert(pos, Pot::empty());
+        let pot = self.pots.get_mut(&pos)?;
+        let stew = pot.stew()?;
+        pot.served += 1;
+        if pot.served >= STEW_SERVINGS {
+            *pot = Pot::empty();
+        }
         Some(stew)
     }
 
-    /// Take the pot off the fire at `pos`, spilling any water. False if there is none or it still holds meat.
-    pub fn take_pot(&mut self, pos: Pos) -> bool {
-        if self.pots.get(&pos).map_or(true, |p| p.meat.is_some()) {
-            return false;
+    /// Whether the pot at `pos` may be lifted off: it is empty, or its fire is out and the meat in it is still raw (the meat comes back).
+    /// Stew that is done is never spilled: serve it first.
+    pub fn can_take_pot(&self, pos: Pos) -> bool {
+        match self.pots.get(&pos) {
+            None => false,
+            Some(pot) => pot.meat.is_none() || (!self.fires.contains_key(&pos) && pot.stew().is_none()),
         }
-        self.pots.remove(&pos);
-        true
+    }
+
+    /// Take the pot off its fire (or the charcoal or ash under it) at `pos`, spilling any water. Returns the raw meat that was in it,
+    /// if any: `None` if the pot may not be lifted (see `can_take_pot`), `Some(None)` for a pot taken with nothing to give back.
+    pub fn take_pot(&mut self, pos: Pos) -> Option<Option<ItemKind>> {
+        if !self.can_take_pot(pos) {
+            return None;
+        }
+        self.pots.remove(&pos).map(|pot| pot.meat)
     }
 
     /// Whether the ray from `origin` along `dir` reaches water within `reach` blocks, before anything solid.
@@ -798,12 +830,7 @@ impl World {
         for pos in &out {
             self.fires.remove(pos);
             self.glow.remove(pos);
-            if let Some(pot) = self.pots.remove(pos) {
-                self.released.push((*pos, ItemKind::TinPot));
-                if let Some(meat) = pot.meat {
-                    self.released.push((*pos, pot.stew().unwrap_or(meat)));
-                }
-            }
+            // A pot on the fire stays where it is, on the charcoal or ash the fire leaves; its stew simply stops cooking.
             if let Some(piece) = self.cooking.remove(pos) {
                 self.released.extend(piece.released().into_iter().map(|item| (*pos, item)));
             }
@@ -1394,13 +1421,19 @@ mod tests {
         assert!(w.fill_pot(fire) && !w.fill_pot(fire));
         assert!(!w.add_to_pot(fire, ItemKind::Leather) && !w.add_to_pot(fire, ItemKind::CookedVenison), "only raw meat");
         assert!(w.add_to_pot(fire, ItemKind::Venison) && !w.add_to_pot(fire, ItemKind::Poultry));
-        assert!(!w.take_pot(fire), "not while it holds meat");
+        assert_eq!(w.take_pot(fire), None, "not while it holds meat on a burning fire");
         w.update_fires(STEW_SECONDS - 1.0);
         assert_eq!(w.take_stew(fire), None);
         w.update_fires(1.0);
-        assert_eq!(w.take_stew(fire), Some(ItemKind::VenisonStew));
+        assert_eq!(w.pots[&fire].servings_left(), STEW_SERVINGS);
+        for n in 1..=STEW_SERVINGS {
+            assert_eq!(w.take_stew(fire), Some(ItemKind::VenisonStew), "serving {n}");
+            assert_eq!(w.pots[&fire].servings_left(), STEW_SERVINGS - n);
+        }
+        assert_eq!(w.take_stew(fire), None, "the pot is empty after four servings");
         assert_eq!(w.pots[&fire], Pot::empty(), "the pot stays, empty");
-        assert!(w.take_pot(fire) && w.pots.is_empty() && !w.take_pot(fire));
+        assert_eq!(w.take_pot(fire), Some(None));
+        assert!(w.pots.is_empty() && w.take_pot(fire).is_none());
         // Without water nothing happens, however long the fire burns.
         assert!(w.place_pot(fire));
         w.update_fires(30.0);
@@ -1420,7 +1453,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fire_that_burns_out_drops_the_pot_and_what_was_in_it() {
+    fn a_fire_that_burns_out_leaves_the_pot_sitting_on_the_charcoal() {
         let (mut w, fire) = burning_world();
         w.place_pot(fire);
         w.fill_pot(fire);
@@ -1428,29 +1461,40 @@ mod tests {
         w.update_fires(10.0);
         w.fires.insert(fire, 0.5);
         w.update_fires(1.0);
-        let mut got = w.drain_released();
-        got.sort_by_key(|&(_, k)| k.id());
-        assert_eq!(got, vec![(fire, ItemKind::Poultry), (fire, ItemKind::TinPot)], "unfinished meat comes back raw");
-        assert!(w.pots.is_empty());
+        assert!(w.drain_released().is_empty(), "nothing is dropped");
+        assert_eq!(w.block_at(fire.0, fire.1, fire.2), Block::Charcoal, "the log is charcoal now");
+        assert_eq!(w.pots[&fire].meat, Some(ItemKind::Poultry), "the pot sits on the charcoal with the meat still in it");
+        let before = w.pots[&fire].left;
+        w.update_fires(30.0);
+        assert_eq!(w.pots[&fire].left, before, "and nothing cooks without a fire");
+        assert_eq!(w.take_pot(fire), Some(Some(ItemKind::Poultry)), "the raw meat comes back with the pot");
+        // Burning charcoal that goes out leaves ash, and a finished stew sits on it, to be served but not spilled.
         let (mut w, fire) = burning_world();
         w.place_pot(fire);
         w.fill_pot(fire);
         w.add_to_pot(fire, ItemKind::MooseMeat);
         w.update_fires(STEW_SECONDS);
         w.update_fires(60.0);
-        let mut got = w.drain_released();
-        got.sort_by_key(|&(_, k)| k.id());
-        assert_eq!(got, vec![(fire, ItemKind::MooseStew), (fire, ItemKind::TinPot)], "a finished stew comes back as stew");
+        assert!(w.drain_released().is_empty() && w.pots.contains_key(&fire));
+        assert!(!w.can_take_pot(fire), "finished stew is served first");
+        assert_eq!(w.take_stew(fire), Some(ItemKind::MooseStew));
+        // Breaking the block under a pot knocks the pot off.
+        let (mut w, fire) = burning_world();
+        w.place_pot(fire);
+        w.break_block(fire.0, fire.1, fire.2);
+        assert_eq!(w.drain_released(), vec![(fire, ItemKind::TinPot)]);
+        assert!(w.pots.is_empty());
     }
 
     #[test]
-    fn saved_pots_without_a_fire_are_discarded() {
+    fn saved_pots_with_nothing_under_them_are_discarded() {
         let fires = HashMap::from([((1, 6, 1), 30.0)]);
-        let pot = Pot { water: true, meat: Some(ItemKind::Venison), left: 3.0 };
-        let w = World::with_edits(1, HashSet::new(), HashMap::from([((1, 6, 1), Block::Fire)]), fires)
-            .with_pots(HashMap::from([((1, 6, 1), pot), ((9, 6, 9), pot)]));
-        assert_eq!(w.pots.len(), 1);
-        assert!(w.pots.contains_key(&(1, 6, 1)));
+        let pot = Pot { water: true, meat: Some(ItemKind::Venison), left: 3.0, served: 0 };
+        let placed = HashMap::from([((1, 6, 1), Block::Fire), ((2, 6, 2), Block::Ash)]);
+        let w = World::with_edits(1, HashSet::new(), placed, fires)
+            .with_pots(HashMap::from([((1, 6, 1), pot), ((2, 6, 2), pot), ((9, 6, 9), pot)]));
+        assert_eq!(w.pots.len(), 2, "on a fire, or on the ash of one");
+        assert!(w.pots.contains_key(&(1, 6, 1)) && w.pots.contains_key(&(2, 6, 2)));
     }
 
     #[test]

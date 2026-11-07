@@ -221,7 +221,7 @@ fn world_lines(world: &World, prefix: &str, out: &mut String) {
         out.push_str(&format!("{prefix}berry {} {} {}\n", x, y, z));
     }
     for (&(x, y, z), block) in &world.placed {
-        if let Some(id) = block.id() {
+        if let Some(id) = block.id().filter(|_| *block != crate::block::Block::StardustPile) {
             out.push_str(&format!("{prefix}place {} {} {} {}\n", x, y, z, id));
         }
     }
@@ -232,7 +232,7 @@ fn world_lines(world: &World, prefix: &str, out: &mut String) {
         out.push_str(&format!("{prefix}glow {} {} {} {}\n", x, y, z, secs));
     }
     for (&(x, y, z), pot) in &world.pots {
-        out.push_str(&format!("{prefix}pot {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left));
+        out.push_str(&format!("{prefix}pot {} {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left, pot.served));
     }
     for (&(x, y, z), meat) in &world.cooking {
         out.push_str(&format!("{prefix}cook {} {} {} {} {}\n", x, y, z, meat.raw.id(), meat.left));
@@ -330,7 +330,7 @@ pub fn serialize_save_full(
         out.push_str(&format!("item {} {} {} {}\n", item.kind.id(), item.pos.x, item.pos.y, item.pos.z));
     }
     for (&(x, y, z), block) in &world.placed {
-        if let Some(id) = block.id() {
+        if let Some(id) = block.id().filter(|_| *block != crate::block::Block::StardustPile) {
             out.push_str(&format!("place {} {} {} {}\n", x, y, z, id));
         }
     }
@@ -341,7 +341,7 @@ pub fn serialize_save_full(
         out.push_str(&format!("glow {} {} {} {}\n", x, y, z, secs));
     }
     for (&(x, y, z), pot) in &world.pots {
-        out.push_str(&format!("pot {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left));
+        out.push_str(&format!("pot {} {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left, pot.served));
     }
     for (&(x, y, z), meat) in &world.cooking {
         out.push_str(&format!("cook {} {} {} {} {}\n", x, y, z, meat.raw.id(), meat.left));
@@ -597,9 +597,11 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 });
                 let meat = t.next().and_then(|s| if s == "-" { Some(None) } else { ItemKind::from_id(s).filter(|k| k.stewed().is_some()).map(Some) });
                 let left = t.next().and_then(|s| s.parse::<f32>().ok());
+                // Servings already taken (older saves have none).
+                let served = t.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0).min(STEW_SERVINGS);
                 if let (3, Some(water), Some(meat), Some(left)) = (v.len(), water, meat, left) {
                     if left.is_finite() && left >= 0.0 {
-                        data.pots.insert((v[0], v[1], v[2]), Pot { water, meat, left: left.min(STEW_SECONDS) });
+                        data.pots.insert((v[0], v[1], v[2]), Pot { water, meat, left: left.min(STEW_SECONDS), served });
                     }
                 }
             }
@@ -1017,7 +1019,7 @@ mod tests {
         let mut world = World::new(9, HashSet::new());
         world.placed.insert((1, 6, 1), Block::Fire);
         world.fires.insert((1, 6, 1), 40.0);
-        world.pots.insert((1, 6, 1), Pot { water: true, meat: Some(ItemKind::RabbitMeat), left: 4.5 });
+        world.pots.insert((1, 6, 1), Pot { water: true, meat: Some(ItemKind::RabbitMeat), left: 4.5, served: 0 });
         let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         assert!(text.contains("pot 1 6 1 1 rabbit_meat 4.5"));
         let data = parse_save(&text);

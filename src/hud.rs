@@ -392,8 +392,8 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
         }
         ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew
         | ItemKind::RedBerryStew | ItemKind::PurpleBerryStew => {
-            // A tin bowl brimming with stew: a rim, the surface with lumps, a few bubbles and steam.
-            let bowl = ItemKind::TinPot.color();
+            // A wooden bowl brimming with stew: a rim, the surface with lumps, a few bubbles and steam.
+            let bowl = ItemKind::WoodenBowl.color();
             draw_circle(cx, cy + 5.0 * u, r.w * 0.32, outline);
             draw_circle(cx, cy + 5.0 * u, r.w * 0.30, darken(bowl, 0.74));
             draw_circle(cx - 1.0, cy + 3.5 * u, r.w * 0.27, bowl);
@@ -747,6 +747,21 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
                     tri(at, at + perp * s * 6.5 * u - dir * 2.0 * u, at + dir * 6.5 * u + perp * s * 1.0, ItemKind::PhoenixFeather.color());
                 }
             }
+        }
+        ItemKind::WoodenBowl => {
+            // An empty wooden bowl seen from the side: a dark inside, a rim and a rounded body.
+            draw_circle(cx, cy + 3.0 * u, r.w * 0.32, outline);
+            draw_circle(cx, cy + 3.0 * u, r.w * 0.30, darken(color, 0.74));
+            draw_circle(cx - 1.0, cy + 1.5 * u, r.w * 0.27, color);
+            draw_circle(cx, cy - 1.0 * u, r.w * 0.24, darken(color, 0.55));
+            draw_circle(cx - 1.5, cy - 2.0 * u, r.w * 0.20, darken(color, 0.40));
+        }
+        ItemKind::Stardust => {
+            // A small heap of glittering white grains.
+            for (dx, dy, k) in [(-0.14, 0.10, 4.5), (0.12, 0.12, 4.0), (0.0, -0.04, 5.5), (-0.04, 0.20, 3.5), (0.16, -0.10, 2.5)] {
+                ball(cx + dx * r.w, cy + dy * r.h, k * u, color);
+            }
+            draw_circle(cx - 0.02 * r.w, cy - 0.08 * r.h, 1.4 * u, WHITE);
         }
         ItemKind::SnakeFang => {
             // A curved, pointed fang: wide at the root (upper left), curving down to a sharp tip.

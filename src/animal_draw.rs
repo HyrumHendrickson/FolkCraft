@@ -1011,14 +1011,6 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
         if a.kind == AnimalKind::FlyingSnake {
             draw_snake_body(a, time);
         }
-        if a.poisoned > 0.0 {
-            // A few green drops rise off a poisoned creature.
-            for k in 0..3 {
-                let t = (time * 0.9 + k as f32 * 0.33 + a.phase).fract();
-                let at = a.pos + vec3((k as f32 - 1.0) * a.kind.half_width() * 0.6, a.kind.height() * (0.7 + 0.5 * t), 0.0);
-                draw_box(at, Vec3::splat(0.07), t * 6.0, Color::new(0.45, 0.85, 0.20, 0.9 * (1.0 - t)));
-            }
-        }
         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
             // Turn the model to face the heading: local x runs along it.
             let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);

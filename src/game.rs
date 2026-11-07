@@ -246,6 +246,8 @@ pub struct Game {
     pub bursts: Vec<ShownBurst>,
     /// The falling stars of the Skylands' nights, and the seconds since the last one began to fall.
     pub falling_stars: Vec<FallingStar>,
+    /// The chunks of stardust lying on the island, with the seconds each has left (`STARDUST_PILE_SECONDS`).
+    pub stardust: Vec<(Pos, f32)>,
     star_timer: f32,
     pub acid: Vec<AcidCell>,
     /// Seconds the player has stood in acid water since it last burned them.
@@ -376,6 +378,7 @@ impl Game {
             projectiles: Vec::new(),
             bursts: Vec::new(),
             falling_stars: Vec::new(),
+            stardust: Vec::new(),
             star_timer: 0.0,
             acid: Vec::new(),
             acid_burn: 0.0,
@@ -504,6 +507,8 @@ impl Game {
         );
         if self.rabbit_foot_in_hotbar() {
             if matches!(block, Block::PlacedStone | Block::WetStone)
+                && !self.owns(ItemKind::Loadstone)
+                && !self.owns(ItemKind::Compass)
                 && self.rng.chance(RABBIT_FOOT_LOADSTONE_CHANCE)
             {
                 if let Some(stone) = drops.iter_mut().find(|kind| **kind == ItemKind::Stone) {
@@ -517,6 +522,13 @@ impl Game {
                     }
                 }
             }
+        }
+        // A player who already has a Peep Stone finds no more.
+        if self.owns(ItemKind::PeepStone) {
+            drops.retain(|k| *k != ItemKind::PeepStone);
+        }
+        if block == Block::StardustPile {
+            self.stardust.retain(|&(pos, _)| pos != (x, y, z));
         }
         if block == Block::WetClay && self.held_item() == Some(ItemKind::TinPan) {
             // Panning the clay: one time in twenty a gold turns up, one in five with a rabbit's foot in the hotbar.
@@ -534,6 +546,10 @@ impl Game {
             // A player who already has a silver key is given a gold bar instead of another (see `key_or_gold`).
             if *kind == ItemKind::SilverKey {
                 *kind = self.key_or_gold();
+            }
+            // Likewise the Philosopher's Stone: a player who has one is given gold instead.
+            if *kind == ItemKind::PhilosophersStone && self.owns(ItemKind::PhilosophersStone) {
+                *kind = ItemKind::Gold;
             }
             self.items.push(DroppedItem::spawn(*kind, (x, y, z), &mut self.rng));
         }
@@ -725,12 +741,14 @@ impl Game {
             }
             ItemKind::PurpleBerryStew => {
                 self.inventory.take_from_slot(self.selected);
+                self.return_bowl();
                 self.hurt_player(PURPLE_BERRY_STEW_DAMAGE, "The purple berry stew hurts you");
                 self.set_night(true);
                 true
             }
             ItemKind::RedBerryStew => {
                 self.inventory.take_from_slot(self.selected);
+                self.return_bowl();
                 self.health = (self.health + BERRY_STEW_HEAL).min(MAX_HEALTH);
                 self.set_night(false);
                 true
@@ -739,10 +757,19 @@ impl Game {
                 let Some(heal) = kind.heal_amount() else { return false };
                 if self.health >= MAX_HEALTH { return false; }
                 self.inventory.take_from_slot(self.selected);
+                if kind.stew_base().is_some() {
+                    self.return_bowl();
+                }
                 self.health = (self.health + heal).min(MAX_HEALTH);
                 true
             }
         }
+    }
+
+    /// Drinking a stew leaves its empty bowl: into the inventory, or at the player's feet if that is full.
+    fn return_bowl(&mut self) {
+        let p = self.player.pos;
+        self.give_or_drop(ItemKind::WoodenBowl, (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32));
     }
 
     /// Turn the world to night or to day, behind a blackout (see `Blackout`). Nothing happens if it already is.
@@ -1003,17 +1030,12 @@ impl Game {
         if hit.block == Block::ClayForge {
             return held == Some(ItemKind::Charcoal);
         }
-        if !hit.block.is_burning() {
-            return false;
-        }
         let pos = (hit.x, hit.y, hit.z);
-        if let Some(pot) = self.world.pots.get(&pos) {
-            return match held {
-                Some(k) if k.is_fuel() => true,
-                Some(ItemKind::WaterJar) => !pot.water,
-                Some(k) if k.stewed().is_some() => pot.meat.is_none(),
-                _ => pot.stew().is_some() || pot.meat.is_none(),
-            };
+        if !hit.block.is_burning() {
+            return self.cold_pot_at(hit) && self.can_use_pot(pos, held);
+        }
+        if self.world.pots.contains_key(&pos) {
+            return self.can_use_pot(pos, held);
         }
         if held == Some(ItemKind::TinPot) && self.world.can_place_pot(pos) {
             return true;
@@ -1021,6 +1043,25 @@ impl Game {
         let ready = self.world.cooking.get(&pos).map_or(false, |c| c.done());
         let free = !self.world.cooking.contains_key(&pos);
         ready || held.map_or(false, |k| k.is_fuel()) || (free && held.map_or(false, |k| self.can_lay_held(pos, k)))
+    }
+
+    /// Whether `hit` is the charcoal or ash a pot is sitting on after its fire went out.
+    fn cold_pot_at(&self, hit: &Hit) -> bool {
+        matches!(hit.block, Block::Charcoal | Block::Ash) && self.world.pots.contains_key(&(hit.x, hit.y, hit.z))
+    }
+
+    /// Whether right click with `held` would do something to the pot at `pos`: fuel feeds a burning fire, a water jar fills an
+    /// empty pot, raw meat goes into a watered one, a bowl takes a serving of finished stew, and anything else lifts off a pot that
+    /// may be lifted (`World::can_take_pot`).
+    fn can_use_pot(&self, pos: Pos, held: Option<ItemKind>) -> bool {
+        let Some(pot) = self.world.pots.get(&pos) else { return false };
+        match held {
+            Some(k) if k.is_fuel() => self.world.fires.contains_key(&pos),
+            Some(ItemKind::WaterJar) => !pot.water,
+            Some(k) if k.stewed().is_some() => pot.meat.is_none(),
+            Some(ItemKind::WoodenBowl) => pot.stew().is_some(),
+            _ => self.world.can_take_pot(pos),
+        }
     }
 
     /// Right click on a burning block at `pos`: take a finished piece off it, otherwise feed it
@@ -1092,9 +1133,10 @@ impl Game {
         }
     }
 
-    /// Right click on a fire that has a pot on it: a jar of water fills the pot, raw meat goes into the watered
-    /// pot (it becomes a stew after `STEW_SECONDS`), and anything else (an empty hand) takes the finished stew out,
-    /// or the pot off the fire when it holds no meat. Returns whether anything happened.
+    /// Right click on a pot (on a fire, or on the charcoal or ash left by one): a jar of water fills the pot, raw meat goes into the
+    /// watered pot (it becomes a stew after `STEW_SECONDS` of fire), an empty Wooden Bowl takes one serving of the finished stew (the
+    /// pot holds `STEW_SERVINGS`), and anything else lifts off a pot that may be lifted (see `World::take_pot`). Returns whether
+    /// anything happened.
     fn use_on_pot(&mut self, pos: Pos, pot: Pot) -> bool {
         match self.held_item() {
             Some(ItemKind::WaterJar) => {
@@ -1120,17 +1162,32 @@ impl Game {
                 }
                 false
             }
+            Some(ItemKind::WoodenBowl) => {
+                let Some(stew) = self.world.take_stew(pos) else {
+                    self.toasts.push("The stew is not ready".to_string());
+                    return false;
+                };
+                self.inventory.take_from_slot(self.selected);
+                self.give_or_drop(stew, pos);
+                let left = self.world.pots.get(&pos).map_or(0, |p| p.servings_left());
+                self.toasts.push(format!("Filled the bowl with {} ({left} serving{} left)", stew.name().to_lowercase(), if left == 1 { "" } else { "s" }));
+                true
+            }
             _ => {
-                if let Some(stew) = self.world.take_stew(pos) {
-                    self.give_or_drop(stew, pos);
-                    self.toasts.push(format!("Ladled out the {}", stew.name().to_lowercase()));
-                    true
-                } else if self.world.take_pot(pos) {
-                    self.give_or_drop(ItemKind::TinPot, pos);
-                    self.toasts.push("Took the pot off the fire".to_string());
-                    true
-                } else {
-                    false
+                if pot.stew().is_some() {
+                    self.toasts.push("Ladle the stew out with a wooden bowl first".to_string());
+                    return false;
+                }
+                match self.world.take_pot(pos) {
+                    Some(meat) => {
+                        self.give_or_drop(ItemKind::TinPot, pos);
+                        if let Some(meat) = meat {
+                            self.give_or_drop(meat, pos);
+                        }
+                        self.toasts.push("Took the pot off".to_string());
+                        true
+                    }
+                    None => false,
                 }
             }
         }
@@ -1165,6 +1222,14 @@ impl Game {
         }
         if hit.block.is_burning() {
             return self.use_on_fire((hit.x, hit.y, hit.z));
+        }
+        if self.cold_pot_at(hit) {
+            let pos = (hit.x, hit.y, hit.z);
+            if self.held_item().map_or(false, |k| k.is_fuel()) {
+                return false;
+            }
+            let pot = self.world.pots[&pos];
+            return self.use_on_pot(pos, pot);
         }
         if matches!(hit.block, Block::TowerDoor | Block::TowerDoorTop) {
             return self.try_unlock((hit.x, hit.y, hit.z));
@@ -1303,10 +1368,19 @@ impl Game {
     /// The falling stars of the Skylands' nights: one begins to fall every `FALLING_STAR_INTERVAL` seconds, bound for an island the player can
     /// see (`stars::pick_landing`), and each is dropped from the list once its flash has faded.
     fn update_falling_stars(&mut self, dt: f32) {
+        let mut lands = Vec::new();
         for star in &mut self.falling_stars {
             star.age += dt;
+            if star.landed() && !star.pile_made {
+                star.pile_made = true;
+                lands.push(star.to);
+            }
+        }
+        for at in lands {
+            self.leave_stardust(at);
         }
         self.falling_stars.retain(|s| !s.done());
+        self.update_stardust(dt);
         if !self.in_skylands() || !self.world.night {
             self.star_timer = 0.0;
             return;
@@ -1323,25 +1397,39 @@ impl Game {
         }
     }
 
-    /// Poison does its work: each poisoned animal loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds until its poison
-    /// runs out (`POISON_SECONDS` after the arrow that gave it). An animal it kills drops its loot as usual.
-    fn update_poison(&mut self, dt: f32) {
-        let mut dead = Vec::new();
-        for (i, a) in self.animals.iter_mut().enumerate() {
-            if a.poisoned <= 0.0 {
-                continue;
-            }
-            a.poisoned = (a.poisoned - dt).max(0.0);
-            a.poison_tick += dt;
-            if a.poison_tick >= POISON_INTERVAL {
-                a.poison_tick -= POISON_INTERVAL;
-                if a.damage(POISON_DAMAGE) {
-                    dead.push(i);
-                }
+    /// A star has landed at `at`: it leaves a white chunk of stardust in the cell there, if that is a loaded cell with nothing solid in it.
+    fn leave_stardust(&mut self, at: Vec3) {
+        let pos = (at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32);
+        if !self.in_skylands() || !self.world.chunks.contains_key(&World::chunk_of(pos.0, pos.2)) {
+            return;
+        }
+        if !matches!(self.world.block_at(pos.0, pos.1, pos.2), Block::Air | Block::Grass | Block::Flower) {
+            return;
+        }
+        self.world.set_block(pos.0, pos.1, pos.2, Block::StardustPile);
+        self.stardust.push((pos, STARDUST_PILE_SECONDS));
+    }
+
+    /// Run down the stardust's time; a chunk that is still there when it runs out fades away.
+    fn update_stardust(&mut self, dt: f32) {
+        for (_, left) in &mut self.stardust {
+            *left -= dt;
+        }
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.stardust).into_iter().partition(|&(_, left)| left <= 0.0);
+        self.stardust = kept;
+        for ((x, y, z), _) in gone {
+            if self.world.block_at(x, y, z) == Block::StardustPile {
+                self.world.break_block(x, y, z);
             }
         }
-        if !dead.is_empty() {
-            self.remove_dead(dead);
+    }
+
+    /// Remove every chunk of stardust at once (the player is leaving the Skylands).
+    fn clear_stardust(&mut self) {
+        for ((x, y, z), _) in std::mem::take(&mut self.stardust) {
+            if self.world.block_at(x, y, z) == Block::StardustPile {
+                self.world.break_block(x, y, z);
+            }
         }
     }
 
@@ -1402,6 +1490,11 @@ impl Game {
                 return;
             }
         }
+    }
+
+    /// Whether the player has `kind`: in the inventory, or lying on the ground.
+    pub fn owns(&self, kind: ItemKind) -> bool {
+        self.inventory.count(kind) > 0 || self.items.iter().any(|i| i.kind == kind)
     }
 
     /// Whether the player has a silver key: in the inventory, or lying on the ground.
@@ -1554,13 +1647,14 @@ impl Game {
     }
 
     /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a poison arrow
-    /// first when there is one in the inventory (it is used up), then a Phoenix Arrow (never used up), then an ordinary arrow.
+    /// first when there is one in the inventory, then a Phoenix Arrow (never used up), then an ordinary arrow. Poison arrows are
+    /// picked up again from the ground when they miss, like ordinary arrows.
     fn shoot(&mut self, launcher: ItemKind, eye: Vec3, dir: Vec3) -> bool {
         let Some(ammo) = launcher.ammo() else { return false };
         if self.held_item() != Some(launcher) || self.attack_cooldown > 0.0 {
             return false;
         }
-        // Poison arrows go first (and are used up); then a Phoenix Arrow if there is one; then the ordinary arrows.
+        // Poison arrows go first; then a Phoenix Arrow if there is one; then the ordinary arrows.
         if launcher == ItemKind::Bow && self.inventory.remove(ItemKind::PoisonArrow, 1) {
             self.attack_cooldown = BOW_COOLDOWN;
             self.arrows.push(Arrow::fired_poison(eye, dir));
@@ -1594,16 +1688,12 @@ impl Game {
     /// pebble), to be picked up and used again.
     pub fn update_arrows(&mut self, dt: f32) {
         let mut hits = Vec::new();
-        let mut poisoned = Vec::new();
         let mut landed = Vec::new();
         let (world, animals) = (&self.world, &self.animals);
         self.arrows.retain_mut(|arrow| match arrow.update(world, animals, dt) {
             Fate::InFlight => true,
             Fate::HitAnimal(i) => {
                 hits.push((i, arrow.damage()));
-                if arrow.poisons() {
-                    poisoned.push(i);
-                }
                 false
             }
             Fate::HitBlock | Fate::Expired => {
@@ -1614,9 +1704,6 @@ impl Game {
                 false
             }
         });
-        for i in poisoned {
-            self.animals[i].poison();
-        }
         self.hurt_animals(&hits);
         for (kind, spot) in landed {
             self.items.push(DroppedItem::at_rest(kind, spot));
@@ -1929,7 +2016,7 @@ impl Game {
         self.world.set_block(x, y, z, Block::PlacedLog);
         self.world.ignite((x, y, z), HORIZEN_CAMP_FIRE_SECONDS);
         let berries = if self.rng.chance(50) { ItemKind::Berries } else { ItemKind::PurpleBerries };
-        self.world.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0 });
+        self.world.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0, served: 0 });
         self.toasts.push("You come on a camp: a fire, and a pot of stew still hot.".to_string());
         true
     }
@@ -2068,6 +2155,13 @@ impl Game {
     /// with a loadstone on it, built where it lands. If there is no room there it flies on a little and tries again.
     fn land_crows_at_altars(&mut self) {
         let due: Vec<usize> = (0..self.animals.len()).filter(|&i| self.animals[i].kind == AnimalKind::Crow && self.animals[i].is_landing() && self.animals[i].west_followed >= CROW_ALTAR_WEST_BLOCKS).collect();
+        // A player who already has a loadstone or a compass is led to no more altars: the crows just land.
+        if !due.is_empty() && (self.owns(ItemKind::Loadstone) || self.owns(ItemKind::Compass)) {
+            for i in due {
+                self.animals[i].west_followed = 0.0;
+            }
+            return;
+        }
         for i in due {
             let at = self.animals[i].pos;
             match self.altar_site_near(at.x.floor() as i32, at.z.floor() as i32) {
@@ -2450,6 +2544,7 @@ pub fn enter_skylands(&mut self) {
         }
         let seed = self.info.seed;
         let from = self.world.dimension;
+        self.clear_stardust();
         let mut other = self.take_parked(target).unwrap_or_else(|| Away::fresh(target, seed));
         let (yaw, pitch) = (self.player.yaw, self.player.pitch);
         std::mem::swap(&mut self.world, &mut other.world);
@@ -2682,7 +2777,6 @@ pub fn enter_skylands(&mut self) {
     /// of the player and any bear; a bear only ever reacts to the player.
     pub fn update_animals(&mut self, dt: f32) {
         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
-        self.update_poison(dt);
         self.update_phoenix_respawn(dt);
         self.update_falling_stars(dt);
         match self.world.dimension {
@@ -5355,15 +5449,23 @@ mod tests {
         g.select_slot(5);
         assert!(!g.can_use_fire(&fire) && !g.use_held(&fire), "not done yet");
         g.burn_fires(1.1);
-        assert!(g.can_use_fire(&fire) && g.use_held(&fire));
-        assert_eq!(g.inventory.count(ItemKind::VenisonStew), 1);
+        assert!(!g.can_use_fire(&fire) && !g.use_held(&fire), "an empty hand cannot take the stew: it needs a bowl");
+        hold(&mut g, ItemKind::WoodenBowl, 4);
+        for n in 1..=STEW_SERVINGS {
+            assert!(g.can_use_fire(&fire) && g.use_held(&fire), "serving {n}");
+            assert_eq!(g.inventory.count(ItemKind::VenisonStew), n);
+            assert_eq!(g.inventory.count(ItemKind::WoodenBowl), STEW_SERVINGS - n, "each serving takes a bowl");
+            assert_eq!(g.world.pots[&pos].servings_left(), if n < STEW_SERVINGS { STEW_SERVINGS - n } else { 0 });
+        }
         assert_eq!(g.world.pots[&pos], crate::world::Pot::empty());
+        g.inventory.remove(ItemKind::VenisonStew, STEW_SERVINGS - 1);
 
         // The stew heals twice what cooked venison does.
         g.health = 1;
         hold(&mut g, ItemKind::VenisonStew, 1);
         assert!(g.eat_held());
         assert_eq!(g.health, 1 + 2 * VENISON_HEAL);
+        assert_eq!(g.inventory.count(ItemKind::WoodenBowl), 1, "drinking the stew gives the empty bowl back");
         // The empty pot comes off the fire again.
         g.select_slot(5);
         assert!(g.use_held(&fire));
@@ -5389,7 +5491,7 @@ mod tests {
             hold(&mut g, raw, 1);
             assert!(g.use_held(&embers), "{raw:?}");
             g.burn_fires(STEW_SECONDS + 0.1);
-            g.select_slot(5);
+            hold(&mut g, ItemKind::WoodenBowl, 1);
             assert!(g.use_held(&embers));
             assert_eq!(g.inventory.count(stew), 1, "{raw:?} makes {stew:?}");
         }
@@ -5398,7 +5500,7 @@ mod tests {
         hold(&mut g, ItemKind::TinPot, 1);
         assert!(!g.can_use_fire(&forge_hit(pos, Block::ForgeLit)) && !g.use_held(&forge_hit(pos, Block::ForgeLit)));
         assert_eq!(g.inventory.count(ItemKind::TinPot), 1);
-        // A burnt-out fire drops the pot and its meat.
+        // A burnt-out fire leaves the pot sitting on the charcoal, with its meat in it.
         let mut g = game(170);
         let pos = lit_fire(&mut g);
         let fire = fire_hit(pos);
@@ -5408,9 +5510,16 @@ mod tests {
         }
         g.world.fires.insert(pos, 1.0);
         g.burn_fires(2.0);
-        let mut kinds: Vec<_> = g.items.iter().map(|i| i.kind).collect();
-        kinds.sort_by_key(|k| k.id());
-        assert_eq!(kinds, vec![ItemKind::Poultry, ItemKind::TinPot]);
+        assert!(g.items.is_empty(), "nothing falls");
+        assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Charcoal);
+        assert_eq!(g.world.pots[&pos].meat, Some(ItemKind::Poultry));
+        // The cold pot can still be worked: the raw meat and the pot come back to the hand that lifts it off.
+        let cold = forge_hit(pos, Block::Charcoal);
+        g.select_slot(8);
+        g.inventory.slots[8] = None;
+        assert!(g.can_use_fire(&cold) && g.use_held(&cold));
+        assert_eq!((g.inventory.count(ItemKind::TinPot), g.inventory.count(ItemKind::Poultry)), (1, 1));
+        assert!(g.world.pots.is_empty());
     }
 
     #[test]
@@ -7858,8 +7967,8 @@ mod crow_pan_relic_and_mother_tests {
             assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Fire, "on a burning log");
             assert!(g.world.fires.contains_key(&pos));
             assert!(pot.water && matches!(pot.stew(), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)), "stew, ready");
-            // Right click with an empty hand ladles it out.
-            g.inventory.slots[0] = None;
+            // Right click with a wooden bowl ladles a serving out.
+            g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::WoodenBowl, count: 1 });
             g.select_slot(0);
             let hit = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Fire, prev: (pos.0, pos.1 + 1, pos.2) };
             assert!(g.use_held(&hit));
@@ -7906,7 +8015,7 @@ mod crow_pan_relic_and_mother_tests {
     // --- Backpack, pipes, ghosts, Stonehenge, the Mother in the air ---
 
     #[test]
-    fn a_leather_backpack_is_made_of_leather_and_cord_and_gives_two_rows_only_while_worn() {
+    fn a_leather_backpack_is_made_of_leather_and_cord_and_gives_three_rows_only_while_worn() {
         let r = crate::recipe::recipe_for(ItemKind::LeatherBackpack);
         assert_eq!(r.inputs, &[(ItemKind::Leather, 4), (ItemKind::LeatherCord, 2)]);
         let mut g = game();
@@ -7914,7 +8023,7 @@ mod crow_pan_relic_and_mother_tests {
         hold(&mut g, ItemKind::LeatherBackpack);
         assert!(g.wear_held());
         assert_eq!(g.worn, Some(ItemKind::LeatherBackpack));
-        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS + 2 * HOTBAR_SLOTS, "two more rows");
+        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS + BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS, "three more rows");
         // The extra slots hold things; they survive a save only together with the pack.
         g.inventory.slots[INVENTORY_SLOTS + 4] = Some(ItemStack { kind: ItemKind::Gold, count: 5 });
         let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
@@ -9995,14 +10104,19 @@ mod upgrade_tests {
     }
 
     #[test]
-    fn snake_fangs_make_poison_arrows_that_the_bow_shoots_first_and_that_poison_what_they_hit() {
-        let r = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::PoisonArrow).expect("a recipe");
-        assert_eq!(r.inputs, &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)]);
+    fn a_snake_fang_and_25_arrows_make_25_poison_arrows_that_the_bow_shoots_first_and_that_hit_twice_as_hard() {
+        let recipes: Vec<_> = crate::recipe::RECIPES.iter().filter(|r| r.output == ItemKind::PoisonArrow).collect();
+        assert_eq!(recipes.len(), 1, "the old recipe is gone");
+        let r = recipes[0];
+        assert_eq!(r.inputs, &[(ItemKind::Arrow, 25), (ItemKind::SnakeFang, 1)]);
+        assert_eq!(r.output_count, 25);
         let mut inv = crate::inventory::Inventory::new();
-        for (k, n) in [(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)] {
-            inv.add(k, n);
-        }
-        assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::PoisonArrow) == 1);
+        inv.add(ItemKind::Arrow, 24);
+        inv.add(ItemKind::SnakeFang, 1);
+        assert!(!crate::recipe::craft(&mut inv, r), "24 arrows are not enough");
+        inv.add(ItemKind::Arrow, 1);
+        assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::PoisonArrow) == 25);
+        assert_eq!((inv.count(ItemKind::Arrow), inv.count(ItemKind::SnakeFang)), (0, 0));
 
         let mut g = game();
         open_sky(&mut g);
@@ -10014,7 +10128,7 @@ mod upgrade_tests {
         for n in 0..2 {
             g.attack_cooldown = 0.0;
             assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
-            assert_eq!(g.inventory.count(ItemKind::PoisonArrow), 1 - n, "each poison arrow is used up");
+            assert_eq!(g.inventory.count(ItemKind::PoisonArrow), 1 - n, "each shot takes one from the quiver");
             assert_eq!((g.inventory.count(ItemKind::PhoenixArrow), g.inventory.count(ItemKind::Arrow)), (1, 3), "poison goes before the phoenix arrow and the plain ones");
         }
         assert!(g.arrows.iter().all(|a| a.kind == ItemKind::PoisonArrow));
@@ -10026,7 +10140,7 @@ mod upgrade_tests {
         assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
         assert_eq!(g.arrows.last().map(|a| a.kind), Some(ItemKind::Arrow), "then the plain arrows");
 
-        // A poison arrow poisons a bear (tough enough to live through it), which then loses a point a second until the poison runs out.
+        // A poison arrow does double damage to a bear (tough enough to live through it) and is used up by the hit.
         let mut g = game();
         open_sky(&mut g);
         let mut bear = Animal::new(AnimalKind::Bear, g.player.pos + vec3(5.0, 0.0, 0.0), &mut Rng::new(1));
@@ -10037,18 +10151,17 @@ mod upgrade_tests {
         for _ in 0..30 {
             g.update_arrows(DT);
         }
-        let after_blow = g.animals[0].health;
-        assert_eq!(after_blow, 100 - ARROW_DAMAGE, "the blow");
-        assert!(g.animals[0].poisoned > 0.0, "and it is poisoned");
+        assert_eq!(g.animals[0].health, 100 - 2 * ARROW_DAMAGE, "double the blow, and no poison afterwards");
         assert!(g.arrows.is_empty() && g.items.iter().all(|i| i.kind != ItemKind::PoisonArrow), "the arrow is spent");
-        g.player.pos = vec3(-100.0, g.player.pos.y, -100.0);
-        for _ in 0..(POISON_SECONDS * 60.0) as i32 + 60 {
-            g.update_poison(DT);
+        // One that misses lands on the ground as a poison arrow, to be picked up again.
+        let mut g = game();
+        open_sky(&mut g);
+        g.arrows.push(Arrow::fired_poison(g.player.pos + vec3(0.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0)));
+        for _ in 0..120 {
+            g.update_arrows(DT);
         }
-        let lost = after_blow - g.animals[0].health;
-        let full = (POISON_SECONDS / POISON_INTERVAL) as i32 * POISON_DAMAGE;
-        assert!((full - POISON_DAMAGE..=full).contains(&lost), "poison took {lost} points over its course (about {full})");
-        assert_eq!(g.animals[0].poisoned, 0.0);
+        assert!(g.arrows.is_empty());
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::PoisonArrow).count(), 1, "the miss lies on the ground");
     }
 
     fn hold_bow(g: &mut Game) {
@@ -10406,4 +10519,228 @@ fn clear_site<T: Copy>(first: f32, make: impl Fn(f32) -> T, shift: impl Fn(T, i3
         }
     }
     None
+}
+
+#[cfg(test)]
+mod duplicate_find_and_stardust_tests {
+    use super::*;
+    use crate::animal::Mode;
+    use crate::chunk::idx;
+    use crate::item::ItemStack;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut g = Game::from_save(info, SaveData::new(), 5);
+        g.world.stream_chunks(g.player.pos);
+        g
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind, count: u32) {
+        g.inventory.slots[0] = Some(ItemStack { kind, count });
+        g.select_slot(0);
+    }
+
+    /// Break a placed pebble or stone at a fixed spot `times` times with a Rabbit Foot in the hotbar; every kind that dropped.
+    fn break_many(g: &mut Game, block: Block, times: usize) -> Vec<ItemKind> {
+        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::RabbitFoot, count: 1 });
+        g.select_slot(2);
+        let mut found = Vec::new();
+        for _ in 0..times {
+            g.world.set_block(3, 6, 3, block);
+            found.extend(g.mine(3, 6, 3));
+        }
+        found
+    }
+
+    #[test]
+    fn no_more_than_eight_spirit_archers_follow_and_the_king_refuses_more_until_some_are_gone() {
+        assert_eq!(MAX_SPIRIT_ARCHERS, 8);
+        let (kx, kz) = horizen::king_centre(1);
+        let mut g = game();
+        g.travel_to(Dimension::Horizen);
+        g.player.pos = vec3(kx as f32 + 0.5, GROUND_TOP as f32 + 1.01, (kz + KING_WALL_HALF - 6) as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.animals.clear();
+        assert!(g.in_king_castle());
+        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Gold, count: 100 });
+        assert_eq!(g.give_gold_to_king(8), 8);
+        assert_eq!(g.spirit_count(), 8);
+        assert_eq!(g.give_gold_to_king(1), 0, "a ninth is refused");
+        assert_eq!(g.inventory.count(ItemKind::Gold), 100 - 8 * GOLD_PER_SPIRIT, "and costs nothing");
+        assert_eq!(g.ghost_text.as_ref().map(|t| t.0.as_str()), Some(ghosts::KING_FULL));
+        let gone = g.animals.iter().position(|a| a.kind == AnimalKind::SpiritArcher).unwrap();
+        g.animals.remove(gone);
+        assert_eq!(g.give_gold_to_king(1), 1, "he sells again once one is gone");
+        assert_eq!(g.give_gold_to_king(2), 0, "but never past eight");
+    }
+
+    #[test]
+    fn pipes_by_day_call_parrots_as_they_call_quail() {
+        let mut g = game();
+        g.world.night = false;
+        for chunk in g.world.chunks.values_mut() {
+            for y in GROUND_TOP + 1..WORLD_HEIGHT {
+                for z in 0..CHUNK_SIZE {
+                    for x in 0..CHUNK_SIZE {
+                        chunk.blocks[idx(x, y, z)] = Block::Air;
+                    }
+                }
+            }
+        }
+        let p = g.player.pos;
+        for (kind, dx) in [(AnimalKind::Parrot, 30.0), (AnimalKind::Quail, -30.0)] {
+            g.animals.push(Animal::new(kind, vec3(p.x + dx, GROUND_TOP as f32 + 1.0, p.z), &mut Rng::new(4)));
+        }
+        hold(&mut g, ItemKind::MusicalPipes, 1);
+        assert!(g.play_pipes());
+        assert!(g.animals.iter().all(|a| a.lure_target.is_some()), "both are called");
+        // Follow just these two (index 0 the parrot, 1 the quail; other wildlife may wander in) until each has landed and stands calm.
+        let mut landed: [Option<f32>; 2] = [None, None];
+        for frame in 0..25 * 60 {
+            g.update_animals(1.0 / 60.0);
+            for i in 0..2 {
+                let a = &g.animals[i];
+                if landed[i].is_none() && a.calm > 0.0 {
+                    landed[i] = Some(vec2(a.pos.x - p.x, a.pos.z - p.z).length());
+                }
+            }
+            if landed.iter().all(Option::is_some) {
+                break;
+            }
+            assert!(frame < 25 * 60 - 1, "they did not come: {landed:?}");
+        }
+        for (i, gap) in landed.iter().enumerate() {
+            assert!(gap.unwrap() < PIPES_LAND_MAX + 1.0, "bird {i} landed {} blocks from the player", gap.unwrap());
+        }
+    }
+
+    #[test]
+    fn a_stardust_chunk_is_left_where_a_star_lands_fades_in_thirty_seconds_and_drops_stardust_if_broken_first() {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.world.stream_chunks(g.player.pos);
+        g.world.night = true;
+        let seed = g.info.seed;
+        let spawn = skylands::spawn_point();
+        let (x, z) = (spawn.x.floor() as i32 + 2, spawn.z.floor() as i32);
+        let island = skylands::island_at(seed, x, z).expect("on the first island");
+        let y = island.surface_y(x, z) + 1;
+        let cell = (x, y, z);
+        g.world.stream_chunks(vec3(x as f32, y as f32, z as f32));
+        // The first falling star lands: a pile appears at its landing place and stays.
+        let mut star = crate::stars::FallingStar::new(vec3(x as f32, y as f32 + 100.0, z as f32), vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5));
+        star.age = FALLING_STAR_FALL_SECONDS;
+        g.falling_stars.push(star);
+        g.update_falling_stars(0.0);
+        assert_eq!(g.world.block_at(x, y, z), Block::StardustPile);
+        assert_eq!(g.stardust.len(), 1);
+        g.update_falling_stars(STARDUST_PILE_SECONDS - 1.0);
+        assert_eq!(g.world.block_at(x, y, z), Block::StardustPile, "still there after 29 seconds");
+        // Broken in time, it drops stardust that can be picked up.
+        let drops = g.mine(cell.0, cell.1, cell.2);
+        assert_eq!(drops, vec![ItemKind::Stardust; STARDUST_DROP as usize]);
+        assert!(g.stardust.is_empty());
+        assert_eq!(g.world.block_at(x, y, z), Block::Air);
+        // Left alone, a pile fades after thirty seconds and drops nothing.
+        g.items.clear();
+        g.leave_stardust(vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5));
+        assert_eq!(g.world.block_at(x, y, z), Block::StardustPile);
+        g.update_stardust(STARDUST_PILE_SECONDS + 0.1);
+        assert_eq!(g.world.block_at(x, y, z), Block::Air);
+        assert!(g.items.is_empty() && g.stardust.is_empty());
+        // Leaving the Skylands clears any pile at once; piles are never written to a save.
+        g.leave_stardust(vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5));
+        assert!(!g.save_text().contains("stardust_pile"));
+        g.travel_to(Dimension::Overworld);
+        g.travel_to(Dimension::Skylands);
+        assert_eq!(g.world.block_at(x, y, z), Block::Air);
+    }
+
+    #[test]
+    fn a_player_who_already_has_the_philosophers_stone_is_given_gold_for_another() {
+        let mut g = game();
+        g.world.chunks.get_mut(&(0, 0)).unwrap().blocks[idx(3, 6, 3)] = Block::StonePlinth;
+        g.inventory.slots[0] = None;
+        let drops = g.mine(3, 6, 3);
+        assert_eq!(drops, vec![ItemKind::PhilosophersStone], "the first one is the stone");
+        let mut g = game();
+        g.inventory.add(ItemKind::PhilosophersStone, 1);
+        g.world.chunks.get_mut(&(0, 0)).unwrap().blocks[idx(3, 6, 3)] = Block::StonePlinth;
+        g.select_slot(8);
+        let drops = g.mine(3, 6, 3);
+        assert_eq!(drops, vec![ItemKind::Gold], "a second becomes gold");
+    }
+
+    #[test]
+    fn no_peep_stones_are_found_by_a_player_who_already_has_one() {
+        let mut g = game();
+        let found = break_many(&mut g, Block::PlacedPebble, 300);
+        assert!(found.contains(&ItemKind::PeepStone), "without one they turn up");
+        let mut g = game();
+        g.inventory.add(ItemKind::PeepStone, 1);
+        let found = break_many(&mut g, Block::PlacedPebble, 300);
+        assert!(!found.contains(&ItemKind::PeepStone), "with one none do");
+        assert!(found.contains(&ItemKind::Pebble), "the pebbles themselves still drop");
+    }
+
+    #[test]
+    fn no_loadstones_are_found_by_a_player_who_has_a_loadstone_or_a_compass() {
+        let mut g = game();
+        let found = break_many(&mut g, Block::PlacedStone, 300);
+        assert!(found.contains(&ItemKind::Loadstone), "without either they turn up");
+        for owned in [ItemKind::Loadstone, ItemKind::Compass] {
+            let mut g = game();
+            g.inventory.add(owned, 1);
+            let found = break_many(&mut g, Block::PlacedStone, 300);
+            assert!(!found.contains(&ItemKind::Loadstone), "{owned:?}: none turn up");
+            assert!(found.contains(&ItemKind::Stone), "the stones themselves still drop");
+        }
+    }
+
+    #[test]
+    fn a_crow_the_player_has_followed_builds_no_altar_for_a_player_with_a_loadstone_or_compass() {
+        fn due_crow(g: &mut Game) {
+            let at = g.player.pos + vec3(6.0, 0.0, 0.0);
+            let mut crow = Animal::new(AnimalKind::Crow, at, &mut Rng::new(2));
+            crow.mode = Mode::Fly;
+            crow.timer = 0.0;
+            crow.west_followed = CROW_ALTAR_WEST_BLOCKS;
+            g.animals.push(crow);
+        }
+        let altars = |g: &Game| g.world.placed.values().filter(|b| **b == Block::AltarLoadstone).count();
+        let mut g = game();
+        due_crow(&mut g);
+        g.land_crows_at_altars();
+        assert_eq!(altars(&g), 1, "an ordinary player is led to an altar");
+        for owned in [ItemKind::Loadstone, ItemKind::Compass] {
+            let mut g = game();
+            g.inventory.add(owned, 1);
+            due_crow(&mut g);
+            g.land_crows_at_altars();
+            assert_eq!(altars(&g), 0, "{owned:?}: no altar");
+            assert_eq!(g.animals[0].west_followed, 0.0);
+        }
+    }
+
+    #[test]
+    fn a_pot_of_stew_is_served_into_bowls_and_the_bowl_comes_back_when_the_stew_is_drunk() {
+        let mut g = game();
+        let pos = (12, 6, 12);
+        g.world.set_block(pos.0, pos.1, pos.2, Block::Charcoal);
+        g.world.pots.insert(pos, crate::world::Pot { water: true, meat: Some(ItemKind::Berries), left: 0.0, served: 0 });
+        let cold = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Charcoal, prev: (pos.0, pos.1 + 1, pos.2) };
+        g.inventory.slots[0] = None;
+        g.select_slot(0);
+        assert!(!g.can_use_fire(&cold) && !g.use_held(&cold), "no stew without a bowl, and a pot of finished stew is not lifted off");
+        hold(&mut g, ItemKind::WoodenBowl, 1);
+        assert!(g.can_use_fire(&cold) && g.use_held(&cold), "a cold pot still serves");
+        assert_eq!((g.inventory.count(ItemKind::RedBerryStew), g.inventory.count(ItemKind::WoodenBowl)), (1, 0));
+        g.health = 1;
+        let slot = g.inventory.slots.iter().position(|s| s.map_or(false, |s| s.kind == ItemKind::RedBerryStew)).expect("the served stew");
+        g.select_slot(slot.min(HOTBAR_SLOTS - 1));
+        assert_eq!(g.held_item(), Some(ItemKind::RedBerryStew));
+        assert!(g.eat_held());
+        assert_eq!((g.inventory.count(ItemKind::WoodenBowl), g.inventory.count(ItemKind::RedBerryStew)), (1, 0), "the bowl came back");
+    }
 }

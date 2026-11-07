@@ -48,7 +48,8 @@ impl Arrow {
         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
     }
 
-    /// A poison arrow shot from a bow: it flies like an arrow, is used up when it is shot and is gone where it lands, and poisons what it hits.
+    /// A poison arrow shot from a bow: it flies and lands like an ordinary arrow (used up only by hitting an animal, picked up again from
+    /// the ground if it misses), but does `POISON_ARROW_DAMAGE_FACTOR` times the damage.
     pub fn fired_poison(origin: Vec3, dir: Vec3) -> Arrow {
         Arrow { kind: ItemKind::PoisonArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
     }
@@ -70,14 +71,9 @@ impl Arrow {
         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
     }
 
-    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow or a poison arrow), instead of lying there to be picked up again.
+    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow), instead of lying there to be picked up again.
     pub fn vanishes_on_landing(&self) -> bool {
-        matches!(self.kind, ItemKind::PhoenixArrow | ItemKind::PoisonArrow)
-    }
-
-    /// Whether what this arrow hits is poisoned.
-    pub fn poisons(&self) -> bool {
-        self.kind == ItemKind::PoisonArrow
+        self.kind == ItemKind::PhoenixArrow
     }
 
     /// An arrow shot by the Wild Hunt's archer from `origin` along the unit vector `dir`. It hurts the player, not animals.
@@ -102,6 +98,7 @@ impl Arrow {
         match self.kind {
             ItemKind::Pebble => SLING_DAMAGE,
             ItemKind::IronFeather => IRON_FEATHER_THROW_DAMAGE,
+            ItemKind::PoisonArrow => POISON_ARROW_DAMAGE,
             _ => ARROW_DAMAGE,
         }
     }
@@ -208,6 +205,20 @@ mod tests {
         over.pos = vec3(20.0, 9.0, 10.0);
         assert!(!over.hit_player(start, player), "over their head");
         assert!((arrow.vel.length() - HUNT_ARROW_SPEED).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_poison_arrow_flies_and_lands_like_an_arrow_but_hits_twice_as_hard() {
+        let w = open_field();
+        assert_eq!(Arrow::fired_poison(Vec3::ZERO, vec3(1.0, 0.0, 0.0)).damage(), 2 * Arrow::fired(Vec3::ZERO, vec3(1.0, 0.0, 0.0)).damage());
+        assert_eq!(POISON_ARROW_DAMAGE, ARROW_DAMAGE * 2);
+        let poison = Arrow::fired_poison(Vec3::ZERO, vec3(1.0, 0.0, 0.0));
+        assert!(!poison.vanishes_on_landing(), "a miss lies on the ground to be picked up, as an ordinary arrow does");
+        let mut arrow = Arrow::fired_poison(vec3(2.5, 7.0, 10.5), vec3(1.0, 0.0, 0.0));
+        assert_eq!(fly(&mut arrow, &w, &[deer_at(10.5, 14.5)]), Fate::HitBlock, "aimed wide, it lands");
+        let mut arrow = Arrow::fired_poison(vec3(2.5, 7.0, 10.5), vec3(1.0, 0.0, 0.0));
+        assert_eq!(fly(&mut arrow, &w, &[deer_at(10.5, 10.5)]), Fate::HitAnimal(0));
+        assert!(Arrow::fired_phoenix(Vec3::ZERO, Vec3::X).vanishes_on_landing(), "the Phoenix Arrow still never lands");
     }
 
     #[test]

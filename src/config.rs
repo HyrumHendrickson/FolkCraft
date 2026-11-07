@@ -71,10 +71,10 @@ pub const AUTOSAVE_INTERVAL: f32 = 20.0;
 // --- Inventory and item pickup ---------------------------------------------------------
 
 /// The first `HOTBAR_SLOTS` inventory slots form the hotbar.
-pub const INVENTORY_SLOTS: usize = 36;
+pub const INVENTORY_SLOTS: usize = 45;
 pub const HOTBAR_SLOTS: usize = 9;
 /// A leather backpack, worn, adds this many rows of inventory slots (and takes them away again when it is taken off).
-pub const BACKPACK_EXTRA_ROWS: usize = 2;
+pub const BACKPACK_EXTRA_ROWS: usize = 3;
 pub const BACKPACK_SLOTS: usize = BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS;
 pub const MAX_STACK: u32 = 100;
 /// Chance (percent) that leaves or pine needles drop a stick.
@@ -604,6 +604,11 @@ pub const RABBIT_MEAT_HEAL: u32 = 2;
 pub const MOOSE_MEAT_HEAL: u32 = 5;
 pub const STEW_HEAL_FACTOR: u32 = 2;
 pub const STEW_SECONDS: f32 = 12.0;
+/// A finished pot of stew holds this many servings. Each takes one empty Wooden Bowl (right click the pot with the bowl in hand);
+/// when the last is taken the pot is empty again.
+pub const STEW_SERVINGS: u32 = 4;
+/// One log makes this many Wooden Bowls.
+pub const BOWLS_PER_LOG: u32 = 5;
 
 // --- Hunting and knockback --------------------------------------------------------------
 
@@ -1186,7 +1191,7 @@ pub const SPIRIT_FOLLOW_RADIUS: f32 = 2.6;
 pub const SPIRIT_FOLLOW_HEIGHT: f32 = 1.0;
 pub const SPIRIT_SPEED: f32 = 11.0;
 pub const SPIRIT_TELEPORT_DISTANCE: f32 = 30.0;
-pub const MAX_SPIRIT_ARCHERS: usize = 40;
+pub const MAX_SPIRIT_ARCHERS: usize = 8;
 
 /// The boots of the sky, worn: the player runs `BOOTS_SPEED_FACTOR` times as fast and jumps `BOOTS_JUMP_DISTANCE_FACTOR` times as far.
 /// A jump's length is its speed times the time in the air, and the time in the air grows with the take-off speed, so with the
@@ -1338,11 +1343,13 @@ pub const SITE_PUSH_STEPS: i32 = 40;
 
 // --- Poison arrows, jerky, falling stars, the Phoenix's return ----------------------------------
 
-/// A poison arrow (a stick, a pebble, a feather and a snake fang) is shot before any other arrow and is used up. An animal it hits is
-/// poisoned: it loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds for `POISON_SECONDS` seconds, on top of the arrow's blow.
-pub const POISON_DAMAGE: i32 = 1;
-pub const POISON_INTERVAL: f32 = 1.0;
-pub const POISON_SECONDS: f32 = 6.0;
+/// A poison arrow (25 ordinary arrows and a snake fang make 25 of them) is an ordinary arrow in every way, except that it does
+/// `POISON_ARROW_DAMAGE_FACTOR` times the damage: an arrow that hits an animal is used up, and one that misses lands on the ground to be
+/// picked up again. A bow shoots them before any other arrow.
+pub const POISON_ARROW_DAMAGE_FACTOR: i32 = 2;
+pub const POISON_ARROW_DAMAGE: i32 = ARROW_DAMAGE * POISON_ARROW_DAMAGE_FACTOR;
+/// Arrows (and one snake fang) the poison-arrow recipe takes, which is also how many poison arrows it makes.
+pub const POISON_ARROW_BATCH: u32 = 25;
 
 /// Meat jerky: raw meat and a lump of pink salt, cured. It heals as much as the cooked meat does (a stew still heals double).
 pub const JERKY_SALT_COST: u32 = 1;
@@ -1359,6 +1366,11 @@ pub const FALLING_STAR_FLASH_SECONDS: f32 = 2.0;
 pub const FALLING_STAR_TRAIL_LENGTH: f32 = 26.0;
 /// The widest angle (degrees) from the player's line of sight at which an island counts as seen.
 pub const FALLING_STAR_VIEW_DEGREES: f32 = 55.0;
+/// A star never lands on the island the player stands on. Where it lands it leaves a white chunk of stardust (`Block::StardustPile`) that
+/// stays `STARDUST_PILE_SECONDS` seconds and then fades away; broken within that time it drops `STARDUST_DROP` Stardust.
+pub const STARDUST_PILE_SECONDS: f32 = 30.0;
+pub const STARDUST_DROP: u32 = 1;
+pub const BREAK_SECONDS_STARDUST: f32 = 1.0;
 
 /// A Phoenix that has been killed rises again in its crater after this many seconds (the fire tornadoes return with it).
 pub const PHOENIX_RESPAWN_SECONDS: f32 = 60.0;

@@ -188,7 +188,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests 
     hurt deer or quail flees for `ANIMAL_ALARM_SECONDS` whatever the distance. A **deer** drops 2 venison and 1
     leather; a **quail** drops 1 poultry and `QUAIL_FEATHER_DROP` (3) feathers; a **bear** drops 3 bear meat and 1 bear pelt.
 - Dropped items are small physics boxes; walking near them picks them up (`PICKUP_*` in `config.rs`).
-- Inventory: 36 slots, stacks of up to 64. Slots `0..9` are the hotbar.
+- Inventory: 45 slots (`INVENTORY_SLOTS`), stacks of up to 100. Slots `0..9` are the hotbar.
 - Hotbar selection: keys `1`-`9` or mouse wheel. The selected slot is outlined; its item name
   shows above the hotbar. `Game::held_item()` is what gameplay code should read.
 - Inventory screen (`E`): drag a stack onto another slot to move it (empty target: move; same kind:
@@ -702,3 +702,24 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
   `PHOENIX_RESPAWN_SECONDS` `phoenix_slain` clears (`Game::update_phoenix_respawn`) and it returns when the player nears the crater.
 - **Falling stars** (`stars.rs`, `Game::update_falling_stars`, `effects::draw_falling_stars`): in the Skylands at night, one every `FALLING_STAR_INTERVAL`; `pick_landing`
   chooses an island within range in front of the player (or the one they are on).
+
+## Update: poison batches, bowls, cold pots, stardust and one-of-a-kind finds
+
+(Where this contradicts an earlier section, this one holds.)
+
+- **Poison arrows** have no poison effect (`Animal::poison`, `update_poison` and the `POISON_*` timings are gone). They are ordinary arrows that do
+  `POISON_ARROW_DAMAGE_FACTOR` (2) times the damage (`POISON_ARROW_DAMAGE`), are used up only by hitting an animal, and lie on the ground to be picked up when they
+  miss (only the Phoenix Arrow `vanishes_on_landing`). Recipe: `POISON_ARROW_BATCH` (25) Arrows + 1 Snake Fang make 25 Poison Arrows; the old recipe is gone. A bow still shoots poison, then Phoenix, then ordinary arrows.
+- **Spirit archers**: at most `MAX_SPIRIT_ARCHERS` (8) follow at once; the king refuses (`ghosts::KING_FULL`, nothing taken) until some are gone.
+- **Inventory**: `INVENTORY_SLOTS` 45 (one more row) and the backpack adds `BACKPACK_EXTRA_ROWS` 3. Slot indices are unchanged, so old saves load.
+- **Wooden Bowl** (`ItemKind::WoodenBowl`, `wooden_bowl`): 1 log makes `BOWLS_PER_LOG` (5). A finished pot holds `STEW_SERVINGS` (4) (`Pot::served`, `Pot::servings_left`, saved as a seventh
+  number on the `pot` record; older saves read 0). Right click the pot with a bowl to fill it (`World::take_stew`); an empty hand no longer takes stew. The stew items are bowls of stew:
+  drinking or eating one gives back an empty bowl (`Game::return_bowl`).
+- **Pots outlive their fire**: when the fire under a pot burns out the pot stays on the charcoal or ash (nothing drops) with its contents; cooking only advances while a fire burns, and
+  relighting the charcoal resumes it. A cold pot can be used like a hot one (`Game::cold_pot_at`, `can_use_pot`). `World::take_pot` returns `Some(raw meat)`; it refuses while the fire is
+  lit and meat is in the pot, and always refuses finished stew (serve it first). Breaking the block under a pot releases the pot (and raw meat). `with_pots` keeps pots on fire, embers, charcoal or ash.
+- **Pipes** by day call quail, parrots and crows alike (parrots were already in the list; now tested).
+- **Falling stars** never land on the island the player stands on. On landing (`Game::leave_stardust`) a `Block::StardustPile` (white gold pile, `STARDUST_PILE_SECONDS` 30) is left;
+  `Game::update_stardust` fades it, breaking it first drops `STARDUST_DROP` `ItemKind::Stardust`. Piles are not saved and are cleared on leaving the Skylands.
+- **One of a kind** (`Game::owns`: inventory or on the ground): a second Philosopher's Stone drops as Gold; no Peep Stone comes from pebbles while one is owned; no Loadstone from stones
+  while a Loadstone or Compass is owned; crows (the birds that build altars) build none then either.

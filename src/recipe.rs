@@ -1,7 +1,7 @@
 //! Crafting recipes. A recipe consumes a fixed number of items; there is no shape or
 //! placement, only counts. To add a recipe, append an entry to `RECIPES`.
 
-use crate::config::JERKY_SALT_COST;
+use crate::config::{BOWLS_PER_LOG, JERKY_SALT_COST, POISON_ARROW_BATCH};
 use crate::inventory::Inventory;
 use crate::item::ItemKind;
 
@@ -13,6 +13,7 @@ pub struct Recipe {
 
 pub const RECIPES: &[Recipe] = &[
     Recipe { output: ItemKind::Twine, output_count: 1, inputs: &[(ItemKind::Grass, 3)] },
+    Recipe { output: ItemKind::WoodenBowl, output_count: BOWLS_PER_LOG, inputs: &[(ItemKind::Log, 1)] },
     Recipe { output: ItemKind::LeatherCord, output_count: 3, inputs: &[(ItemKind::Leather, 1)] },
     Recipe { output: ItemKind::BowDrill, output_count: 1, inputs: &[(ItemKind::Twine, 1), (ItemKind::Stick, 1)] },
     Recipe {
@@ -66,10 +67,11 @@ pub const RECIPES: &[Recipe] = &[
         output_count: 1,
         inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::PhoenixFeather, 1)],
     },
+    // A snake fang dips a whole batch of arrows in poison.
     Recipe {
         output: ItemKind::PoisonArrow,
-        output_count: 1,
-        inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)],
+        output_count: POISON_ARROW_BATCH,
+        inputs: &[(ItemKind::Arrow, POISON_ARROW_BATCH), (ItemKind::SnakeFang, 1)],
     },
     // Jerky: raw meat cured with a lump of pink salt, one kind for each meat. No fire is needed.
     Recipe { output: ItemKind::VenisonJerky, output_count: 1, inputs: &[(ItemKind::Venison, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
@@ -160,7 +162,12 @@ mod tests {
             &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1)]
         );
         for r in RECIPES {
-            let expected = if r.output == ItemKind::LeatherCord { 3 } else { 1 };
+            let expected = match r.output {
+                ItemKind::LeatherCord => 3,
+                ItemKind::WoodenBowl => 5,
+                ItemKind::PoisonArrow => 25,
+                _ => 1,
+            };
             assert_eq!(r.output_count, expected, "{:?}", r.output);
         }
     }
@@ -215,10 +222,19 @@ mod tests {
     }
 
     #[test]
+    fn a_log_makes_five_wooden_bowls() {
+        let mut inv = inv_with(&[(ItemKind::Log, 1)]);
+        let r = recipe_for(ItemKind::WoodenBowl);
+        assert_eq!((r.inputs, r.output_count), (&[(ItemKind::Log, 1)][..], 5));
+        assert!(craft(&mut inv, r));
+        assert_eq!((inv.count(ItemKind::WoodenBowl), inv.count(ItemKind::Log)), (5, 0));
+    }
+
+    #[test]
     fn wooden_planks_can_no_longer_be_crafted() {
         assert!(RECIPES.iter().all(|r| r.output != ItemKind::Plank));
         let inv = inv_with(&[(ItemKind::Log, 5)]);
-        assert!(craftable(&inv).is_empty(), "a log makes nothing");
+        assert!(craftable(&inv).iter().all(|r| r.output == ItemKind::WoodenBowl), "a log makes only bowls");
     }
 
     #[test]

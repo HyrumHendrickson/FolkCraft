@@ -1,0 +1,1730 @@
+diff --git a/README.md b/README.md
+index a30f591..5e8fd90 100644
+--- a/README.md
++++ b/README.md
+@@ -188,7 +188,7 @@ save file and compute the pitch instead of nudging the mouse. Prefer unit tests
+     hurt deer or quail flees for `ANIMAL_ALARM_SECONDS` whatever the distance. A **deer** drops 2 venison and 1
+     leather; a **quail** drops 1 poultry and `QUAIL_FEATHER_DROP` (3) feathers; a **bear** drops 3 bear meat and 1 bear pelt.
+ - Dropped items are small physics boxes; walking near them picks them up (`PICKUP_*` in `config.rs`).
+-- Inventory: 36 slots, stacks of up to 64. Slots `0..9` are the hotbar.
++- Inventory: 45 slots (`INVENTORY_SLOTS`), stacks of up to 100. Slots `0..9` are the hotbar.
+ - Hotbar selection: keys `1`-`9` or mouse wheel. The selected slot is outlined; its item name
+   shows above the hotbar. `Game::held_item()` is what gameplay code should read.
+ - Inventory screen (`E`): drag a stack onto another slot to move it (empty target: move; same kind:
+@@ -702,3 +702,24 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
+   `PHOENIX_RESPAWN_SECONDS` `phoenix_slain` clears (`Game::update_phoenix_respawn`) and it returns when the player nears the crater.
+ - **Falling stars** (`stars.rs`, `Game::update_falling_stars`, `effects::draw_falling_stars`): in the Skylands at night, one every `FALLING_STAR_INTERVAL`; `pick_landing`
+   chooses an island within range in front of the player (or the one they are on).
++
++## Update: poison batches, bowls, cold pots, stardust and one-of-a-kind finds
++
++(Where this contradicts an earlier section, this one holds.)
++
++- **Poison arrows** have no poison effect (`Animal::poison`, `update_poison` and the `POISON_*` timings are gone). They are ordinary arrows that do
++  `POISON_ARROW_DAMAGE_FACTOR` (2) times the damage (`POISON_ARROW_DAMAGE`), are used up only by hitting an animal, and lie on the ground to be picked up when they
++  miss (only the Phoenix Arrow `vanishes_on_landing`). Recipe: `POISON_ARROW_BATCH` (25) Arrows + 1 Snake Fang make 25 Poison Arrows; the old recipe is gone. A bow still shoots poison, then Phoenix, then ordinary arrows.
++- **Spirit archers**: at most `MAX_SPIRIT_ARCHERS` (8) follow at once; the king refuses (`ghosts::KING_FULL`, nothing taken) until some are gone.
++- **Inventory**: `INVENTORY_SLOTS` 45 (one more row) and the backpack adds `BACKPACK_EXTRA_ROWS` 3. Slot indices are unchanged, so old saves load.
++- **Wooden Bowl** (`ItemKind::WoodenBowl`, `wooden_bowl`): 1 log makes `BOWLS_PER_LOG` (5). A finished pot holds `STEW_SERVINGS` (4) (`Pot::served`, `Pot::servings_left`, saved as a seventh
++  number on the `pot` record; older saves read 0). Right click the pot with a bowl to fill it (`World::take_stew`); an empty hand no longer takes stew. The stew items are bowls of stew:
++  drinking or eating one gives back an empty bowl (`Game::return_bowl`).
++- **Pots outlive their fire**: when the fire under a pot burns out the pot stays on the charcoal or ash (nothing drops) with its contents; cooking only advances while a fire burns, and
++  relighting the charcoal resumes it. A cold pot can be used like a hot one (`Game::cold_pot_at`, `can_use_pot`). `World::take_pot` returns `Some(raw meat)`; it refuses while the fire is
++  lit and meat is in the pot, and always refuses finished stew (serve it first). Breaking the block under a pot releases the pot (and raw meat). `with_pots` keeps pots on fire, embers, charcoal or ash.
++- **Pipes** by day call quail, parrots and crows alike (parrots were already in the list; now tested).
++- **Falling stars** never land on the island the player stands on. On landing (`Game::leave_stardust`) a `Block::StardustPile` (white gold pile, `STARDUST_PILE_SECONDS` 30) is left;
++  `Game::update_stardust` fades it, breaking it first drops `STARDUST_DROP` `ItemKind::Stardust`. Piles are not saved and are cleared on leaving the Skylands.
++- **One of a kind** (`Game::owns`: inventory or on the ground): a second Philosopher's Stone drops as Gold; no Peep Stone comes from pebbles while one is owned; no Loadstone from stones
++  while a Loadstone or Compass is owned; crows (the birds that build altars) build none then either.
+diff --git a/src/animal.rs b/src/animal.rs
+index 9f24ed8..aa4e2a4 100644
+--- a/src/animal.rs
++++ b/src/animal.rs
+@@ -524,7 +524,7 @@ pub struct Animal {
+     pub health: i32,
+     /// Distance walked, in blocks; drives the leg and wing animation.
+     pub phase: f32,
+-    timer: f32,
++    pub(crate) timer: f32,
+     /// Seconds left of being scared (a bear: of being enraged) regardless of distance, after being hurt.
+     alarm: f32,
+     on_ground: bool,
+@@ -624,9 +624,6 @@ pub struct Animal {
+     leap_age: f32,
+     /// A flying snake: the places its head has been, newest first, `SNAKE_SEGMENT_SPACING` blocks apart. Its body follows them.
+     pub trail: Vec<Vec3>,
+-    /// Seconds of poison left (a poison arrow's hit), and the seconds since it last hurt.
+-    pub poisoned: f32,
+-    pub poison_tick: f32,
+ }
+ 
+ /// How many blocks (up to `limit`) lie between the point (x, z) and the nearest column that is not water: how far from any shore
+@@ -771,8 +768,6 @@ impl Animal {
+             leap_vel: Vec3::ZERO,
+             leap_age: 0.0,
+             trail: Vec::new(),
+-            poisoned: 0.0,
+-            poison_tick: 0.0,
+         };
+         a.circle = a.heading;
+         match kind {
+@@ -866,14 +861,6 @@ impl Animal {
+         self.trail.truncate(SNAKE_SEGMENTS);
+     }
+ 
+-    /// Poison the animal for `POISON_SECONDS` (a fresh dose starts the count again, and does not stack).
+-    pub fn poison(&mut self) {
+-        if self.kind.is_huntable() {
+-            self.poisoned = POISON_SECONDS;
+-            self.poison_tick = 0.0;
+-        }
+-    }
+-
+     /// Hurt the animal for `amount` and scare it (a bear is enraged instead: it charges the player
+     /// wherever they are). Returns true when it is dead.
+     pub fn damage(&mut self, amount: i32) -> bool {
+diff --git a/src/animal_draw.rs b/src/animal_draw.rs
+index bee7142..187aa4a 100644
+--- a/src/animal_draw.rs
++++ b/src/animal_draw.rs
+@@ -1011,14 +1011,6 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
+         if a.kind == AnimalKind::FlyingSnake {
+             draw_snake_body(a, time);
+         }
+-        if a.poisoned > 0.0 {
+-            // A few green drops rise off a poisoned creature.
+-            for k in 0..3 {
+-                let t = (time * 0.9 + k as f32 * 0.33 + a.phase).fract();
+-                let at = a.pos + vec3((k as f32 - 1.0) * a.kind.half_width() * 0.6, a.kind.height() * (0.7 + 0.5 * t), 0.0);
+-                draw_box(at, Vec3::splat(0.07), t * 6.0, Color::new(0.45, 0.85, 0.20, 0.9 * (1.0 - t)));
+-            }
+-        }
+         for (((fx, fy, fz), (hx, hy, hz), color), pitch) in parts {
+             // Turn the model to face the heading: local x runs along it.
+             let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
+diff --git a/src/arrow.rs b/src/arrow.rs
+index 6375ec0..cc6c6be 100644
+--- a/src/arrow.rs
++++ b/src/arrow.rs
+@@ -48,7 +48,8 @@ impl Arrow {
+         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+     }
+ 
+-    /// A poison arrow shot from a bow: it flies like an arrow, is used up when it is shot and is gone where it lands, and poisons what it hits.
++    /// A poison arrow shot from a bow: it flies and lands like an ordinary arrow (used up only by hitting an animal, picked up again from
++    /// the ground if it misses), but does `POISON_ARROW_DAMAGE_FACTOR` times the damage.
+     pub fn fired_poison(origin: Vec3, dir: Vec3) -> Arrow {
+         Arrow { kind: ItemKind::PoisonArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+     }
+@@ -70,14 +71,9 @@ impl Arrow {
+         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
+     }
+ 
+-    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow or a poison arrow), instead of lying there to be picked up again.
++    /// Whether the arrow is gone for good where it lands (a Phoenix Arrow), instead of lying there to be picked up again.
+     pub fn vanishes_on_landing(&self) -> bool {
+-        matches!(self.kind, ItemKind::PhoenixArrow | ItemKind::PoisonArrow)
+-    }
+-
+-    /// Whether what this arrow hits is poisoned.
+-    pub fn poisons(&self) -> bool {
+-        self.kind == ItemKind::PoisonArrow
++        self.kind == ItemKind::PhoenixArrow
+     }
+ 
+     /// An arrow shot by the Wild Hunt's archer from `origin` along the unit vector `dir`. It hurts the player, not animals.
+@@ -102,6 +98,7 @@ impl Arrow {
+         match self.kind {
+             ItemKind::Pebble => SLING_DAMAGE,
+             ItemKind::IronFeather => IRON_FEATHER_THROW_DAMAGE,
++            ItemKind::PoisonArrow => POISON_ARROW_DAMAGE,
+             _ => ARROW_DAMAGE,
+         }
+     }
+@@ -210,6 +207,20 @@ mod tests {
+         assert!((arrow.vel.length() - HUNT_ARROW_SPEED).abs() < 1e-3);
+     }
+ 
++    #[test]
++    fn a_poison_arrow_flies_and_lands_like_an_arrow_but_hits_twice_as_hard() {
++        let w = open_field();
++        assert_eq!(Arrow::fired_poison(Vec3::ZERO, vec3(1.0, 0.0, 0.0)).damage(), 2 * Arrow::fired(Vec3::ZERO, vec3(1.0, 0.0, 0.0)).damage());
++        assert_eq!(POISON_ARROW_DAMAGE, ARROW_DAMAGE * 2);
++        let poison = Arrow::fired_poison(Vec3::ZERO, vec3(1.0, 0.0, 0.0));
++        assert!(!poison.vanishes_on_landing(), "a miss lies on the ground to be picked up, as an ordinary arrow does");
++        let mut arrow = Arrow::fired_poison(vec3(2.5, 7.0, 10.5), vec3(1.0, 0.0, 0.0));
++        assert_eq!(fly(&mut arrow, &w, &[deer_at(10.5, 14.5)]), Fate::HitBlock, "aimed wide, it lands");
++        let mut arrow = Arrow::fired_poison(vec3(2.5, 7.0, 10.5), vec3(1.0, 0.0, 0.0));
++        assert_eq!(fly(&mut arrow, &w, &[deer_at(10.5, 10.5)]), Fate::HitAnimal(0));
++        assert!(Arrow::fired_phoenix(Vec3::ZERO, Vec3::X).vanishes_on_landing(), "the Phoenix Arrow still never lands");
++    }
++
+     #[test]
+     fn an_arrow_aimed_at_an_animal_hits_it() {
+         let w = open_field();
+diff --git a/src/block.rs b/src/block.rs
+index e6915de..67cf92f 100644
+--- a/src/block.rs
++++ b/src/block.rs
+@@ -54,6 +54,8 @@ pub enum Block {
+     Snow,
+     /// The pile of gold at the end of the rainbow. Taking it by hand drops gold and ends the rainbow for good.
+     GoldPile,
++    /// A white chunk of stardust a falling star leaves on a Skylands island; it fades after `STARDUST_PILE_SECONDS`.
++    StardustPile,
+     /// The grey stone of the castle on a lake's island: a solid cube that cannot be broken or made.
+     CastleStone,
+     /// A shut gate or door of the grand castle, of dark iron-bound wood: a solid cube that cannot be broken or made. The
+@@ -266,6 +268,12 @@ const GOLD_PILE_PARTS: &[Part] = &[
+     part([0.20, 0.22, 0.20], [0.80, 0.42, 0.80], (0.95, 0.73, 0.20)),
+     part([0.34, 0.42, 0.34], [0.66, 0.58, 0.66], (1.00, 0.85, 0.36)),
+ ];
++/// The same three heaps as the gold pile, in white.
++const STARDUST_PILE_PARTS: &[Part] = &[
++    part([0.08, 0.0, 0.10], [0.92, 0.22, 0.90], (0.80, 0.82, 0.90)),
++    part([0.20, 0.22, 0.20], [0.80, 0.42, 0.80], (0.90, 0.92, 0.97)),
++    part([0.34, 0.42, 0.34], [0.66, 0.58, 0.66], (1.00, 1.00, 1.00)),
++];
+ /// A low headstone on a footing, with a rounded-looking top block.
+ const GRAVESTONE_PARTS: &[Part] = &[
+     part([0.18, 0.0, 0.34], [0.82, 0.10, 0.66], (0.46, 0.46, 0.48)),
+@@ -403,7 +411,7 @@ const CHARCOAL_PARTS: &[Part] = &[
+ 
+ impl Block {
+     /// Blocks that are saved in `World::placed`: the ones a player can create, and the rainbow's pile of gold.
+-    pub const PLAYER_MADE: [Block; 16] = [
++    pub const PLAYER_MADE: [Block; 17] = [
+         Block::PlacedLog,
+         Block::PlacedPebble,
+         Block::PlacedStone,
+@@ -416,6 +424,7 @@ impl Block {
+         Block::ForgeCharged,
+         Block::ForgeLit,
+         Block::GoldPile,
++        Block::StardustPile,
+         Block::GoldBoulder,
+         Block::AncientAltar,
+         Block::AltarLoadstone,
+@@ -443,6 +452,7 @@ impl Block {
+                 | Block::ClayForge
+                 | Block::ForgeCharged
+                 | Block::GoldPile
++                | Block::StardustPile
+                 | Block::ArmorStand
+                 | Block::PinkSalt
+                 | Block::Bones
+@@ -498,6 +508,7 @@ impl Block {
+             Block::Boulder => BREAK_SECONDS_BOULDER,
+             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
+             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
++            Block::StardustPile => BREAK_SECONDS_STARDUST,
+             Block::ArmorStand => BREAK_SECONDS_ARMOR,
+             Block::PinkSalt => BREAK_SECONDS_SALT,
+             Block::Bones => BREAK_SECONDS_PLACED,
+@@ -634,6 +645,7 @@ impl Block {
+             Block::ForgeCharged => FORGE_CHARGED_PARTS,
+             Block::ForgeLit => FORGE_LIT_PARTS,
+             Block::GoldPile => GOLD_PILE_PARTS,
++            Block::StardustPile => STARDUST_PILE_PARTS,
+             Block::Gravestone => GRAVESTONE_PARTS,
+             Block::ArmorStand => ARMOR_STAND_PARTS,
+             Block::BridgePost => BRIDGE_POST_PARTS,
+@@ -701,6 +713,7 @@ impl Block {
+             Block::ForgeCharged => Some("forge_charged"),
+             Block::ForgeLit => Some("forge_lit"),
+             Block::GoldPile => Some("gold_pile"),
++            Block::StardustPile => Some("stardust_pile"),
+             Block::GoldBoulder => Some("gold_boulder"),
+             Block::AncientAltar => Some("ancient_altar"),
+             Block::AltarLoadstone => Some("altar_loadstone"),
+@@ -738,7 +751,7 @@ impl Block {
+ mod tests {
+     use super::*;
+ 
+-    const ALL: [Block; 52] = [
++    const ALL: [Block; 53] = [
+         Block::Air,
+         Block::Dirt,
+         Block::Stone,
+@@ -766,6 +779,7 @@ mod tests {
+         Block::ForgeLit,
+         Block::Snow,
+         Block::GoldPile,
++        Block::StardustPile,
+         Block::CastleStone,
+         Block::CastleDoor,
+         Block::Gravestone,
+diff --git a/src/config.rs b/src/config.rs
+index 3be2da9..d7121c8 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -71,10 +71,10 @@ pub const AUTOSAVE_INTERVAL: f32 = 20.0;
+ // --- Inventory and item pickup ---------------------------------------------------------
+ 
+ /// The first `HOTBAR_SLOTS` inventory slots form the hotbar.
+-pub const INVENTORY_SLOTS: usize = 36;
++pub const INVENTORY_SLOTS: usize = 45;
+ pub const HOTBAR_SLOTS: usize = 9;
+ /// A leather backpack, worn, adds this many rows of inventory slots (and takes them away again when it is taken off).
+-pub const BACKPACK_EXTRA_ROWS: usize = 2;
++pub const BACKPACK_EXTRA_ROWS: usize = 3;
+ pub const BACKPACK_SLOTS: usize = BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS;
+ pub const MAX_STACK: u32 = 100;
+ /// Chance (percent) that leaves or pine needles drop a stick.
+@@ -604,6 +604,11 @@ pub const RABBIT_MEAT_HEAL: u32 = 2;
+ pub const MOOSE_MEAT_HEAL: u32 = 5;
+ pub const STEW_HEAL_FACTOR: u32 = 2;
+ pub const STEW_SECONDS: f32 = 12.0;
++/// A finished pot of stew holds this many servings. Each takes one empty Wooden Bowl (right click the pot with the bowl in hand);
++/// when the last is taken the pot is empty again.
++pub const STEW_SERVINGS: u32 = 4;
++/// One log makes this many Wooden Bowls.
++pub const BOWLS_PER_LOG: u32 = 5;
+ 
+ // --- Hunting and knockback --------------------------------------------------------------
+ 
+@@ -1186,7 +1191,7 @@ pub const SPIRIT_FOLLOW_RADIUS: f32 = 2.6;
+ pub const SPIRIT_FOLLOW_HEIGHT: f32 = 1.0;
+ pub const SPIRIT_SPEED: f32 = 11.0;
+ pub const SPIRIT_TELEPORT_DISTANCE: f32 = 30.0;
+-pub const MAX_SPIRIT_ARCHERS: usize = 40;
++pub const MAX_SPIRIT_ARCHERS: usize = 8;
+ 
+ /// The boots of the sky, worn: the player runs `BOOTS_SPEED_FACTOR` times as fast and jumps `BOOTS_JUMP_DISTANCE_FACTOR` times as far.
+ /// A jump's length is its speed times the time in the air, and the time in the air grows with the take-off speed, so with the
+@@ -1338,11 +1343,13 @@ pub const SITE_PUSH_STEPS: i32 = 40;
+ 
+ // --- Poison arrows, jerky, falling stars, the Phoenix's return ----------------------------------
+ 
+-/// A poison arrow (a stick, a pebble, a feather and a snake fang) is shot before any other arrow and is used up. An animal it hits is
+-/// poisoned: it loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds for `POISON_SECONDS` seconds, on top of the arrow's blow.
+-pub const POISON_DAMAGE: i32 = 1;
+-pub const POISON_INTERVAL: f32 = 1.0;
+-pub const POISON_SECONDS: f32 = 6.0;
++/// A poison arrow (25 ordinary arrows and a snake fang make 25 of them) is an ordinary arrow in every way, except that it does
++/// `POISON_ARROW_DAMAGE_FACTOR` times the damage: an arrow that hits an animal is used up, and one that misses lands on the ground to be
++/// picked up again. A bow shoots them before any other arrow.
++pub const POISON_ARROW_DAMAGE_FACTOR: i32 = 2;
++pub const POISON_ARROW_DAMAGE: i32 = ARROW_DAMAGE * POISON_ARROW_DAMAGE_FACTOR;
++/// Arrows (and one snake fang) the poison-arrow recipe takes, which is also how many poison arrows it makes.
++pub const POISON_ARROW_BATCH: u32 = 25;
+ 
+ /// Meat jerky: raw meat and a lump of pink salt, cured. It heals as much as the cooked meat does (a stew still heals double).
+ pub const JERKY_SALT_COST: u32 = 1;
+@@ -1359,6 +1366,11 @@ pub const FALLING_STAR_FLASH_SECONDS: f32 = 2.0;
+ pub const FALLING_STAR_TRAIL_LENGTH: f32 = 26.0;
+ /// The widest angle (degrees) from the player's line of sight at which an island counts as seen.
+ pub const FALLING_STAR_VIEW_DEGREES: f32 = 55.0;
++/// A star never lands on the island the player stands on. Where it lands it leaves a white chunk of stardust (`Block::StardustPile`) that
++/// stays `STARDUST_PILE_SECONDS` seconds and then fades away; broken within that time it drops `STARDUST_DROP` Stardust.
++pub const STARDUST_PILE_SECONDS: f32 = 30.0;
++pub const STARDUST_DROP: u32 = 1;
++pub const BREAK_SECONDS_STARDUST: f32 = 1.0;
+ 
+ /// A Phoenix that has been killed rises again in its crater after this many seconds (the fire tornadoes return with it).
+ pub const PHOENIX_RESPAWN_SECONDS: f32 = 60.0;
+diff --git a/src/dropped.rs b/src/dropped.rs
+index 3e0c967..fecbbde 100644
+--- a/src/dropped.rs
++++ b/src/dropped.rs
+@@ -84,6 +84,8 @@ impl ItemKind {
+             ItemKind::CursedIdol => 0.10,
+             ItemKind::SnakeFang => 0.03,
+             ItemKind::PoisonArrow => 0.03,
++            ItemKind::WoodenBowl => 0.04,
++            ItemKind::Stardust => 0.05,
+             ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => 0.03,
+         }
+     }
+@@ -149,6 +151,8 @@ impl ItemKind {
+             ItemKind::CursedIdol => vec3(0.10, 0.10, 0.10),
+             ItemKind::SnakeFang => vec3(0.10, 0.03, 0.04),
+             ItemKind::PoisonArrow => vec3(0.26, 0.03, 0.03),
++            ItemKind::WoodenBowl => vec3(0.11, 0.04, 0.11),
++            ItemKind::Stardust => vec3(0.08, 0.05, 0.08),
+             ItemKind::VenisonJerky | ItemKind::PoultryJerky | ItemKind::BearJerky | ItemKind::RabbitJerky | ItemKind::MooseJerky => vec3(0.16, 0.03, 0.06),
+         }
+     }
+diff --git a/src/game.rs b/src/game.rs
+index 827f85e..1ab24d1 100644
+--- a/src/game.rs
++++ b/src/game.rs
+@@ -246,6 +246,8 @@ pub struct Game {
+     pub bursts: Vec<ShownBurst>,
+     /// The falling stars of the Skylands' nights, and the seconds since the last one began to fall.
+     pub falling_stars: Vec<FallingStar>,
++    /// The chunks of stardust lying on the island, with the seconds each has left (`STARDUST_PILE_SECONDS`).
++    pub stardust: Vec<(Pos, f32)>,
+     star_timer: f32,
+     pub acid: Vec<AcidCell>,
+     /// Seconds the player has stood in acid water since it last burned them.
+@@ -376,6 +378,7 @@ impl Game {
+             projectiles: Vec::new(),
+             bursts: Vec::new(),
+             falling_stars: Vec::new(),
++            stardust: Vec::new(),
+             star_timer: 0.0,
+             acid: Vec::new(),
+             acid_burn: 0.0,
+@@ -504,6 +507,8 @@ impl Game {
+         );
+         if self.rabbit_foot_in_hotbar() {
+             if matches!(block, Block::PlacedStone | Block::WetStone)
++                && !self.owns(ItemKind::Loadstone)
++                && !self.owns(ItemKind::Compass)
+                 && self.rng.chance(RABBIT_FOOT_LOADSTONE_CHANCE)
+             {
+                 if let Some(stone) = drops.iter_mut().find(|kind| **kind == ItemKind::Stone) {
+@@ -518,6 +523,13 @@ impl Game {
+                 }
+             }
+         }
++        // A player who already has a Peep Stone finds no more.
++        if self.owns(ItemKind::PeepStone) {
++            drops.retain(|k| *k != ItemKind::PeepStone);
++        }
++        if block == Block::StardustPile {
++            self.stardust.retain(|&(pos, _)| pos != (x, y, z));
++        }
+         if block == Block::WetClay && self.held_item() == Some(ItemKind::TinPan) {
+             // Panning the clay: one time in twenty a gold turns up, one in five with a rabbit's foot in the hotbar.
+             let chance = if self.rabbit_foot_in_hotbar() { TIN_PAN_RABBIT_FOOT_GOLD_CHANCE } else { TIN_PAN_GOLD_CHANCE };
+@@ -535,6 +547,10 @@ impl Game {
+             if *kind == ItemKind::SilverKey {
+                 *kind = self.key_or_gold();
+             }
++            // Likewise the Philosopher's Stone: a player who has one is given gold instead.
++            if *kind == ItemKind::PhilosophersStone && self.owns(ItemKind::PhilosophersStone) {
++                *kind = ItemKind::Gold;
++            }
+             self.items.push(DroppedItem::spawn(*kind, (x, y, z), &mut self.rng));
+         }
+         drops
+@@ -725,12 +741,14 @@ impl Game {
+             }
+             ItemKind::PurpleBerryStew => {
+                 self.inventory.take_from_slot(self.selected);
++                self.return_bowl();
+                 self.hurt_player(PURPLE_BERRY_STEW_DAMAGE, "The purple berry stew hurts you");
+                 self.set_night(true);
+                 true
+             }
+             ItemKind::RedBerryStew => {
+                 self.inventory.take_from_slot(self.selected);
++                self.return_bowl();
+                 self.health = (self.health + BERRY_STEW_HEAL).min(MAX_HEALTH);
+                 self.set_night(false);
+                 true
+@@ -739,12 +757,21 @@ impl Game {
+                 let Some(heal) = kind.heal_amount() else { return false };
+                 if self.health >= MAX_HEALTH { return false; }
+                 self.inventory.take_from_slot(self.selected);
++                if kind.stew_base().is_some() {
++                    self.return_bowl();
++                }
+                 self.health = (self.health + heal).min(MAX_HEALTH);
+                 true
+             }
+         }
+     }
+ 
++    /// Drinking a stew leaves its empty bowl: into the inventory, or at the player's feet if that is full.
++    fn return_bowl(&mut self) {
++        let p = self.player.pos;
++        self.give_or_drop(ItemKind::WoodenBowl, (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32));
++    }
++
+     /// Turn the world to night or to day, behind a blackout (see `Blackout`). Nothing happens if it already is.
+     fn set_night(&mut self, night: bool) {
+         // A nightfall immediately removes the daytime tornado, even while the blackout is fading in.
+@@ -1003,17 +1030,12 @@ impl Game {
+         if hit.block == Block::ClayForge {
+             return held == Some(ItemKind::Charcoal);
+         }
++        let pos = (hit.x, hit.y, hit.z);
+         if !hit.block.is_burning() {
+-            return false;
++            return self.cold_pot_at(hit) && self.can_use_pot(pos, held);
+         }
+-        let pos = (hit.x, hit.y, hit.z);
+-        if let Some(pot) = self.world.pots.get(&pos) {
+-            return match held {
+-                Some(k) if k.is_fuel() => true,
+-                Some(ItemKind::WaterJar) => !pot.water,
+-                Some(k) if k.stewed().is_some() => pot.meat.is_none(),
+-                _ => pot.stew().is_some() || pot.meat.is_none(),
+-            };
++        if self.world.pots.contains_key(&pos) {
++            return self.can_use_pot(pos, held);
+         }
+         if held == Some(ItemKind::TinPot) && self.world.can_place_pot(pos) {
+             return true;
+@@ -1023,6 +1045,25 @@ impl Game {
+         ready || held.map_or(false, |k| k.is_fuel()) || (free && held.map_or(false, |k| self.can_lay_held(pos, k)))
+     }
+ 
++    /// Whether `hit` is the charcoal or ash a pot is sitting on after its fire went out.
++    fn cold_pot_at(&self, hit: &Hit) -> bool {
++        matches!(hit.block, Block::Charcoal | Block::Ash) && self.world.pots.contains_key(&(hit.x, hit.y, hit.z))
++    }
++
++    /// Whether right click with `held` would do something to the pot at `pos`: fuel feeds a burning fire, a water jar fills an
++    /// empty pot, raw meat goes into a watered one, a bowl takes a serving of finished stew, and anything else lifts off a pot that
++    /// may be lifted (`World::can_take_pot`).
++    fn can_use_pot(&self, pos: Pos, held: Option<ItemKind>) -> bool {
++        let Some(pot) = self.world.pots.get(&pos) else { return false };
++        match held {
++            Some(k) if k.is_fuel() => self.world.fires.contains_key(&pos),
++            Some(ItemKind::WaterJar) => !pot.water,
++            Some(k) if k.stewed().is_some() => pot.meat.is_none(),
++            Some(ItemKind::WoodenBowl) => pot.stew().is_some(),
++            _ => self.world.can_take_pot(pos),
++        }
++    }
++
+     /// Right click on a burning block at `pos`: take a finished piece off it, otherwise feed it
+     /// the held fuel, otherwise lay the held meat, stone, pebble, metal or ore on it. Returns whether anything happened.
+     fn use_on_fire(&mut self, pos: Pos) -> bool {
+@@ -1092,9 +1133,10 @@ impl Game {
+         }
+     }
+ 
+-    /// Right click on a fire that has a pot on it: a jar of water fills the pot, raw meat goes into the watered
+-    /// pot (it becomes a stew after `STEW_SECONDS`), and anything else (an empty hand) takes the finished stew out,
+-    /// or the pot off the fire when it holds no meat. Returns whether anything happened.
++    /// Right click on a pot (on a fire, or on the charcoal or ash left by one): a jar of water fills the pot, raw meat goes into the
++    /// watered pot (it becomes a stew after `STEW_SECONDS` of fire), an empty Wooden Bowl takes one serving of the finished stew (the
++    /// pot holds `STEW_SERVINGS`), and anything else lifts off a pot that may be lifted (see `World::take_pot`). Returns whether
++    /// anything happened.
+     fn use_on_pot(&mut self, pos: Pos, pot: Pot) -> bool {
+         match self.held_item() {
+             Some(ItemKind::WaterJar) => {
+@@ -1120,17 +1162,32 @@ impl Game {
+                 }
+                 false
+             }
++            Some(ItemKind::WoodenBowl) => {
++                let Some(stew) = self.world.take_stew(pos) else {
++                    self.toasts.push("The stew is not ready".to_string());
++                    return false;
++                };
++                self.inventory.take_from_slot(self.selected);
++                self.give_or_drop(stew, pos);
++                let left = self.world.pots.get(&pos).map_or(0, |p| p.servings_left());
++                self.toasts.push(format!("Filled the bowl with {} ({left} serving{} left)", stew.name().to_lowercase(), if left == 1 { "" } else { "s" }));
++                true
++            }
+             _ => {
+-                if let Some(stew) = self.world.take_stew(pos) {
+-                    self.give_or_drop(stew, pos);
+-                    self.toasts.push(format!("Ladled out the {}", stew.name().to_lowercase()));
+-                    true
+-                } else if self.world.take_pot(pos) {
+-                    self.give_or_drop(ItemKind::TinPot, pos);
+-                    self.toasts.push("Took the pot off the fire".to_string());
+-                    true
+-                } else {
+-                    false
++                if pot.stew().is_some() {
++                    self.toasts.push("Ladle the stew out with a wooden bowl first".to_string());
++                    return false;
++                }
++                match self.world.take_pot(pos) {
++                    Some(meat) => {
++                        self.give_or_drop(ItemKind::TinPot, pos);
++                        if let Some(meat) = meat {
++                            self.give_or_drop(meat, pos);
++                        }
++                        self.toasts.push("Took the pot off".to_string());
++                        true
++                    }
++                    None => false,
+                 }
+             }
+         }
+@@ -1166,6 +1223,14 @@ impl Game {
+         if hit.block.is_burning() {
+             return self.use_on_fire((hit.x, hit.y, hit.z));
+         }
++        if self.cold_pot_at(hit) {
++            let pos = (hit.x, hit.y, hit.z);
++            if self.held_item().map_or(false, |k| k.is_fuel()) {
++                return false;
++            }
++            let pot = self.world.pots[&pos];
++            return self.use_on_pot(pos, pot);
++        }
+         if matches!(hit.block, Block::TowerDoor | Block::TowerDoorTop) {
+             return self.try_unlock((hit.x, hit.y, hit.z));
+         }
+@@ -1303,10 +1368,19 @@ impl Game {
+     /// The falling stars of the Skylands' nights: one begins to fall every `FALLING_STAR_INTERVAL` seconds, bound for an island the player can
+     /// see (`stars::pick_landing`), and each is dropped from the list once its flash has faded.
+     fn update_falling_stars(&mut self, dt: f32) {
++        let mut lands = Vec::new();
+         for star in &mut self.falling_stars {
+             star.age += dt;
++            if star.landed() && !star.pile_made {
++                star.pile_made = true;
++                lands.push(star.to);
++            }
++        }
++        for at in lands {
++            self.leave_stardust(at);
+         }
+         self.falling_stars.retain(|s| !s.done());
++        self.update_stardust(dt);
+         if !self.in_skylands() || !self.world.night {
+             self.star_timer = 0.0;
+             return;
+@@ -1323,25 +1397,39 @@ impl Game {
+         }
+     }
+ 
+-    /// Poison does its work: each poisoned animal loses `POISON_DAMAGE` life points every `POISON_INTERVAL` seconds until its poison
+-    /// runs out (`POISON_SECONDS` after the arrow that gave it). An animal it kills drops its loot as usual.
+-    fn update_poison(&mut self, dt: f32) {
+-        let mut dead = Vec::new();
+-        for (i, a) in self.animals.iter_mut().enumerate() {
+-            if a.poisoned <= 0.0 {
+-                continue;
+-            }
+-            a.poisoned = (a.poisoned - dt).max(0.0);
+-            a.poison_tick += dt;
+-            if a.poison_tick >= POISON_INTERVAL {
+-                a.poison_tick -= POISON_INTERVAL;
+-                if a.damage(POISON_DAMAGE) {
+-                    dead.push(i);
+-                }
++    /// A star has landed at `at`: it leaves a white chunk of stardust in the cell there, if that is a loaded cell with nothing solid in it.
++    fn leave_stardust(&mut self, at: Vec3) {
++        let pos = (at.x.floor() as i32, at.y.floor() as i32, at.z.floor() as i32);
++        if !self.in_skylands() || !self.world.chunks.contains_key(&World::chunk_of(pos.0, pos.2)) {
++            return;
++        }
++        if !matches!(self.world.block_at(pos.0, pos.1, pos.2), Block::Air | Block::Grass | Block::Flower) {
++            return;
++        }
++        self.world.set_block(pos.0, pos.1, pos.2, Block::StardustPile);
++        self.stardust.push((pos, STARDUST_PILE_SECONDS));
++    }
++
++    /// Run down the stardust's time; a chunk that is still there when it runs out fades away.
++    fn update_stardust(&mut self, dt: f32) {
++        for (_, left) in &mut self.stardust {
++            *left -= dt;
++        }
++        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.stardust).into_iter().partition(|&(_, left)| left <= 0.0);
++        self.stardust = kept;
++        for ((x, y, z), _) in gone {
++            if self.world.block_at(x, y, z) == Block::StardustPile {
++                self.world.break_block(x, y, z);
+             }
+         }
+-        if !dead.is_empty() {
+-            self.remove_dead(dead);
++    }
++
++    /// Remove every chunk of stardust at once (the player is leaving the Skylands).
++    fn clear_stardust(&mut self) {
++        for ((x, y, z), _) in std::mem::take(&mut self.stardust) {
++            if self.world.block_at(x, y, z) == Block::StardustPile {
++                self.world.break_block(x, y, z);
++            }
+         }
+     }
+ 
+@@ -1404,6 +1492,11 @@ impl Game {
+         }
+     }
+ 
++    /// Whether the player has `kind`: in the inventory, or lying on the ground.
++    pub fn owns(&self, kind: ItemKind) -> bool {
++        self.inventory.count(kind) > 0 || self.items.iter().any(|i| i.kind == kind)
++    }
++
+     /// Whether the player has a silver key: in the inventory, or lying on the ground.
+     pub fn has_silver_key(&self) -> bool {
+         self.inventory.count(ItemKind::SilverKey) > 0 || self.items.iter().any(|i| i.kind == ItemKind::SilverKey)
+@@ -1554,13 +1647,14 @@ impl Game {
+     }
+ 
+     /// Fire the held launcher (`launcher`, which must be what is in hand), using up one of its ammunition. A bow shoots a poison arrow
+-    /// first when there is one in the inventory (it is used up), then a Phoenix Arrow (never used up), then an ordinary arrow.
++    /// first when there is one in the inventory, then a Phoenix Arrow (never used up), then an ordinary arrow. Poison arrows are
++    /// picked up again from the ground when they miss, like ordinary arrows.
+     fn shoot(&mut self, launcher: ItemKind, eye: Vec3, dir: Vec3) -> bool {
+         let Some(ammo) = launcher.ammo() else { return false };
+         if self.held_item() != Some(launcher) || self.attack_cooldown > 0.0 {
+             return false;
+         }
+-        // Poison arrows go first (and are used up); then a Phoenix Arrow if there is one; then the ordinary arrows.
++        // Poison arrows go first; then a Phoenix Arrow if there is one; then the ordinary arrows.
+         if launcher == ItemKind::Bow && self.inventory.remove(ItemKind::PoisonArrow, 1) {
+             self.attack_cooldown = BOW_COOLDOWN;
+             self.arrows.push(Arrow::fired_poison(eye, dir));
+@@ -1594,16 +1688,12 @@ impl Game {
+     /// pebble), to be picked up and used again.
+     pub fn update_arrows(&mut self, dt: f32) {
+         let mut hits = Vec::new();
+-        let mut poisoned = Vec::new();
+         let mut landed = Vec::new();
+         let (world, animals) = (&self.world, &self.animals);
+         self.arrows.retain_mut(|arrow| match arrow.update(world, animals, dt) {
+             Fate::InFlight => true,
+             Fate::HitAnimal(i) => {
+                 hits.push((i, arrow.damage()));
+-                if arrow.poisons() {
+-                    poisoned.push(i);
+-                }
+                 false
+             }
+             Fate::HitBlock | Fate::Expired => {
+@@ -1614,9 +1704,6 @@ impl Game {
+                 false
+             }
+         });
+-        for i in poisoned {
+-            self.animals[i].poison();
+-        }
+         self.hurt_animals(&hits);
+         for (kind, spot) in landed {
+             self.items.push(DroppedItem::at_rest(kind, spot));
+@@ -1929,7 +2016,7 @@ impl Game {
+         self.world.set_block(x, y, z, Block::PlacedLog);
+         self.world.ignite((x, y, z), HORIZEN_CAMP_FIRE_SECONDS);
+         let berries = if self.rng.chance(50) { ItemKind::Berries } else { ItemKind::PurpleBerries };
+-        self.world.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0 });
++        self.world.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0, served: 0 });
+         self.toasts.push("You come on a camp: a fire, and a pot of stew still hot.".to_string());
+         true
+     }
+@@ -2068,6 +2155,13 @@ impl Game {
+     /// with a loadstone on it, built where it lands. If there is no room there it flies on a little and tries again.
+     fn land_crows_at_altars(&mut self) {
+         let due: Vec<usize> = (0..self.animals.len()).filter(|&i| self.animals[i].kind == AnimalKind::Crow && self.animals[i].is_landing() && self.animals[i].west_followed >= CROW_ALTAR_WEST_BLOCKS).collect();
++        // A player who already has a loadstone or a compass is led to no more altars: the crows just land.
++        if !due.is_empty() && (self.owns(ItemKind::Loadstone) || self.owns(ItemKind::Compass)) {
++            for i in due {
++                self.animals[i].west_followed = 0.0;
++            }
++            return;
++        }
+         for i in due {
+             let at = self.animals[i].pos;
+             match self.altar_site_near(at.x.floor() as i32, at.z.floor() as i32) {
+@@ -2450,6 +2544,7 @@ pub fn enter_skylands(&mut self) {
+         }
+         let seed = self.info.seed;
+         let from = self.world.dimension;
++        self.clear_stardust();
+         let mut other = self.take_parked(target).unwrap_or_else(|| Away::fresh(target, seed));
+         let (yaw, pitch) = (self.player.yaw, self.player.pitch);
+         std::mem::swap(&mut self.world, &mut other.world);
+@@ -2682,7 +2777,6 @@ pub fn enter_skylands(&mut self) {
+     /// of the player and any bear; a bear only ever reacts to the player.
+     pub fn update_animals(&mut self, dt: f32) {
+         self.attack_cooldown = (self.attack_cooldown - dt).max(0.0);
+-        self.update_poison(dt);
+         self.update_phoenix_respawn(dt);
+         self.update_falling_stars(dt);
+         match self.world.dimension {
+@@ -5355,15 +5449,23 @@ mod tests {
+         g.select_slot(5);
+         assert!(!g.can_use_fire(&fire) && !g.use_held(&fire), "not done yet");
+         g.burn_fires(1.1);
+-        assert!(g.can_use_fire(&fire) && g.use_held(&fire));
+-        assert_eq!(g.inventory.count(ItemKind::VenisonStew), 1);
++        assert!(!g.can_use_fire(&fire) && !g.use_held(&fire), "an empty hand cannot take the stew: it needs a bowl");
++        hold(&mut g, ItemKind::WoodenBowl, 4);
++        for n in 1..=STEW_SERVINGS {
++            assert!(g.can_use_fire(&fire) && g.use_held(&fire), "serving {n}");
++            assert_eq!(g.inventory.count(ItemKind::VenisonStew), n);
++            assert_eq!(g.inventory.count(ItemKind::WoodenBowl), STEW_SERVINGS - n, "each serving takes a bowl");
++            assert_eq!(g.world.pots[&pos].servings_left(), if n < STEW_SERVINGS { STEW_SERVINGS - n } else { 0 });
++        }
+         assert_eq!(g.world.pots[&pos], crate::world::Pot::empty());
++        g.inventory.remove(ItemKind::VenisonStew, STEW_SERVINGS - 1);
+ 
+         // The stew heals twice what cooked venison does.
+         g.health = 1;
+         hold(&mut g, ItemKind::VenisonStew, 1);
+         assert!(g.eat_held());
+         assert_eq!(g.health, 1 + 2 * VENISON_HEAL);
++        assert_eq!(g.inventory.count(ItemKind::WoodenBowl), 1, "drinking the stew gives the empty bowl back");
+         // The empty pot comes off the fire again.
+         g.select_slot(5);
+         assert!(g.use_held(&fire));
+@@ -5389,7 +5491,7 @@ mod tests {
+             hold(&mut g, raw, 1);
+             assert!(g.use_held(&embers), "{raw:?}");
+             g.burn_fires(STEW_SECONDS + 0.1);
+-            g.select_slot(5);
++            hold(&mut g, ItemKind::WoodenBowl, 1);
+             assert!(g.use_held(&embers));
+             assert_eq!(g.inventory.count(stew), 1, "{raw:?} makes {stew:?}");
+         }
+@@ -5398,7 +5500,7 @@ mod tests {
+         hold(&mut g, ItemKind::TinPot, 1);
+         assert!(!g.can_use_fire(&forge_hit(pos, Block::ForgeLit)) && !g.use_held(&forge_hit(pos, Block::ForgeLit)));
+         assert_eq!(g.inventory.count(ItemKind::TinPot), 1);
+-        // A burnt-out fire drops the pot and its meat.
++        // A burnt-out fire leaves the pot sitting on the charcoal, with its meat in it.
+         let mut g = game(170);
+         let pos = lit_fire(&mut g);
+         let fire = fire_hit(pos);
+@@ -5408,9 +5510,16 @@ mod tests {
+         }
+         g.world.fires.insert(pos, 1.0);
+         g.burn_fires(2.0);
+-        let mut kinds: Vec<_> = g.items.iter().map(|i| i.kind).collect();
+-        kinds.sort_by_key(|k| k.id());
+-        assert_eq!(kinds, vec![ItemKind::Poultry, ItemKind::TinPot]);
++        assert!(g.items.is_empty(), "nothing falls");
++        assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Charcoal);
++        assert_eq!(g.world.pots[&pos].meat, Some(ItemKind::Poultry));
++        // The cold pot can still be worked: the raw meat and the pot come back to the hand that lifts it off.
++        let cold = forge_hit(pos, Block::Charcoal);
++        g.select_slot(8);
++        g.inventory.slots[8] = None;
++        assert!(g.can_use_fire(&cold) && g.use_held(&cold));
++        assert_eq!((g.inventory.count(ItemKind::TinPot), g.inventory.count(ItemKind::Poultry)), (1, 1));
++        assert!(g.world.pots.is_empty());
+     }
+ 
+     #[test]
+@@ -7858,8 +7967,8 @@ mod crow_pan_relic_and_mother_tests {
+             assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Fire, "on a burning log");
+             assert!(g.world.fires.contains_key(&pos));
+             assert!(pot.water && matches!(pot.stew(), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)), "stew, ready");
+-            // Right click with an empty hand ladles it out.
+-            g.inventory.slots[0] = None;
++            // Right click with a wooden bowl ladles a serving out.
++            g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::WoodenBowl, count: 1 });
+             g.select_slot(0);
+             let hit = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Fire, prev: (pos.0, pos.1 + 1, pos.2) };
+             assert!(g.use_held(&hit));
+@@ -7906,7 +8015,7 @@ mod crow_pan_relic_and_mother_tests {
+     // --- Backpack, pipes, ghosts, Stonehenge, the Mother in the air ---
+ 
+     #[test]
+-    fn a_leather_backpack_is_made_of_leather_and_cord_and_gives_two_rows_only_while_worn() {
++    fn a_leather_backpack_is_made_of_leather_and_cord_and_gives_three_rows_only_while_worn() {
+         let r = crate::recipe::recipe_for(ItemKind::LeatherBackpack);
+         assert_eq!(r.inputs, &[(ItemKind::Leather, 4), (ItemKind::LeatherCord, 2)]);
+         let mut g = game();
+@@ -7914,7 +8023,7 @@ mod crow_pan_relic_and_mother_tests {
+         hold(&mut g, ItemKind::LeatherBackpack);
+         assert!(g.wear_held());
+         assert_eq!(g.worn, Some(ItemKind::LeatherBackpack));
+-        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS + 2 * HOTBAR_SLOTS, "two more rows");
++        assert_eq!(g.inventory.slots.len(), INVENTORY_SLOTS + BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS, "three more rows");
+         // The extra slots hold things; they survive a save only together with the pack.
+         g.inventory.slots[INVENTORY_SLOTS + 4] = Some(ItemStack { kind: ItemKind::Gold, count: 5 });
+         let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
+@@ -9995,14 +10104,19 @@ mod upgrade_tests {
+     }
+ 
+     #[test]
+-    fn snake_fangs_make_poison_arrows_that_the_bow_shoots_first_and_that_poison_what_they_hit() {
+-        let r = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::PoisonArrow).expect("a recipe");
+-        assert_eq!(r.inputs, &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)]);
++    fn a_snake_fang_and_25_arrows_make_25_poison_arrows_that_the_bow_shoots_first_and_that_hit_twice_as_hard() {
++        let recipes: Vec<_> = crate::recipe::RECIPES.iter().filter(|r| r.output == ItemKind::PoisonArrow).collect();
++        assert_eq!(recipes.len(), 1, "the old recipe is gone");
++        let r = recipes[0];
++        assert_eq!(r.inputs, &[(ItemKind::Arrow, 25), (ItemKind::SnakeFang, 1)]);
++        assert_eq!(r.output_count, 25);
+         let mut inv = crate::inventory::Inventory::new();
+-        for (k, n) in [(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)] {
+-            inv.add(k, n);
+-        }
+-        assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::PoisonArrow) == 1);
++        inv.add(ItemKind::Arrow, 24);
++        inv.add(ItemKind::SnakeFang, 1);
++        assert!(!crate::recipe::craft(&mut inv, r), "24 arrows are not enough");
++        inv.add(ItemKind::Arrow, 1);
++        assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::PoisonArrow) == 25);
++        assert_eq!((inv.count(ItemKind::Arrow), inv.count(ItemKind::SnakeFang)), (0, 0));
+ 
+         let mut g = game();
+         open_sky(&mut g);
+@@ -10014,7 +10128,7 @@ mod upgrade_tests {
+         for n in 0..2 {
+             g.attack_cooldown = 0.0;
+             assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
+-            assert_eq!(g.inventory.count(ItemKind::PoisonArrow), 1 - n, "each poison arrow is used up");
++            assert_eq!(g.inventory.count(ItemKind::PoisonArrow), 1 - n, "each shot takes one from the quiver");
+             assert_eq!((g.inventory.count(ItemKind::PhoenixArrow), g.inventory.count(ItemKind::Arrow)), (1, 3), "poison goes before the phoenix arrow and the plain ones");
+         }
+         assert!(g.arrows.iter().all(|a| a.kind == ItemKind::PoisonArrow));
+@@ -10026,7 +10140,7 @@ mod upgrade_tests {
+         assert!(g.shoot_bow(eye, vec3(1.0, 0.0, 0.0)));
+         assert_eq!(g.arrows.last().map(|a| a.kind), Some(ItemKind::Arrow), "then the plain arrows");
+ 
+-        // A poison arrow poisons a bear (tough enough to live through it), which then loses a point a second until the poison runs out.
++        // A poison arrow does double damage to a bear (tough enough to live through it) and is used up by the hit.
+         let mut g = game();
+         open_sky(&mut g);
+         let mut bear = Animal::new(AnimalKind::Bear, g.player.pos + vec3(5.0, 0.0, 0.0), &mut Rng::new(1));
+@@ -10037,18 +10151,17 @@ mod upgrade_tests {
+         for _ in 0..30 {
+             g.update_arrows(DT);
+         }
+-        let after_blow = g.animals[0].health;
+-        assert_eq!(after_blow, 100 - ARROW_DAMAGE, "the blow");
+-        assert!(g.animals[0].poisoned > 0.0, "and it is poisoned");
++        assert_eq!(g.animals[0].health, 100 - 2 * ARROW_DAMAGE, "double the blow, and no poison afterwards");
+         assert!(g.arrows.is_empty() && g.items.iter().all(|i| i.kind != ItemKind::PoisonArrow), "the arrow is spent");
+-        g.player.pos = vec3(-100.0, g.player.pos.y, -100.0);
+-        for _ in 0..(POISON_SECONDS * 60.0) as i32 + 60 {
+-            g.update_poison(DT);
++        // One that misses lands on the ground as a poison arrow, to be picked up again.
++        let mut g = game();
++        open_sky(&mut g);
++        g.arrows.push(Arrow::fired_poison(g.player.pos + vec3(0.0, 1.0, 0.0), vec3(0.0, -1.0, 0.0)));
++        for _ in 0..120 {
++            g.update_arrows(DT);
+         }
+-        let lost = after_blow - g.animals[0].health;
+-        let full = (POISON_SECONDS / POISON_INTERVAL) as i32 * POISON_DAMAGE;
+-        assert!((full - POISON_DAMAGE..=full).contains(&lost), "poison took {lost} points over its course (about {full})");
+-        assert_eq!(g.animals[0].poisoned, 0.0);
++        assert!(g.arrows.is_empty());
++        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::PoisonArrow).count(), 1, "the miss lies on the ground");
+     }
+ 
+     fn hold_bow(g: &mut Game) {
+@@ -10407,3 +10520,227 @@ fn clear_site<T: Copy>(first: f32, make: impl Fn(f32) -> T, shift: impl Fn(T, i3
+     }
+     None
+ }
++
++#[cfg(test)]
++mod duplicate_find_and_stardust_tests {
++    use super::*;
++    use crate::animal::Mode;
++    use crate::chunk::idx;
++    use crate::item::ItemStack;
++    use std::path::PathBuf;
++
++    fn game() -> Game {
++        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
++        let mut g = Game::from_save(info, SaveData::new(), 5);
++        g.world.stream_chunks(g.player.pos);
++        g
++    }
++
++    fn hold(g: &mut Game, kind: ItemKind, count: u32) {
++        g.inventory.slots[0] = Some(ItemStack { kind, count });
++        g.select_slot(0);
++    }
++
++    /// Break a placed pebble or stone at a fixed spot `times` times with a Rabbit Foot in the hotbar; every kind that dropped.
++    fn break_many(g: &mut Game, block: Block, times: usize) -> Vec<ItemKind> {
++        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::RabbitFoot, count: 1 });
++        g.select_slot(2);
++        let mut found = Vec::new();
++        for _ in 0..times {
++            g.world.set_block(3, 6, 3, block);
++            found.extend(g.mine(3, 6, 3));
++        }
++        found
++    }
++
++    #[test]
++    fn no_more_than_eight_spirit_archers_follow_and_the_king_refuses_more_until_some_are_gone() {
++        assert_eq!(MAX_SPIRIT_ARCHERS, 8);
++        let (kx, kz) = horizen::king_centre(1);
++        let mut g = game();
++        g.travel_to(Dimension::Horizen);
++        g.player.pos = vec3(kx as f32 + 0.5, GROUND_TOP as f32 + 1.01, (kz + KING_WALL_HALF - 6) as f32 + 0.5);
++        g.world.stream_chunks(g.player.pos);
++        g.animals.clear();
++        assert!(g.in_king_castle());
++        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Gold, count: 100 });
++        assert_eq!(g.give_gold_to_king(8), 8);
++        assert_eq!(g.spirit_count(), 8);
++        assert_eq!(g.give_gold_to_king(1), 0, "a ninth is refused");
++        assert_eq!(g.inventory.count(ItemKind::Gold), 100 - 8 * GOLD_PER_SPIRIT, "and costs nothing");
++        assert_eq!(g.ghost_text.as_ref().map(|t| t.0.as_str()), Some(ghosts::KING_FULL));
++        let gone = g.animals.iter().position(|a| a.kind == AnimalKind::SpiritArcher).unwrap();
++        g.animals.remove(gone);
++        assert_eq!(g.give_gold_to_king(1), 1, "he sells again once one is gone");
++        assert_eq!(g.give_gold_to_king(2), 0, "but never past eight");
++    }
++
++    #[test]
++    fn pipes_by_day_call_parrots_as_they_call_quail() {
++        let mut g = game();
++        g.world.night = false;
++        for chunk in g.world.chunks.values_mut() {
++            for y in GROUND_TOP + 1..WORLD_HEIGHT {
++                for z in 0..CHUNK_SIZE {
++                    for x in 0..CHUNK_SIZE {
++                        chunk.blocks[idx(x, y, z)] = Block::Air;
++                    }
++                }
++            }
++        }
++        let p = g.player.pos;
++        for (kind, dx) in [(AnimalKind::Parrot, 30.0), (AnimalKind::Quail, -30.0)] {
++            g.animals.push(Animal::new(kind, vec3(p.x + dx, GROUND_TOP as f32 + 1.0, p.z), &mut Rng::new(4)));
++        }
++        hold(&mut g, ItemKind::MusicalPipes, 1);
++        assert!(g.play_pipes());
++        assert!(g.animals.iter().all(|a| a.lure_target.is_some()), "both are called");
++        // Follow just these two (index 0 the parrot, 1 the quail; other wildlife may wander in) until each has landed and stands calm.
++        let mut landed: [Option<f32>; 2] = [None, None];
++        for frame in 0..25 * 60 {
++            g.update_animals(1.0 / 60.0);
++            for i in 0..2 {
++                let a = &g.animals[i];
++                if landed[i].is_none() && a.calm > 0.0 {
++                    landed[i] = Some(vec2(a.pos.x - p.x, a.pos.z - p.z).length());
++                }
++            }
++            if landed.iter().all(Option::is_some) {
++                break;
++            }
++            assert!(frame < 25 * 60 - 1, "they did not come: {landed:?}");
++        }
++        for (i, gap) in landed.iter().enumerate() {
++            assert!(gap.unwrap() < PIPES_LAND_MAX + 1.0, "bird {i} landed {} blocks from the player", gap.unwrap());
++        }
++    }
++
++    #[test]
++    fn a_stardust_chunk_is_left_where_a_star_lands_fades_in_thirty_seconds_and_drops_stardust_if_broken_first() {
++        let mut g = game();
++        g.travel_to(Dimension::Skylands);
++        g.world.stream_chunks(g.player.pos);
++        g.world.night = true;
++        let seed = g.info.seed;
++        let spawn = skylands::spawn_point();
++        let (x, z) = (spawn.x.floor() as i32 + 2, spawn.z.floor() as i32);
++        let island = skylands::island_at(seed, x, z).expect("on the first island");
++        let y = island.surface_y(x, z) + 1;
++        let cell = (x, y, z);
++        g.world.stream_chunks(vec3(x as f32, y as f32, z as f32));
++        // The first falling star lands: a pile appears at its landing place and stays.
++        let mut star = crate::stars::FallingStar::new(vec3(x as f32, y as f32 + 100.0, z as f32), vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5));
++        star.age = FALLING_STAR_FALL_SECONDS;
++        g.falling_stars.push(star);
++        g.update_falling_stars(0.0);
++        assert_eq!(g.world.block_at(x, y, z), Block::StardustPile);
++        assert_eq!(g.stardust.len(), 1);
++        g.update_falling_stars(STARDUST_PILE_SECONDS - 1.0);
++        assert_eq!(g.world.block_at(x, y, z), Block::StardustPile, "still there after 29 seconds");
++        // Broken in time, it drops stardust that can be picked up.
++        let drops = g.mine(cell.0, cell.1, cell.2);
++        assert_eq!(drops, vec![ItemKind::Stardust; STARDUST_DROP as usize]);
++        assert!(g.stardust.is_empty());
++        assert_eq!(g.world.block_at(x, y, z), Block::Air);
++        // Left alone, a pile fades after thirty seconds and drops nothing.
++        g.items.clear();
++        g.leave_stardust(vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5));
++        assert_eq!(g.world.block_at(x, y, z), Block::StardustPile);
++        g.update_stardust(STARDUST_PILE_SECONDS + 0.1);
++        assert_eq!(g.world.block_at(x, y, z), Block::Air);
++        assert!(g.items.is_empty() && g.stardust.is_empty());
++        // Leaving the Skylands clears any pile at once; piles are never written to a save.
++        g.leave_stardust(vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5));
++        assert!(!g.save_text().contains("stardust_pile"));
++        g.travel_to(Dimension::Overworld);
++        g.travel_to(Dimension::Skylands);
++        assert_eq!(g.world.block_at(x, y, z), Block::Air);
++    }
++
++    #[test]
++    fn a_player_who_already_has_the_philosophers_stone_is_given_gold_for_another() {
++        let mut g = game();
++        g.world.chunks.get_mut(&(0, 0)).unwrap().blocks[idx(3, 6, 3)] = Block::StonePlinth;
++        g.inventory.slots[0] = None;
++        let drops = g.mine(3, 6, 3);
++        assert_eq!(drops, vec![ItemKind::PhilosophersStone], "the first one is the stone");
++        let mut g = game();
++        g.inventory.add(ItemKind::PhilosophersStone, 1);
++        g.world.chunks.get_mut(&(0, 0)).unwrap().blocks[idx(3, 6, 3)] = Block::StonePlinth;
++        g.select_slot(8);
++        let drops = g.mine(3, 6, 3);
++        assert_eq!(drops, vec![ItemKind::Gold], "a second becomes gold");
++    }
++
++    #[test]
++    fn no_peep_stones_are_found_by_a_player_who_already_has_one() {
++        let mut g = game();
++        let found = break_many(&mut g, Block::PlacedPebble, 300);
++        assert!(found.contains(&ItemKind::PeepStone), "without one they turn up");
++        let mut g = game();
++        g.inventory.add(ItemKind::PeepStone, 1);
++        let found = break_many(&mut g, Block::PlacedPebble, 300);
++        assert!(!found.contains(&ItemKind::PeepStone), "with one none do");
++        assert!(found.contains(&ItemKind::Pebble), "the pebbles themselves still drop");
++    }
++
++    #[test]
++    fn no_loadstones_are_found_by_a_player_who_has_a_loadstone_or_a_compass() {
++        let mut g = game();
++        let found = break_many(&mut g, Block::PlacedStone, 300);
++        assert!(found.contains(&ItemKind::Loadstone), "without either they turn up");
++        for owned in [ItemKind::Loadstone, ItemKind::Compass] {
++            let mut g = game();
++            g.inventory.add(owned, 1);
++            let found = break_many(&mut g, Block::PlacedStone, 300);
++            assert!(!found.contains(&ItemKind::Loadstone), "{owned:?}: none turn up");
++            assert!(found.contains(&ItemKind::Stone), "the stones themselves still drop");
++        }
++    }
++
++    #[test]
++    fn a_crow_the_player_has_followed_builds_no_altar_for_a_player_with_a_loadstone_or_compass() {
++        fn due_crow(g: &mut Game) {
++            let at = g.player.pos + vec3(6.0, 0.0, 0.0);
++            let mut crow = Animal::new(AnimalKind::Crow, at, &mut Rng::new(2));
++            crow.mode = Mode::Fly;
++            crow.timer = 0.0;
++            crow.west_followed = CROW_ALTAR_WEST_BLOCKS;
++            g.animals.push(crow);
++        }
++        let altars = |g: &Game| g.world.placed.values().filter(|b| **b == Block::AltarLoadstone).count();
++        let mut g = game();
++        due_crow(&mut g);
++        g.land_crows_at_altars();
++        assert_eq!(altars(&g), 1, "an ordinary player is led to an altar");
++        for owned in [ItemKind::Loadstone, ItemKind::Compass] {
++            let mut g = game();
++            g.inventory.add(owned, 1);
++            due_crow(&mut g);
++            g.land_crows_at_altars();
++            assert_eq!(altars(&g), 0, "{owned:?}: no altar");
++            assert_eq!(g.animals[0].west_followed, 0.0);
++        }
++    }
++
++    #[test]
++    fn a_pot_of_stew_is_served_into_bowls_and_the_bowl_comes_back_when_the_stew_is_drunk() {
++        let mut g = game();
++        let pos = (12, 6, 12);
++        g.world.set_block(pos.0, pos.1, pos.2, Block::Charcoal);
++        g.world.pots.insert(pos, crate::world::Pot { water: true, meat: Some(ItemKind::Berries), left: 0.0, served: 0 });
++        let cold = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Charcoal, prev: (pos.0, pos.1 + 1, pos.2) };
++        g.inventory.slots[0] = None;
++        g.select_slot(0);
++        assert!(!g.can_use_fire(&cold) && !g.use_held(&cold), "no stew without a bowl, and a pot of finished stew is not lifted off");
++        hold(&mut g, ItemKind::WoodenBowl, 1);
++        assert!(g.can_use_fire(&cold) && g.use_held(&cold), "a cold pot still serves");
++        assert_eq!((g.inventory.count(ItemKind::RedBerryStew), g.inventory.count(ItemKind::WoodenBowl)), (1, 0));
++        g.health = 1;
++        let slot = g.inventory.slots.iter().position(|s| s.map_or(false, |s| s.kind == ItemKind::RedBerryStew)).expect("the served stew");
++        g.select_slot(slot.min(HOTBAR_SLOTS - 1));
++        assert_eq!(g.held_item(), Some(ItemKind::RedBerryStew));
++        assert!(g.eat_held());
++        assert_eq!((g.inventory.count(ItemKind::WoodenBowl), g.inventory.count(ItemKind::RedBerryStew)), (1, 0), "the bowl came back");
++    }
++}
+diff --git a/src/help.rs b/src/help.rs
+index a9796c1..07e71f0 100644
+--- a/src/help.rs
++++ b/src/help.rs
+@@ -83,13 +83,13 @@ pub fn help_lines() -> Vec<Line> {
+         item(format!("Salt mine. Deep in the mines under the mountain, rarely, a cluster of pink salt crystals stands on the tunnel floor; break it by hand to collect {PINK_SALT_DROP_MIN} to {PINK_SALT_DROP_MAX} lumps of Pink Salt. Hold a lump in your hand and each bat that strikes you dies instead of hurting you, using up one lump. Bats live in the mineshafts and bite for {BAT_DAMAGE}.")),
+         item("Compass in the Horizen and the Skylands. The needle points to where you arrived."),
+         item(format!("The jungle. Falling off the Skylands lands you in the jungle, a stretch of the normal world {JUNGLE_DISTANCE_CHUNKS} chunks from the spawn point, four times the area it first had (about {} blocks across), thick with very tall trees. In the bare middle of it stands a big Mayan-style temple: a stepped pyramid with a broad stair up its south face and a shrine on top, with a pile of gold in it. A passage in its north face leads to a chamber at its very heart, where the Cursed Idol stands on a plinth.", JUNGLE_RADIUS * 2)),
+-        item("Bones. Killing a deer leaves two Bones one time in five, and Bones lie on the altar islands of the Skylands: they are all one kind. Craft 3 Bones into Musical Pipes. Hold them and right click to play a tune (see Ghosts below). By day the tune calls every quail and crow within 70 blocks: they fly to you, land near you and stand still for 3 seconds. At night it calls bats instead (see Bats)."),
++        item("Bones. Killing a deer leaves two Bones one time in five, and Bones lie on the altar islands of the Skylands: they are all one kind. Craft 3 Bones into Musical Pipes. Hold them and right click to play a tune (see Ghosts below). By day the tune calls every quail, parrot and crow within 70 blocks: they fly to you, land near you and stand still for 3 seconds. At night it calls bats instead (see Bats)."),
+         item(format!("The Horizen. A separate dimension with none of the creatures of the normal world except bats: a cave. You arrive in a pool in a domed chamber, and it is always day when you come in. Caves of every size lie all round, joined by tunnels so that you can wander from one to the next, and one winding tunnel leads to a single, far larger cavern. Nothing can be dug, so the cave is as it was made. Small ponds lie on the floor. Every {HORIZEN_CAMP_EVERY}th cave you come into has a camp: a burning log with a tin pot of red or purple berry stew, ready to ladle out and eat (right click the pot with an empty hand). Hold a Peep Stone and the silver tower appears in the great cavern, with a ghostly trail to it along the tunnel. If night falls in the cave (a Purple Berry Stew brings it) you black out and wake in the ring of Stonehenge. The Compass points back to the arrival pool; the Bone Totem does nothing there.")),
+         item(format!("Bosses. On the summit of the mountain lives the Yeti ({YETI_HEALTH} health): it charges when you come within {YETI_NOTICE_DISTANCE:.0} blocks, hits for {YETI_DAMAGE}, never leaves the summit's neighbourhood and is slower than you are, but enraged below half health. In the lake lives the Loch Ness Monster ({LOCH_NESS_HEALTH} health), which swims only in its lake and strikes at you from the water with its long neck. Their health bar shows at the top of the screen. Axes, the Bronze Mallet, arrows and pebbles all hurt them. The gate of the castle on a lake's island stays shut until that lake's monster is dead.")),
+         item(format!("The Skylands. Once the Yeti is dead a cyclone stands on the summit. Stand in it for {CYCLONE_SECONDS:.0} seconds, as the screen fades to white, and it carries you to the Skylands: a sky of floating islands joined by wooden bridges, with its own day and night. Step off an island and the screen goes white, and you fall from {SKY_FALL_DROP:.0} blocks above the normal world's spawn point. There is no way home but to jump off an island and fall.")),
+         item("The Yeti comes back every time you leave the Skylands (by falling or by dying): the summit cyclone is gone until you have killed it again. Each lake with a tower has a Loch Ness Monster of its own, and a monster that has been killed never comes back."),
+         item(format!("Fire tornadoes. By day in the Skylands a large fire tornado appears every {SKY_TORNADO_INTERVAL:.0} seconds, {SKY_TORNADO_SPAWN_DISTANCE:.0} blocks away and at your height, sweeps to where you stood when it spawned, burns you on contact and stays there for {SKY_TORNADO_LIFETIME:.0} seconds, so sometimes there are four at once, each burning for {SKY_TORNADO_DAMAGE}; night makes them all disappear, and so does killing the Phoenix, for good. In the crater of the Phoenix's volcano a much larger fire tornado whirls all day, always: step into it and it burns you for {SKY_TORNADO_DAMAGE}; it too is gone at night, and killing the Phoenix does not stop it. At night the wooden bridges between the islands break: only a short ragged stub is left at each end, so you cannot cross until day.")),
+-        item(format!("Crows. A crow behaves like a quail: it takes off when you come within {FLEE_DISTANCE:.0} blocks, dropping a feather, but it always flies west if the way is clear. It leaves {CROW_FEATHER_DROP} feathers and no poultry. Follow one crow west for two chunks ({CROW_ALTAR_WEST_BLOCKS:.0} blocks, staying within {CROW_FOLLOW_DISTANCE:.0} blocks of it) and it lands on a new ancient altar, a small altar with a Loadstone on it. Take the Loadstone by hand; the altar stays.")),
++        item(format!("Crows. A crow behaves like a quail: it takes off when you come within {FLEE_DISTANCE:.0} blocks, dropping a feather, but it always flies west if the way is clear. It leaves {CROW_FEATHER_DROP} feathers and no poultry. Follow one crow west for two chunks ({CROW_ALTAR_WEST_BLOCKS:.0} blocks, staying within {CROW_FOLLOW_DISTANCE:.0} blocks of it) and it lands on a new ancient altar, a small altar with a Loadstone on it. Take the Loadstone by hand; the altar stays. If you already have a Loadstone or a Compass, crows build no altar.")),
+         item(format!("Iron Quail. Every {QUAIL_KILLS_PER_IRON_QUAIL} quail you kill, an Iron Quail ({IRON_QUAIL_HEALTH} health) appears and hunts you for as long as you both live: she never gives up, and she flies: climbing after you, over obstacles and up to you wherever you stand. She hits for {IRON_QUAIL_DAMAGE}, and when she dies she drops a Silver Key. If you die she is gone.")),
+         item("Tin Pan. Made of 2 Tin. Hold it and break river clay: one time in twenty a Gold turns up as well, one time in five with a Rabbit Foot in your hotbar."),
+         item("The Philosopher's Stone. Right click a boulder with it to turn the boulder to gold; the stone is kept. A gold boulder breaks by hand into gold."),
+@@ -110,17 +110,17 @@ pub fn help_lines() -> Vec<Line> {
+         item(format!("Parrots and Bronze Parrots. Parrots are colourful quail that live in the jungle, where only the jungle's own creatures come (no deer, quail, bears, rabbits, moose or ravens). Every {PARROTS_PER_BRONZE_PARROT} parrots you kill, {BRONZE_PARROTS_PER_SUMMON} Bronze Parrots ({BRONZE_PARROT_HEALTH} health) come for you and fight like Iron Quails; each leaves {BRONZE_PARROT_BRONZE_DROP} Bronze.")),
+         item(format!("Cursed Idol. Taken from its plinth in the heart of the jungle temple, whose passage is boarded up until the Orangutan is dead. While it is anywhere in your hotbar you deal {IDOL_DAMAGE_FACTOR} times the damage, but nothing can heal you: berries, meat and red stew all refuse.")),
+         item(format!("The Orangutan. A boss ({ORANGUTAN_HEALTH} health) on the upper tiers of the jungle temple, which comes when you are within {ORANGUTAN_SPAWN_DISTANCE:.0} blocks. It walks and climbs after you, hits for {ORANGUTAN_DAMAGE}, hurls rocks from {ORANGUTAN_ROCK_MIN_RANGE:.0} to {ORANGUTAN_ROCK_MAX_RANGE:.0} blocks away (each bursts for {ROCK_BURST_DAMAGE}) and, within {ORANGUTAN_LEAP_MAX_RANGE:.0} blocks, crouches, leaps high and comes down beside you to smash the ground: everything within {ORANGUTAN_SMASH_RADIUS:.0} blocks takes {ORANGUTAN_SMASH_DAMAGE} and is thrown {ORANGUTAN_SMASH_KNOCKBACK:.0} blocks. Once dead it never returns, and leaves {ORANGUTAN_GOLD_DROP} Gold.")),
+-        item(format!("Jaguars and flying snakes. In the jungle jaguars (at most {MAX_JAGUAR}) creep up on you, crouch, then pounce for {JAGUAR_DAMAGE} and slink away. Flying snakes (at most {MAX_FLYING_SNAKE}) are about seventeen blocks long and drift slowly in wide loops through the air round you, then swoop down to bite for {SNAKE_DAMAGE}. A dead snake drops {SNAKE_FANG_DROP_MIN} to {SNAKE_FANG_DROP_MAX} Snake Fangs; a Pebble, a Stick, a Feather and a fang make a Poison Arrow. A bow shoots Poison Arrows first, then Phoenix Arrows, then ordinary arrows. A poison arrow is used up, and what it hits loses {POISON_DAMAGE} life every {POISON_INTERVAL:.0} second for {POISON_SECONDS:.0} seconds.")),
++        item(format!("Jaguars and flying snakes. In the jungle jaguars (at most {MAX_JAGUAR}) creep up on you, crouch, then pounce for {JAGUAR_DAMAGE} and slink away. Flying snakes (at most {MAX_FLYING_SNAKE}) are about seventeen blocks long and drift slowly in wide loops through the air round you, then swoop down to bite for {SNAKE_DAMAGE}. A dead snake drops {SNAKE_FANG_DROP_MIN} to {SNAKE_FANG_DROP_MAX} Snake Fangs; a Pebble, a Stick, a Feather and a fang make a Poison Arrow. A bow shoots Poison Arrows first, then Phoenix Arrows, then ordinary arrows. A poison arrow does {POISON_ARROW_DAMAGE_FACTOR} times an arrow's damage and, like an arrow, is used up only if it hits an animal: one that misses lies on the ground and can be picked up. 25 Arrows and a Snake Fang make 25 Poison Arrows.")),
+         item(format!("The Phoenix. Hold a Peep Stone in the Skylands and its trail leads to a giant island, with a volcano on it. The Phoenix ({PHOENIX_HEALTH} health) lives in the crater: it throws fireballs ({FIREBALL_DAMAGE} in a burst) and swoops down on you for {PHOENIX_SWOOP_DAMAGE}. When it dies the wandering fire tornadoes stop (the crater's does not) and it drops a Phoenix Feather; {PHOENIX_RESPAWN_SECONDS:.0} seconds later it rises again in the crater and the tornadoes come back. A Pebble, a Stick and the feather make a Phoenix Arrow: shoot it from a bow and it is never used up, and it never lands on the ground. Skylands islands may be wooded, ruined, hilly or have an ancient altar with bones; one in {SKY_LARGE_ONE_IN} is large.")),
+         item(format!("Jerky. A Pink Salt and a raw meat make jerky, crafted with no fire: Venison, Poultry, Bear, Rabbit and Moose Jerky. Each heals as much as the cooked meat; stew still heals twice as much.")),
+-        item(format!("Falling stars. On a Skylands night a star streaks down from the sky about every {FALLING_STAR_INTERVAL:.0} seconds and lands, in a flash of light, on an island you can see. It is not always the one you are standing on.")),
++        item(format!("Falling stars. On a Skylands night a star streaks down from the sky about every {FALLING_STAR_INTERVAL:.0} seconds and lands, in a flash of light, on an island you can see, never the one you are standing on. It leaves a white chunk of stardust that fades after {STARDUST_PILE_SECONDS:.0} seconds; break it before then to get Stardust.")),
+         item(format!("Caves of the Horizen. The caves are of four kinds: plain; mossy, with green pools ringed with moss; river caves, with a stream winding across the floor (shallow enough to wade); and crystal caves, with red crystals like salt crystals that cannot be mined. You always arrive in the same pool, and the screen goes black before you are moved.")),
+         item(format!(
+             "Grand castle. Hold a Peep Stone at night. The first time you do so in a world, a grand castle rises somewhere beyond the edge of the land, at least {} blocks away, and a ghostly trail leads towards it. It is a great castle of grey stone, about {} blocks across: an outer wall with towers and a gate on the south side, and in the middle a keep of {GRAND_STOREYS} floors with a door on its south side, windows, a stair from each floor to the next, and a roof to walk on. The trail leads to the gate and then to the door of the keep. There is only one grand castle in a world. Castle stone cannot be broken.",
+             grand_distance(), GRAND_REACH * 2 + 1
+         )),
+-        item("Getting a Peep Stone: kill a rabbit (one in four drops a Rabbit Foot), keep the foot anywhere in your hotbar, and break pebbles by hand. Each has a chance to add a Peep Stone."),
+-        item("Getting a Compass: with the Rabbit Foot in your hotbar, break stones by hand until one drops a Loadstone. Break a boulder with a Bronze Mallet for iron ore. A Loadstone and an Iron Ore make a Compass in the inventory."),
++        item("Getting a Peep Stone: kill a rabbit (one in four drops a Rabbit Foot), keep the foot anywhere in your hotbar, and break pebbles by hand. Each has a chance to add a Peep Stone, until you have one."),
++        item("Getting a Compass: with the Rabbit Foot in your hotbar, break stones by hand until one drops a Loadstone (none drop once you have a Loadstone or a Compass). Break a boulder with a Bronze Mallet for iron ore. A Loadstone and an Iron Ore make a Compass in the inventory."),
+         heading("Gathering"),
+         item("Leaves and pine needles: sometimes drop a stick. Break them by hand."),
+         item("Grass (in clearings): sometimes drops grass. Berry bushes: drop berries."),
+@@ -170,7 +170,7 @@ pub fn help_lines() -> Vec<Line> {
+         item("A Clay Jar (4 clay) is the only way to carry water. Hold an empty jar, look at a river and right click it to fill the jar."),
+         item("A Tin Pot (3 tin) is set on a burning log or burning charcoal in the open: right click the fire with the pot in hand. Right click the pot with a jar of water to fill it (you get the empty jar back)."),
+         item(format!(
+-            "Then right click the pot with any raw meat (venison, poultry, bear, rabbit or moose). It makes a stew of that meat in {} seconds. Right click with your hand empty to take the stew out; right click an empty pot to take it off the fire.",
++            "Then right click the pot with any raw meat (venison, poultry, bear, rabbit or moose). It makes a stew of that meat in {} seconds. Each pot of stew holds {STEW_SERVINGS} servings: right click it with an empty Wooden Bowl (a log makes {BOWLS_PER_LOG}) to fill the bowl. You cannot take stew without a bowl; drinking it leaves the empty bowl. Right click an empty pot to take it off. If the fire goes out the pot stays on the charcoal or ash, and cooks again if you relight the charcoal.",
+             STEW_SECONDS as i32
+         )),
+         item(format!("A stew restores {STEW_HEAL_FACTOR} times as much life as the same meat cooked: right click it to eat it when you are hurt. Cooked rabbit gives {RABBIT_MEAT_HEAL} and cooked moose {MOOSE_MEAT_HEAL}.")),
+diff --git a/src/hud.rs b/src/hud.rs
+index 7ac2e6d..17c38e7 100644
+--- a/src/hud.rs
++++ b/src/hud.rs
+@@ -392,8 +392,8 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
+         }
+         ItemKind::VenisonStew | ItemKind::PoultryStew | ItemKind::BearStew | ItemKind::RabbitStew | ItemKind::MooseStew
+         | ItemKind::RedBerryStew | ItemKind::PurpleBerryStew => {
+-            // A tin bowl brimming with stew: a rim, the surface with lumps, a few bubbles and steam.
+-            let bowl = ItemKind::TinPot.color();
++            // A wooden bowl brimming with stew: a rim, the surface with lumps, a few bubbles and steam.
++            let bowl = ItemKind::WoodenBowl.color();
+             draw_circle(cx, cy + 5.0 * u, r.w * 0.32, outline);
+             draw_circle(cx, cy + 5.0 * u, r.w * 0.30, darken(bowl, 0.74));
+             draw_circle(cx - 1.0, cy + 3.5 * u, r.w * 0.27, bowl);
+@@ -748,6 +748,21 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
+                 }
+             }
+         }
++        ItemKind::WoodenBowl => {
++            // An empty wooden bowl seen from the side: a dark inside, a rim and a rounded body.
++            draw_circle(cx, cy + 3.0 * u, r.w * 0.32, outline);
++            draw_circle(cx, cy + 3.0 * u, r.w * 0.30, darken(color, 0.74));
++            draw_circle(cx - 1.0, cy + 1.5 * u, r.w * 0.27, color);
++            draw_circle(cx, cy - 1.0 * u, r.w * 0.24, darken(color, 0.55));
++            draw_circle(cx - 1.5, cy - 2.0 * u, r.w * 0.20, darken(color, 0.40));
++        }
++        ItemKind::Stardust => {
++            // A small heap of glittering white grains.
++            for (dx, dy, k) in [(-0.14, 0.10, 4.5), (0.12, 0.12, 4.0), (0.0, -0.04, 5.5), (-0.04, 0.20, 3.5), (0.16, -0.10, 2.5)] {
++                ball(cx + dx * r.w, cy + dy * r.h, k * u, color);
++            }
++            draw_circle(cx - 0.02 * r.w, cy - 0.08 * r.h, 1.4 * u, WHITE);
++        }
+         ItemKind::SnakeFang => {
+             // A curved, pointed fang: wide at the root (upper left), curving down to a sharp tip.
+             let pts = [p(0.30, 0.22), p(0.42, 0.40), p(0.54, 0.58), p(0.62, 0.78)];
+diff --git a/src/inventory.rs b/src/inventory.rs
+index 60356c8..be4ce6d 100644
+--- a/src/inventory.rs
++++ b/src/inventory.rs
+@@ -181,11 +181,12 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    fn a_backpack_adds_two_rows_that_can_only_be_taken_away_when_what_is_in_them_fits_elsewhere() {
++    fn a_backpack_adds_three_rows_that_can_only_be_taken_away_when_what_is_in_them_fits_elsewhere() {
+         let mut inv = Inventory::new();
+         assert_eq!(inv.slots.len(), INVENTORY_SLOTS);
+         inv.add_pack_rows();
+-        assert_eq!(inv.slots.len(), INVENTORY_SLOTS + 2 * HOTBAR_SLOTS);
++        assert_eq!(inv.slots.len(), INVENTORY_SLOTS + BACKPACK_EXTRA_ROWS * HOTBAR_SLOTS);
++        assert_eq!((INVENTORY_SLOTS, BACKPACK_EXTRA_ROWS), (45, 3), "one more row of slots, and one more row from the pack");
+         assert!(inv.has_pack_rows());
+         // The new slots take items like any other.
+         assert_eq!(inv.add(ItemKind::Stone, MAX_STACK * (INVENTORY_SLOTS + BACKPACK_SLOTS) as u32), 0);
+diff --git a/src/item.rs b/src/item.rs
+index a3318cf..0b84062 100644
+--- a/src/item.rs
++++ b/src/item.rs
+@@ -140,9 +140,10 @@ pub enum ItemKind {
+     BootsOfTheSky,
+     /// The cursed idol from the heart of the jungle temple. While it is in the hotbar the player cannot heal, and deals double damage.
+     CursedIdol,
+-    /// Dropped by a flying snake. With a stick, a pebble and a feather it makes a poison arrow.
++    /// Dropped by a flying snake. With 25 arrows it makes 25 poison arrows.
+     SnakeFang,
+-    /// An arrow tipped with a snake fang. A bow shoots these first, they are used up, and what they hit is poisoned.
++    /// An arrow dipped with a snake fang's poison. A bow shoots these first; they do double an arrow's damage and, like arrows, are
++    /// used up only by hitting an animal.
+     PoisonArrow,
+     /// Raw meat cured with pink salt. It heals as much as the cooked meat does, one kind for each meat.
+     VenisonJerky,
+@@ -150,10 +151,15 @@ pub enum ItemKind {
+     BearJerky,
+     RabbitJerky,
+     MooseJerky,
++    /// Five come from a log. Right click a pot of finished stew with one to fill it; a stew in hand is a filled bowl, and drinking it
++    /// gives the empty bowl back.
++    WoodenBowl,
++    /// What a chunk of stardust (`Block::StardustPile`) drops.
++    Stardust,
+ }
+ 
+ impl ItemKind {
+-    pub const ALL: [ItemKind; 85] = [
++    pub const ALL: [ItemKind; 87] = [
+         ItemKind::Stick,
+         ItemKind::Pebble,
+         ItemKind::Stone,
+@@ -239,6 +245,8 @@ impl ItemKind {
+         ItemKind::BearJerky,
+         ItemKind::RabbitJerky,
+         ItemKind::MooseJerky,
++        ItemKind::WoodenBowl,
++        ItemKind::Stardust,
+     ];
+ 
+     /// Display name.
+@@ -324,6 +332,8 @@ impl ItemKind {
+             ItemKind::CursedIdol => "Cursed Idol",
+             ItemKind::SnakeFang => "Snake Fang",
+             ItemKind::PoisonArrow => "Poison Arrow",
++            ItemKind::WoodenBowl => "Wooden Bowl",
++            ItemKind::Stardust => "Stardust",
+             ItemKind::VenisonJerky => "Venison Jerky",
+             ItemKind::PoultryJerky => "Poultry Jerky",
+             ItemKind::BearJerky => "Bear Jerky",
+@@ -415,6 +425,8 @@ impl ItemKind {
+             ItemKind::CursedIdol => "cursed_idol",
+             ItemKind::SnakeFang => "snake_fang",
+             ItemKind::PoisonArrow => "poison_arrow",
++            ItemKind::WoodenBowl => "wooden_bowl",
++            ItemKind::Stardust => "stardust",
+             ItemKind::VenisonJerky => "venison_jerky",
+             ItemKind::PoultryJerky => "poultry_jerky",
+             ItemKind::BearJerky => "bear_jerky",
+@@ -517,6 +529,8 @@ impl ItemKind {
+             ItemKind::CursedIdol => Color::new(0.30, 0.42, 0.26, 1.0),
+             ItemKind::SnakeFang => Color::new(0.92, 0.94, 0.78, 1.0),
+             ItemKind::PoisonArrow => Color::new(0.45, 0.78, 0.22, 1.0),
++            ItemKind::WoodenBowl => Color::new(0.62, 0.44, 0.24, 1.0),
++            ItemKind::Stardust => Color::new(0.96, 0.97, 1.0, 1.0),
+             ItemKind::VenisonJerky => Color::new(0.40, 0.18, 0.12, 1.0),
+             ItemKind::PoultryJerky => Color::new(0.62, 0.40, 0.22, 1.0),
+             ItemKind::BearJerky => Color::new(0.32, 0.15, 0.10, 1.0),
+@@ -806,6 +820,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
+             }
+         }
+         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
++        Block::StardustPile => drops.extend(std::iter::repeat(ItemKind::Stardust).take(STARDUST_DROP as usize)),
+         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
+         Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(rng.range(PINK_SALT_DROP_MIN as i32, PINK_SALT_DROP_MAX as i32 + 1) as usize)),
+         Block::KeyStand => drops.push(ItemKind::SilverKey),
+diff --git a/src/recipe.rs b/src/recipe.rs
+index da4c31d..b97850f 100644
+--- a/src/recipe.rs
++++ b/src/recipe.rs
+@@ -1,7 +1,7 @@
+ //! Crafting recipes. A recipe consumes a fixed number of items; there is no shape or
+ //! placement, only counts. To add a recipe, append an entry to `RECIPES`.
+ 
+-use crate::config::JERKY_SALT_COST;
++use crate::config::{BOWLS_PER_LOG, JERKY_SALT_COST, POISON_ARROW_BATCH};
+ use crate::inventory::Inventory;
+ use crate::item::ItemKind;
+ 
+@@ -13,6 +13,7 @@ pub struct Recipe {
+ 
+ pub const RECIPES: &[Recipe] = &[
+     Recipe { output: ItemKind::Twine, output_count: 1, inputs: &[(ItemKind::Grass, 3)] },
++    Recipe { output: ItemKind::WoodenBowl, output_count: BOWLS_PER_LOG, inputs: &[(ItemKind::Log, 1)] },
+     Recipe { output: ItemKind::LeatherCord, output_count: 3, inputs: &[(ItemKind::Leather, 1)] },
+     Recipe { output: ItemKind::BowDrill, output_count: 1, inputs: &[(ItemKind::Twine, 1), (ItemKind::Stick, 1)] },
+     Recipe {
+@@ -66,10 +67,11 @@ pub const RECIPES: &[Recipe] = &[
+         output_count: 1,
+         inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::PhoenixFeather, 1)],
+     },
++    // A snake fang dips a whole batch of arrows in poison.
+     Recipe {
+         output: ItemKind::PoisonArrow,
+-        output_count: 1,
+-        inputs: &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1), (ItemKind::SnakeFang, 1)],
++        output_count: POISON_ARROW_BATCH,
++        inputs: &[(ItemKind::Arrow, POISON_ARROW_BATCH), (ItemKind::SnakeFang, 1)],
+     },
+     // Jerky: raw meat cured with a lump of pink salt, one kind for each meat. No fire is needed.
+     Recipe { output: ItemKind::VenisonJerky, output_count: 1, inputs: &[(ItemKind::Venison, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
+@@ -160,7 +162,12 @@ mod tests {
+             &[(ItemKind::Pebble, 1), (ItemKind::Stick, 1), (ItemKind::Feather, 1)]
+         );
+         for r in RECIPES {
+-            let expected = if r.output == ItemKind::LeatherCord { 3 } else { 1 };
++            let expected = match r.output {
++                ItemKind::LeatherCord => 3,
++                ItemKind::WoodenBowl => 5,
++                ItemKind::PoisonArrow => 25,
++                _ => 1,
++            };
+             assert_eq!(r.output_count, expected, "{:?}", r.output);
+         }
+     }
+@@ -214,11 +221,20 @@ mod tests {
+         assert_eq!((inv.count(ItemKind::Twine), inv.count(ItemKind::Leather), inv.count(ItemKind::Stick)), (1, 0, 1));
+     }
+ 
++    #[test]
++    fn a_log_makes_five_wooden_bowls() {
++        let mut inv = inv_with(&[(ItemKind::Log, 1)]);
++        let r = recipe_for(ItemKind::WoodenBowl);
++        assert_eq!((r.inputs, r.output_count), (&[(ItemKind::Log, 1)][..], 5));
++        assert!(craft(&mut inv, r));
++        assert_eq!((inv.count(ItemKind::WoodenBowl), inv.count(ItemKind::Log)), (5, 0));
++    }
++
+     #[test]
+     fn wooden_planks_can_no_longer_be_crafted() {
+         assert!(RECIPES.iter().all(|r| r.output != ItemKind::Plank));
+         let inv = inv_with(&[(ItemKind::Log, 5)]);
+-        assert!(craftable(&inv).is_empty(), "a log makes nothing");
++        assert!(craftable(&inv).iter().all(|r| r.output == ItemKind::WoodenBowl), "a log makes only bowls");
+     }
+ 
+     #[test]
+diff --git a/src/save.rs b/src/save.rs
+index 3f56d2e..c93d510 100644
+--- a/src/save.rs
++++ b/src/save.rs
+@@ -221,7 +221,7 @@ fn world_lines(world: &World, prefix: &str, out: &mut String) {
+         out.push_str(&format!("{prefix}berry {} {} {}\n", x, y, z));
+     }
+     for (&(x, y, z), block) in &world.placed {
+-        if let Some(id) = block.id() {
++        if let Some(id) = block.id().filter(|_| *block != crate::block::Block::StardustPile) {
+             out.push_str(&format!("{prefix}place {} {} {} {}\n", x, y, z, id));
+         }
+     }
+@@ -232,7 +232,7 @@ fn world_lines(world: &World, prefix: &str, out: &mut String) {
+         out.push_str(&format!("{prefix}glow {} {} {} {}\n", x, y, z, secs));
+     }
+     for (&(x, y, z), pot) in &world.pots {
+-        out.push_str(&format!("{prefix}pot {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left));
++        out.push_str(&format!("{prefix}pot {} {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left, pot.served));
+     }
+     for (&(x, y, z), meat) in &world.cooking {
+         out.push_str(&format!("{prefix}cook {} {} {} {} {}\n", x, y, z, meat.raw.id(), meat.left));
+@@ -330,7 +330,7 @@ pub fn serialize_save_full(
+         out.push_str(&format!("item {} {} {} {}\n", item.kind.id(), item.pos.x, item.pos.y, item.pos.z));
+     }
+     for (&(x, y, z), block) in &world.placed {
+-        if let Some(id) = block.id() {
++        if let Some(id) = block.id().filter(|_| *block != crate::block::Block::StardustPile) {
+             out.push_str(&format!("place {} {} {} {}\n", x, y, z, id));
+         }
+     }
+@@ -341,7 +341,7 @@ pub fn serialize_save_full(
+         out.push_str(&format!("glow {} {} {} {}\n", x, y, z, secs));
+     }
+     for (&(x, y, z), pot) in &world.pots {
+-        out.push_str(&format!("pot {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left));
++        out.push_str(&format!("pot {} {} {} {} {} {} {}\n", x, y, z, pot.water as u8, pot.meat.map_or("-", |m| m.id()), pot.left, pot.served));
+     }
+     for (&(x, y, z), meat) in &world.cooking {
+         out.push_str(&format!("cook {} {} {} {} {}\n", x, y, z, meat.raw.id(), meat.left));
+@@ -597,9 +597,11 @@ fn apply_line(data: &mut SaveData, line: &str) {
+                 });
+                 let meat = t.next().and_then(|s| if s == "-" { Some(None) } else { ItemKind::from_id(s).filter(|k| k.stewed().is_some()).map(Some) });
+                 let left = t.next().and_then(|s| s.parse::<f32>().ok());
++                // Servings already taken (older saves have none).
++                let served = t.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0).min(STEW_SERVINGS);
+                 if let (3, Some(water), Some(meat), Some(left)) = (v.len(), water, meat, left) {
+                     if left.is_finite() && left >= 0.0 {
+-                        data.pots.insert((v[0], v[1], v[2]), Pot { water, meat, left: left.min(STEW_SECONDS) });
++                        data.pots.insert((v[0], v[1], v[2]), Pot { water, meat, left: left.min(STEW_SECONDS), served });
+                     }
+                 }
+             }
+@@ -1017,7 +1019,7 @@ mod tests {
+         let mut world = World::new(9, HashSet::new());
+         world.placed.insert((1, 6, 1), Block::Fire);
+         world.fires.insert((1, 6, 1), 40.0);
+-        world.pots.insert((1, 6, 1), Pot { water: true, meat: Some(ItemKind::RabbitMeat), left: 4.5 });
++        world.pots.insert((1, 6, 1), Pot { water: true, meat: Some(ItemKind::RabbitMeat), left: 4.5, served: 0 });
+         let text = serialize_save("W", 9, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
+         assert!(text.contains("pot 1 6 1 1 rabbit_meat 4.5"));
+         let data = parse_save(&text);
+diff --git a/src/stars.rs b/src/stars.rs
+index 44f256b..517a032 100644
+--- a/src/stars.rs
++++ b/src/stars.rs
+@@ -1,5 +1,5 @@
+ //! Falling stars: on the Skylands' nights a star streaks down out of the sky about every `FALLING_STAR_INTERVAL` seconds and lands on
+-//! an island the player can see (not always the one they stand on), where it bursts in a flash of light.
++//! an island the player can see (never the one they stand on), where it bursts in a flash of light and leaves a chunk of stardust.
+ //!
+ //! What is chosen (`pick_landing`) is a pure function of the world, the player's eye and line of sight, and a random roll; only
+ //! `effects::draw_falling_stars` touches macroquad.
+@@ -18,11 +18,13 @@ pub struct FallingStar {
+     pub to: Vec3,
+     /// Seconds since it began to fall.
+     pub age: f32,
++    /// Whether its chunk of stardust has been set down yet.
++    pub pile_made: bool,
+ }
+ 
+ impl FallingStar {
+     pub fn new(from: Vec3, to: Vec3) -> FallingStar {
+-        FallingStar { from, to, age: 0.0 }
++        FallingStar { from, to, age: 0.0, pile_made: false }
+     }
+ 
+     /// How far along its fall it is, 0 to 1 (it speeds up as it comes down).
+@@ -56,8 +58,8 @@ impl FallingStar {
+ }
+ 
+ /// Where a new star lands: a point on the surface of an island the player at `eye` can see, which is one in front of them (within
+-/// `FALLING_STAR_VIEW_DEGREES` of the way they look, `look`) and within `range` blocks, or the island they stand on. Each such island
+-/// is as likely as another, so it is not always the island the player is on. `None` when there is no such island.
++/// `FALLING_STAR_VIEW_DEGREES` of the way they look, `look`) and within `range` blocks, but never the island they stand on. Each such
++/// island is as likely as another. `None` when there is no such island.
+ pub fn pick_landing(seed: i64, eye: Vec3, look: Vec3, range: f32, rng: &mut Rng) -> Option<Vec3> {
+     let flat_look = vec2(look.x, look.z).normalize_or_zero();
+     let cos_limit = FALLING_STAR_VIEW_DEGREES.to_radians().cos();
+@@ -67,7 +69,7 @@ pub fn pick_landing(seed: i64, eye: Vec3, look: Vec3, range: f32, rng: &mut Rng)
+         .filter(|island| {
+             let to = vec2(island.x as f32 + 0.5 - eye.x, island.z as f32 + 0.5 - eye.z);
+             if island.contains(ex, ez) {
+-                return true;
++                return false;
+             }
+             let gap = to.length();
+             gap <= range && gap > 1.0 && (flat_look == Vec2::ZERO || to.normalize_or_zero().dot(flat_look) >= cos_limit)
+@@ -113,24 +115,22 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn stars_land_on_islands_in_view_and_not_always_the_one_the_player_is_on() {
++    fn stars_land_on_islands_in_view_and_never_on_the_one_the_player_is_on() {
+         let seed = 12;
+         let eye = vec3(skylands::spawn_point().x, skylands::spawn_point().y + 1.6, skylands::spawn_point().z);
+         let mut rng = Rng::new(5);
+-        let mut own = 0;
+-        let mut elsewhere = 0;
++        let mut landed = 0;
+         for i in 0..200 {
+             let look = vec3((i as f32 * 0.7).cos(), 0.0, (i as f32 * 0.7).sin());
+             let Some(at) = pick_landing(seed, eye, look, FALLING_STAR_RANGE, &mut rng) else { continue };
++            landed += 1;
+             let island = skylands::island_at(seed, at.x.floor() as i32, at.z.floor() as i32).expect("it lands on an island");
+             assert!((at.y - (island.surface_y(at.x.floor() as i32, at.z.floor() as i32) as f32 + 1.0)).abs() < 1e-3, "on the ground");
+-            if island.contains(eye.x.floor() as i32, eye.z.floor() as i32) { own += 1 } else {
+-                elsewhere += 1;
+-                let to = vec2(island.x as f32 + 0.5 - eye.x, island.z as f32 + 0.5 - eye.z);
+-                assert!(to.length() <= FALLING_STAR_RANGE + 1.0);
+-                assert!(to.normalize().dot(vec2(look.x, look.z)) >= FALLING_STAR_VIEW_DEGREES.to_radians().cos() - 1e-3, "in front of the player");
+-            }
++            assert!(!island.contains(eye.x.floor() as i32, eye.z.floor() as i32), "not the player's own island");
++            let to = vec2(island.x as f32 + 0.5 - eye.x, island.z as f32 + 0.5 - eye.z);
++            assert!(to.length() <= FALLING_STAR_RANGE + 1.0);
++            assert!(to.normalize().dot(vec2(look.x, look.z)) >= FALLING_STAR_VIEW_DEGREES.to_radians().cos() - 1e-3, "in front of the player");
+         }
+-        assert!(own > 0 && elsewhere > 0, "own {own}, elsewhere {elsewhere}");
++        assert!(landed > 0, "some stars landed");
+     }
+ }
+diff --git a/src/world.rs b/src/world.rs
+index 7caab3d..8b06c47 100644
+--- a/src/world.rs
++++ b/src/world.rs
+@@ -56,13 +56,15 @@ pub struct Pot {
+     pub water: bool,
+     /// The raw meat in the pot (not yet a stew).
+     pub meat: Option<ItemKind>,
+-    /// Seconds of heat the stew still needs; counts down only while the pot holds water and meat.
++    /// Seconds of heat the stew still needs; counts down only while the pot holds water and meat, and the fire burns.
+     pub left: f32,
++    /// Servings already taken from the finished stew (the pot holds `STEW_SERVINGS`).
++    pub served: u32,
+ }
+ 
+ impl Pot {
+     pub fn empty() -> Pot {
+-        Pot { water: false, meat: None, left: STEW_SECONDS }
++        Pot { water: false, meat: None, left: STEW_SECONDS, served: 0 }
+     }
+ 
+     /// The stew, once it is done.
+@@ -70,6 +72,11 @@ impl Pot {
+         if self.left <= 0.0 { self.meat.and_then(ItemKind::stewed) } else { None }
+     }
+ 
++    /// Servings of finished stew still in the pot (0 until it is done).
++    pub fn servings_left(&self) -> u32 {
++        if self.stew().is_some() { STEW_SERVINGS.saturating_sub(self.served) } else { 0 }
++    }
++
+     /// How far along the stew is, from 0 to 1.
+     pub fn progress(&self) -> f32 {
+         (1.0 - self.left / STEW_SECONDS).clamp(0.0, 1.0)
+@@ -394,9 +401,13 @@ impl World {
+         self
+     }
+ 
+-    /// Put saved pots back on their fires. A pot without a burning fire under it is discarded.
++    /// Put saved pots back on their fires (or on the charcoal or ash of a fire that has gone out). A pot with neither under it is discarded.
+     pub fn with_pots(mut self, pots: HashMap<Pos, Pot>) -> Self {
+-        self.pots = pots.into_iter().filter(|(pos, _)| self.fires.contains_key(pos)).collect();
++        // A pot stands on a fire, or on the charcoal or ash a fire left.
++        self.pots = pots
++            .into_iter()
++            .filter(|(pos, _)| self.fires.contains_key(pos) || matches!(self.placed.get(pos), Some(Block::Fire | Block::Embers | Block::Charcoal | Block::Ash)))
++            .collect();
+         self
+     }
+ 
+@@ -598,6 +609,13 @@ impl World {
+             self.removed.insert((x, y, z));
+         }
+         self.fires.remove(&(x, y, z));
++        // A pot standing on the block falls off it: the pot, and any raw meat in it, are released (finished stew is spilled).
++        if let Some(pot) = self.pots.remove(&(x, y, z)) {
++            self.released.push(((x, y, z), ItemKind::TinPot));
++            if let (Some(meat), None) = (pot.meat, pot.stew()) {
++                self.released.push(((x, y, z), meat));
++            }
++        }
+         self.dirty_neighbours(key, lx, lz);
+     }
+ 
+@@ -721,20 +739,34 @@ impl World {
+         }
+     }
+ 
+-    /// Ladle the finished stew out of the pot at `pos`; the pot stays on the fire, empty.
++    /// Fill a bowl from the finished stew in the pot at `pos`: one serving comes out. After the last of its `STEW_SERVINGS` the pot is
++    /// empty again (and stays where it is).
+     pub fn take_stew(&mut self, pos: Pos) -> Option<ItemKind> {
+-        let stew = self.pots.get(&pos)?.stew()?;
+-        self.pots.insert(pos, Pot::empty());
++        let pot = self.pots.get_mut(&pos)?;
++        let stew = pot.stew()?;
++        pot.served += 1;
++        if pot.served >= STEW_SERVINGS {
++            *pot = Pot::empty();
++        }
+         Some(stew)
+     }
+ 
+-    /// Take the pot off the fire at `pos`, spilling any water. False if there is none or it still holds meat.
+-    pub fn take_pot(&mut self, pos: Pos) -> bool {
+-        if self.pots.get(&pos).map_or(true, |p| p.meat.is_some()) {
+-            return false;
++    /// Whether the pot at `pos` may be lifted off: it is empty, or its fire is out and the meat in it is still raw (the meat comes back).
++    /// Stew that is done is never spilled: serve it first.
++    pub fn can_take_pot(&self, pos: Pos) -> bool {
++        match self.pots.get(&pos) {
++            None => false,
++            Some(pot) => pot.meat.is_none() || (!self.fires.contains_key(&pos) && pot.stew().is_none()),
+         }
+-        self.pots.remove(&pos);
+-        true
++    }
++
++    /// Take the pot off its fire (or the charcoal or ash under it) at `pos`, spilling any water. Returns the raw meat that was in it,
++    /// if any: `None` if the pot may not be lifted (see `can_take_pot`), `Some(None)` for a pot taken with nothing to give back.
++    pub fn take_pot(&mut self, pos: Pos) -> Option<Option<ItemKind>> {
++        if !self.can_take_pot(pos) {
++            return None;
++        }
++        self.pots.remove(&pos).map(|pot| pot.meat)
+     }
+ 
+     /// Whether the ray from `origin` along `dir` reaches water within `reach` blocks, before anything solid.
+@@ -798,12 +830,7 @@ impl World {
+         for pos in &out {
+             self.fires.remove(pos);
+             self.glow.remove(pos);
+-            if let Some(pot) = self.pots.remove(pos) {
+-                self.released.push((*pos, ItemKind::TinPot));
+-                if let Some(meat) = pot.meat {
+-                    self.released.push((*pos, pot.stew().unwrap_or(meat)));
+-                }
+-            }
++            // A pot on the fire stays where it is, on the charcoal or ash the fire leaves; its stew simply stops cooking.
+             if let Some(piece) = self.cooking.remove(pos) {
+                 self.released.extend(piece.released().into_iter().map(|item| (*pos, item)));
+             }
+@@ -1394,13 +1421,19 @@ mod tests {
+         assert!(w.fill_pot(fire) && !w.fill_pot(fire));
+         assert!(!w.add_to_pot(fire, ItemKind::Leather) && !w.add_to_pot(fire, ItemKind::CookedVenison), "only raw meat");
+         assert!(w.add_to_pot(fire, ItemKind::Venison) && !w.add_to_pot(fire, ItemKind::Poultry));
+-        assert!(!w.take_pot(fire), "not while it holds meat");
++        assert_eq!(w.take_pot(fire), None, "not while it holds meat on a burning fire");
+         w.update_fires(STEW_SECONDS - 1.0);
+         assert_eq!(w.take_stew(fire), None);
+         w.update_fires(1.0);
+-        assert_eq!(w.take_stew(fire), Some(ItemKind::VenisonStew));
++        assert_eq!(w.pots[&fire].servings_left(), STEW_SERVINGS);
++        for n in 1..=STEW_SERVINGS {
++            assert_eq!(w.take_stew(fire), Some(ItemKind::VenisonStew), "serving {n}");
++            assert_eq!(w.pots[&fire].servings_left(), STEW_SERVINGS - n);
++        }
++        assert_eq!(w.take_stew(fire), None, "the pot is empty after four servings");
+         assert_eq!(w.pots[&fire], Pot::empty(), "the pot stays, empty");
+-        assert!(w.take_pot(fire) && w.pots.is_empty() && !w.take_pot(fire));
++        assert_eq!(w.take_pot(fire), Some(None));
++        assert!(w.pots.is_empty() && w.take_pot(fire).is_none());
+         // Without water nothing happens, however long the fire burns.
+         assert!(w.place_pot(fire));
+         w.update_fires(30.0);
+@@ -1420,7 +1453,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn a_fire_that_burns_out_drops_the_pot_and_what_was_in_it() {
++    fn a_fire_that_burns_out_leaves_the_pot_sitting_on_the_charcoal() {
+         let (mut w, fire) = burning_world();
+         w.place_pot(fire);
+         w.fill_pot(fire);
+@@ -1428,29 +1461,40 @@ mod tests {
+         w.update_fires(10.0);
+         w.fires.insert(fire, 0.5);
+         w.update_fires(1.0);
+-        let mut got = w.drain_released();
+-        got.sort_by_key(|&(_, k)| k.id());
+-        assert_eq!(got, vec![(fire, ItemKind::Poultry), (fire, ItemKind::TinPot)], "unfinished meat comes back raw");
+-        assert!(w.pots.is_empty());
++        assert!(w.drain_released().is_empty(), "nothing is dropped");
++        assert_eq!(w.block_at(fire.0, fire.1, fire.2), Block::Charcoal, "the log is charcoal now");
++        assert_eq!(w.pots[&fire].meat, Some(ItemKind::Poultry), "the pot sits on the charcoal with the meat still in it");
++        let before = w.pots[&fire].left;
++        w.update_fires(30.0);
++        assert_eq!(w.pots[&fire].left, before, "and nothing cooks without a fire");
++        assert_eq!(w.take_pot(fire), Some(Some(ItemKind::Poultry)), "the raw meat comes back with the pot");
++        // Burning charcoal that goes out leaves ash, and a finished stew sits on it, to be served but not spilled.
+         let (mut w, fire) = burning_world();
+         w.place_pot(fire);
+         w.fill_pot(fire);
+         w.add_to_pot(fire, ItemKind::MooseMeat);
+         w.update_fires(STEW_SECONDS);
+         w.update_fires(60.0);
+-        let mut got = w.drain_released();
+-        got.sort_by_key(|&(_, k)| k.id());
+-        assert_eq!(got, vec![(fire, ItemKind::MooseStew), (fire, ItemKind::TinPot)], "a finished stew comes back as stew");
++        assert!(w.drain_released().is_empty() && w.pots.contains_key(&fire));
++        assert!(!w.can_take_pot(fire), "finished stew is served first");
++        assert_eq!(w.take_stew(fire), Some(ItemKind::MooseStew));
++        // Breaking the block under a pot knocks the pot off.
++        let (mut w, fire) = burning_world();
++        w.place_pot(fire);
++        w.break_block(fire.0, fire.1, fire.2);
++        assert_eq!(w.drain_released(), vec![(fire, ItemKind::TinPot)]);
++        assert!(w.pots.is_empty());
+     }
+ 
+     #[test]
+-    fn saved_pots_without_a_fire_are_discarded() {
++    fn saved_pots_with_nothing_under_them_are_discarded() {
+         let fires = HashMap::from([((1, 6, 1), 30.0)]);
+-        let pot = Pot { water: true, meat: Some(ItemKind::Venison), left: 3.0 };
+-        let w = World::with_edits(1, HashSet::new(), HashMap::from([((1, 6, 1), Block::Fire)]), fires)
+-            .with_pots(HashMap::from([((1, 6, 1), pot), ((9, 6, 9), pot)]));
+-        assert_eq!(w.pots.len(), 1);
+-        assert!(w.pots.contains_key(&(1, 6, 1)));
++        let pot = Pot { water: true, meat: Some(ItemKind::Venison), left: 3.0, served: 0 };
++        let placed = HashMap::from([((1, 6, 1), Block::Fire), ((2, 6, 2), Block::Ash)]);
++        let w = World::with_edits(1, HashSet::new(), placed, fires)
++            .with_pots(HashMap::from([((1, 6, 1), pot), ((2, 6, 2), pot), ((9, 6, 9), pot)]));
++        assert_eq!(w.pots.len(), 2, "on a fire, or on the ash of one");
++        assert!(w.pots.contains_key(&(1, 6, 1)) && w.pots.contains_key(&(2, 6, 2)));
+     }
+ 
+     #[test]

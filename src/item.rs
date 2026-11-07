@@ -140,9 +140,10 @@ pub enum ItemKind {
     BootsOfTheSky,
     /// The cursed idol from the heart of the jungle temple. While it is in the hotbar the player cannot heal, and deals double damage.
     CursedIdol,
-    /// Dropped by a flying snake. With a stick, a pebble and a feather it makes a poison arrow.
+    /// Dropped by a flying snake. With 25 arrows it makes 25 poison arrows.
     SnakeFang,
-    /// An arrow tipped with a snake fang. A bow shoots these first, they are used up, and what they hit is poisoned.
+    /// An arrow dipped with a snake fang's poison. A bow shoots these first; they do double an arrow's damage and, like arrows, are
+    /// used up only by hitting an animal.
     PoisonArrow,
     /// Raw meat cured with pink salt. It heals as much as the cooked meat does, one kind for each meat.
     VenisonJerky,
@@ -150,10 +151,15 @@ pub enum ItemKind {
     BearJerky,
     RabbitJerky,
     MooseJerky,
+    /// Five come from a log. Right click a pot of finished stew with one to fill it; a stew in hand is a filled bowl, and drinking it
+    /// gives the empty bowl back.
+    WoodenBowl,
+    /// What a chunk of stardust (`Block::StardustPile`) drops.
+    Stardust,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 85] = [
+    pub const ALL: [ItemKind; 87] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -239,6 +245,8 @@ impl ItemKind {
         ItemKind::BearJerky,
         ItemKind::RabbitJerky,
         ItemKind::MooseJerky,
+        ItemKind::WoodenBowl,
+        ItemKind::Stardust,
     ];
 
     /// Display name.
@@ -324,6 +332,8 @@ impl ItemKind {
             ItemKind::CursedIdol => "Cursed Idol",
             ItemKind::SnakeFang => "Snake Fang",
             ItemKind::PoisonArrow => "Poison Arrow",
+            ItemKind::WoodenBowl => "Wooden Bowl",
+            ItemKind::Stardust => "Stardust",
             ItemKind::VenisonJerky => "Venison Jerky",
             ItemKind::PoultryJerky => "Poultry Jerky",
             ItemKind::BearJerky => "Bear Jerky",
@@ -415,6 +425,8 @@ impl ItemKind {
             ItemKind::CursedIdol => "cursed_idol",
             ItemKind::SnakeFang => "snake_fang",
             ItemKind::PoisonArrow => "poison_arrow",
+            ItemKind::WoodenBowl => "wooden_bowl",
+            ItemKind::Stardust => "stardust",
             ItemKind::VenisonJerky => "venison_jerky",
             ItemKind::PoultryJerky => "poultry_jerky",
             ItemKind::BearJerky => "bear_jerky",
@@ -517,6 +529,8 @@ impl ItemKind {
             ItemKind::CursedIdol => Color::new(0.30, 0.42, 0.26, 1.0),
             ItemKind::SnakeFang => Color::new(0.92, 0.94, 0.78, 1.0),
             ItemKind::PoisonArrow => Color::new(0.45, 0.78, 0.22, 1.0),
+            ItemKind::WoodenBowl => Color::new(0.62, 0.44, 0.24, 1.0),
+            ItemKind::Stardust => Color::new(0.96, 0.97, 1.0, 1.0),
             ItemKind::VenisonJerky => Color::new(0.40, 0.18, 0.12, 1.0),
             ItemKind::PoultryJerky => Color::new(0.62, 0.40, 0.22, 1.0),
             ItemKind::BearJerky => Color::new(0.32, 0.15, 0.10, 1.0),
@@ -806,6 +820,7 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
             }
         }
         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
+        Block::StardustPile => drops.extend(std::iter::repeat(ItemKind::Stardust).take(STARDUST_DROP as usize)),
         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
         Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(rng.range(PINK_SALT_DROP_MIN as i32, PINK_SALT_DROP_MAX as i32 + 1) as usize)),
         Block::KeyStand => drops.push(ItemKind::SilverKey),

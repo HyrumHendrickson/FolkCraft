@@ -524,7 +524,7 @@ pub struct Animal {
     pub health: i32,
     /// Distance walked, in blocks; drives the leg and wing animation.
     pub phase: f32,
-    timer: f32,
+    pub(crate) timer: f32,
     /// Seconds left of being scared (a bear: of being enraged) regardless of distance, after being hurt.
     alarm: f32,
     on_ground: bool,
@@ -624,9 +624,6 @@ pub struct Animal {
     leap_age: f32,
     /// A flying snake: the places its head has been, newest first, `SNAKE_SEGMENT_SPACING` blocks apart. Its body follows them.
     pub trail: Vec<Vec3>,
-    /// Seconds of poison left (a poison arrow's hit), and the seconds since it last hurt.
-    pub poisoned: f32,
-    pub poison_tick: f32,
 }
 
 /// How many blocks (up to `limit`) lie between the point (x, z) and the nearest column that is not water: how far from any shore
@@ -771,8 +768,6 @@ impl Animal {
             leap_vel: Vec3::ZERO,
             leap_age: 0.0,
             trail: Vec::new(),
-            poisoned: 0.0,
-            poison_tick: 0.0,
         };
         a.circle = a.heading;
         match kind {
@@ -864,14 +859,6 @@ impl Animal {
             guard += 1;
         }
         self.trail.truncate(SNAKE_SEGMENTS);
-    }
-
-    /// Poison the animal for `POISON_SECONDS` (a fresh dose starts the count again, and does not stack).
-    pub fn poison(&mut self) {
-        if self.kind.is_huntable() {
-            self.poisoned = POISON_SECONDS;
-            self.poison_tick = 0.0;
-        }
     }
 
     /// Hurt the animal for `amount` and scare it (a bear is enraged instead: it charges the player
