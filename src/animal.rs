@@ -40,6 +40,10 @@ use crate::world::World;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AnimalKind {
+    /// A harmless little amphibian of the mossy caves: it wanders and never attacks.
+    Newt,
+    /// The white boss that comes for a player who has used the Cursed Idol; it will not attack in the jungle.
+    Unicorn,
     Deer,
     Quail,
     Bear,
@@ -113,6 +117,8 @@ impl AnimalKind {
             AnimalKind::FlyingSnake => FLYING_SNAKE_HEALTH,
             AnimalKind::Parrot => PARROT_HEALTH,
             AnimalKind::BronzeParrot => BRONZE_PARROT_HEALTH,
+            AnimalKind::Newt => NEWT_HEALTH,
+            AnimalKind::Unicorn => UNICORN_HEALTH,
         }
     }
 
@@ -139,13 +145,13 @@ impl AnimalKind {
     /// Whether the game keeps this creature alive and moving wherever the player goes: the Iron Quail and the Wild Hunt hunt
     /// for ever (until the player dies or leaves the world).
     pub fn never_gives_up(self) -> bool {
-        matches!(self, AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::VampireBat | AnimalKind::SpiritArcher) || self.is_wild_hunt()
+        matches!(self, AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::Unicorn) || self.is_wild_hunt()
     }
 
     /// Whether this is one of the two bosses (they show a health bar, are never spawned as wildlife and are kept
     /// within a leash of where they appeared).
     pub fn is_boss(self) -> bool {
-        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::Orangutan) || self.is_wild_hunt()
+        matches!(self, AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::Orangutan | AnimalKind::Unicorn) || self.is_wild_hunt()
     }
 
     /// Whether this boss stays near where it appeared and is given up on when far away (the others hunt for ever).
@@ -163,6 +169,7 @@ impl AnimalKind {
             AnimalKind::Phoenix => "The Phoenix",
             AnimalKind::VampireBat => "The Vampire Bat",
             AnimalKind::Orangutan => "The Orangutan",
+            AnimalKind::Unicorn => "The Unicorn",
             kind if kind.is_wild_hunt() => "The Wild Hunt",
             _ => "",
         }
@@ -214,6 +221,8 @@ impl AnimalKind {
             AnimalKind::Orangutan => ORANGUTAN_HALF_WIDTH,
             AnimalKind::Jaguar => JAGUAR_HALF_WIDTH,
             AnimalKind::FlyingSnake => SNAKE_HALF_WIDTH,
+            AnimalKind::Newt => NEWT_HALF_WIDTH,
+            AnimalKind::Unicorn => UNICORN_HALF_WIDTH,
         }
     }
 
@@ -242,6 +251,8 @@ impl AnimalKind {
             AnimalKind::Orangutan => ORANGUTAN_HEIGHT,
             AnimalKind::Jaguar => JAGUAR_HEIGHT,
             AnimalKind::FlyingSnake => SNAKE_HEIGHT,
+            AnimalKind::Newt => NEWT_HEIGHT,
+            AnimalKind::Unicorn => UNICORN_HEIGHT,
         }
     }
 
@@ -271,6 +282,8 @@ impl AnimalKind {
             AnimalKind::Orangutan => ORANGUTAN_WALK_SPEED,
             AnimalKind::Jaguar => JAGUAR_STALK_SPEED,
             AnimalKind::FlyingSnake => SNAKE_SPIRAL_SPEED,
+            AnimalKind::Newt => NEWT_WALK_SPEED,
+            AnimalKind::Unicorn => UNICORN_WALK_SPEED,
         }
     }
 
@@ -285,6 +298,8 @@ impl AnimalKind {
             AnimalKind::WillOWhisp => (1.0, 1.0),
             AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Orangutan => (2.0, 5.0),
             AnimalKind::Bat => (0.5, 1.5),
+            AnimalKind::Newt => (1.5, 4.0),
+            AnimalKind::Unicorn => (2.0, 5.0),
             AnimalKind::Jaguar => (2.0, 5.0),
             AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => (1.0, 1.0),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
@@ -302,6 +317,8 @@ impl AnimalKind {
             AnimalKind::WillOWhisp => (1.0, 1.0),
             AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Orangutan => (3.0, 6.0),
             AnimalKind::Bat => (1.0, 2.5),
+            AnimalKind::Newt => (0.8, 2.0),
+            AnimalKind::Unicorn => (2.0, 5.0),
             AnimalKind::Jaguar => (2.0, 4.0),
             AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => (1.0, 1.0),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
@@ -348,6 +365,7 @@ impl AnimalKind {
             AnimalKind::Orangutan => ORANGUTAN_DAMAGE,
             AnimalKind::Jaguar => JAGUAR_DAMAGE,
             AnimalKind::FlyingSnake => SNAKE_DAMAGE,
+            AnimalKind::Unicorn => UNICORN_DAMAGE,
             _ => 0,
         }
     }
@@ -368,6 +386,7 @@ impl AnimalKind {
             AnimalKind::Orangutan => "The Orangutan crushed you",
             AnimalKind::Jaguar => "A jaguar pounced on you",
             AnimalKind::FlyingSnake => "A flying snake bit you to death",
+            AnimalKind::Unicorn => "The Unicorn gored you",
             kind if kind.is_wild_hunt() => "The Wild Hunt killed you",
             _ => "An animal killed you",
         }
@@ -429,6 +448,12 @@ impl AnimalKind {
             AnimalKind::Orangutan => add(ItemKind::Gold, ORANGUTAN_GOLD_DROP),
             AnimalKind::Jaguar => add(ItemKind::Leather, 2),
             AnimalKind::SpiritArcher => {}
+            AnimalKind::Newt => {
+                if rng.chance(NEWT_EYE_CHANCE) {
+                    add(ItemKind::EyeOfNewt, 1);
+                }
+            }
+            AnimalKind::Unicorn => add(ItemKind::Gold, UNICORN_GOLD_DROP),
             AnimalKind::FlyingSnake => add(ItemKind::SnakeFang, rng.range(SNAKE_FANG_DROP_MIN as i32, SNAKE_FANG_DROP_MAX as i32 + 1) as u32),
             // Bats and the ghostly creatures of the Wild Hunt leave nothing behind.
             AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => {}
@@ -527,7 +552,7 @@ pub struct Animal {
     pub(crate) timer: f32,
     /// Seconds left of being scared (a bear: of being enraged) regardless of distance, after being hurt.
     alarm: f32,
-    on_ground: bool,
+    pub(crate) on_ground: bool,
     /// Seconds spent pushing against something.
     stuck: f32,
     /// Turn applied to a fleeing or charging animal's heading to get round an obstacle, and how long it lasts.
@@ -647,7 +672,7 @@ fn shore_clearance(world: &World, x: f32, z: f32, limit: f32) -> f32 {
 
 /// What a body bumped into during one step.
 struct Contact {
-    on_ground: bool,
+    pub(crate) on_ground: bool,
     hit_wall: bool,
     hit_ceiling: bool,
 }
@@ -814,12 +839,15 @@ impl Animal {
 
     /// Every box that can be hit: the one round the animal, and for a flying snake also the boxes along its long body.
     pub fn hitboxes(&self) -> Vec<(Vec3, Vec3)> {
-        let mut boxes = vec![self.hitbox()];
-        if self.kind == AnimalKind::FlyingSnake {
-            let (w, h) = (self.kind.half_width(), self.kind.height());
-            for p in self.body_points().into_iter().skip(1).step_by(3) {
-                boxes.push((p - vec3(w, h * 0.5, w), p + vec3(w, h * 0.5, w)));
-            }
+        if self.kind != AnimalKind::FlyingSnake {
+            return vec![self.hitbox()];
+        }
+        // A snake's head and wings reach well past its collision box, and its body is long: hit-test all of it.
+        let w = SNAKE_HIT_HALF_WIDTH;
+        let mut boxes = vec![(self.pos - vec3(w, 0.2, w), self.pos + vec3(w, SNAKE_HIT_HEIGHT, w))];
+        let (bw, bh) = (SNAKE_BODY_HIT_HALF, SNAKE_BODY_HIT_HALF_HEIGHT);
+        for p in self.body_points().into_iter().skip(1).step_by(2) {
+            boxes.push((p - vec3(bw, bh, bw), p + vec3(bw, bh, bw)));
         }
         boxes
     }
@@ -1010,7 +1038,8 @@ impl Animal {
     /// any other animal never does.
     pub fn try_attack(&mut self, player: Vec3) -> bool {
         let cooldown = match self.kind {
-            AnimalKind::Bear if self.pacified => return false,
+            AnimalKind::Bear | AnimalKind::Unicorn if self.pacified => return false,
+            AnimalKind::Unicorn => UNICORN_ATTACK_COOLDOWN,
             AnimalKind::Bear => BEAR_ATTACK_COOLDOWN,
             AnimalKind::Moose if self.enraged => MOOSE_ATTACK_COOLDOWN,
             AnimalKind::Yeti if self.boss_enraged() => YETI_ATTACK_COOLDOWN * YETI_ENRAGED_COOLDOWN_FACTOR,
@@ -1241,6 +1270,20 @@ impl Animal {
                         self.rest(rng);
                     }
                 } else if dist < BEAR_CHARGE_DISTANCE || self.alarm > 0.0 {
+                    self.mode = Mode::Charge;
+                }
+                if self.mode == Mode::Charge && flat_gap > 1e-3 {
+                    self.heading = towards + detour;
+                }
+            }
+            AnimalKind::Newt => {}
+            AnimalKind::Unicorn => {
+                // At peace while the player is in the jungle (the game sets `pacified`); otherwise it charges from any distance.
+                if self.pacified {
+                    if self.mode == Mode::Charge {
+                        self.rest(rng);
+                    }
+                } else {
                     self.mode = Mode::Charge;
                 }
                 if self.mode == Mode::Charge && flat_gap > 1e-3 {
@@ -1565,6 +1608,7 @@ impl Animal {
             Mode::Charge if self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Rest => 0.0,
             // A charging bear stops once it stands against the player, instead of running through them.
             Mode::Charge if flat_gap <= self.kind.half_width() + PLAYER_HALF_WIDTH && !(self.kind == AnimalKind::HuntLancer && self.hunt_phase == HuntPhase::Retreat) && !(self.kind == AnimalKind::Jaguar && self.pounce == Pounce::Retreat) && self.flee_timer <= 0.0 => 0.0,
+            Mode::Charge if self.kind == AnimalKind::Unicorn => UNICORN_RUN_SPEED,
             Mode::Charge if self.kind == AnimalKind::Moose => MOOSE_RUN_SPEED,
             Mode::Charge if self.kind == AnimalKind::Orangutan => ORANGUTAN_RUN_SPEED * if self.boss_enraged() { 1.25 } else { 1.0 },
             Mode::Charge if self.kind == AnimalKind::Jaguar => match self.pounce {
@@ -2617,10 +2661,11 @@ mod tests {
     #[test]
     fn bears_are_tough_and_drop_meat_and_a_pelt() {
         let mut bear = at(AnimalKind::Bear, 10.5, 10.5);
-        for _ in 0..(BEAR_HEALTH / AXE_DAMAGE - 1) {
+        let blows = (BEAR_HEALTH + AXE_DAMAGE - 1) / AXE_DAMAGE;
+        for _ in 0..blows - 1 {
             assert!(!bear.damage(AXE_DAMAGE));
         }
-        assert!(bear.damage(AXE_DAMAGE));
+        assert!(bear.damage(AXE_DAMAGE), "dead on blow {blows}");
         assert!(BEAR_HEALTH > 2 * DEER_HEALTH);
         let drops = AnimalKind::Bear.drops(&mut Rng::new(1));
         assert_eq!(drops.iter().filter(|&&k| k == ItemKind::BearMeat).count() as u32, BEAR_MEAT_DROP);

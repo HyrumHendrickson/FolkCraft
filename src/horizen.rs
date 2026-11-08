@@ -309,7 +309,7 @@ pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
     }
 }
 
-fn cave_of_column(seed: i64, wx: i32, wz: i32) -> Cave {
+pub fn cave_of_column(seed: i64, wx: i32, wz: i32) -> Cave {
     cave_in_cell(seed, wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL))
 }
 
@@ -342,6 +342,11 @@ pub fn moss_at(seed: i64, wx: i32, wz: i32) -> bool {
     let cave = cave_of_column(seed, wx, wz);
     cave.kind == CaveKind::Mossy
         && moss_pools(seed, &cave).iter().any(|p| Pond { rx: p.rx + HORIZEN_MOSS_RING, rz: p.rz + HORIZEN_MOSS_RING, ..*p }.contains(wx, wz))
+}
+
+/// Whether the column (wx, wz) is open floor inside a mossy cave (where newts live).
+pub fn is_mossy_floor(seed: i64, wx: i32, wz: i32) -> bool {
+    cave_at(seed, wx, wz).map_or(false, |c| c.kind == CaveKind::Mossy) && air_height(seed, wx, wz) > 0
 }
 
 /// Whether the column (wx, wz) lies in the rock walls and roof round a mossy cave (which are green with moss).

@@ -824,6 +824,20 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             rod(p(0.80, 0.56), p(0.94, 0.40), 3.4 * u, darken(color, 0.8));
             draw_line(p(0.30, 0.64).x, p(0.30, 0.64).y, p(0.62, 0.64).x, p(0.62, 0.64).y, 1.2, lighten(color, 0.3));
         }
+        ItemKind::Sword => {
+            // A plain steel blade, a dark crosspiece and a leather grip.
+            let (tip, base) = (p(0.82, 0.14), p(0.36, 0.60));
+            rod(base, tip, 5.0 * u, color);
+            rod(base, tip, 1.4 * u, darken(color, 0.62));
+            rod(p(0.24, 0.58), p(0.42, 0.76), 3.6 * u, Color::new(0.34, 0.30, 0.28, 1.0));
+            rod(p(0.32, 0.68), p(0.16, 0.84), 4.2 * u, Color::new(0.30, 0.18, 0.10, 1.0));
+        }
+        ItemKind::EyeOfNewt => {
+            // A slimy yellow eye with a slit pupil.
+            ball(cx, cy, 9.0 * u, color);
+            draw_circle(cx - 3.0 * u, cy - 3.0 * u, 2.0 * u, Color::new(1.0, 1.0, 0.7, 1.0));
+            draw_rectangle(cx - 1.2 * u, cy - 5.0 * u, 2.4 * u, 10.0 * u, Color::new(0.06, 0.06, 0.04, 1.0));
+        }
         ItemKind::Excalibur => {
             // A long silver blade with a fuller, a golden crosspiece, a grip and a pommel.
             let (tip, base) = (p(0.84, 0.10), p(0.34, 0.60));

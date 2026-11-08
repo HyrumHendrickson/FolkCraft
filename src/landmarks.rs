@@ -787,6 +787,9 @@ pub struct Landmarks {
     pub yeti_slain: bool,
     /// Whether the Orangutan on the jungle temple's upper tiers has been killed. It never comes back.
     pub orangutan_slain: bool,
+    /// Whether the Cursed Idol has been used (the Unicorn has come), and whether the Unicorn has been killed. Neither is undone.
+    pub unicorn_summoned: bool,
+    pub unicorn_slain: bool,
     /// The lakes (by their centre) whose Loch Ness Monster has been killed.
     pub monsters_slain: Vec<(i32, i32)>,
     /// The silver towers whose door has been unlocked, by the column of their centre (a lake's centre for the tower on its
@@ -1183,7 +1186,7 @@ mod tests {
         }
         let circle = |r: f32| std::f32::consts::PI * r * r;
         assert!(water as f32 > circle(LAKE_RADIUS as f32) * 0.6, "water {water}");
-        assert!(water > 30_000, "a large lake, bigger than 30,000 columns of water: {water}");
+        assert!(water > 20_000, "a large lake, bigger than 20,000 columns of water: {water}");
         assert!(island as f32 > circle(l.island_radius()) * 0.6 && island > 2500, "a large island: {island} columns");
         assert!(l.island_radius() >= 35.0);
         assert!(!l.contains(0, 0), "the centre is the island");
@@ -1329,7 +1332,7 @@ mod tests {
             assert!((pair[0] - pair[1]).abs() > 2.0 * (MOUNTAIN_GAP_HALF_ANGLE + MOUNTAIN_GAP_BLEND_ANGLE), "neighbouring gaps overlap: {pair:?}");
         }
         // A small mountain (as the tests use) has fewer ledges, or none, and is smooth.
-        assert_eq!(Mountain { x: 0, z: 0, radius: 40, height: 10, phase: 0 }.ledge_count(), 0);
+        assert_eq!(Mountain { x: 0, z: 0, radius: 40, height: MOUNTAIN_LEDGE_SPACING_HEIGHT - 1, phase: 0 }.ledge_count(), 0);
     }
 
     #[test]

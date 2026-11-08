@@ -138,6 +138,8 @@ impl SaveData {
 ///     "parrotkills <n>"         how many parrots the player has killed
 ///     "batkills <n>"            how many bats the player has killed in the Horizen's caves
 ///     "orangutanslain"          the Orangutan on the jungle temple has been killed (it never returns)
+///     "unicornsummoned"         the Cursed Idol has been used: the Unicorn has come (it returns whole when the world is loaded, until killed)
+///     "unicornslain"            the Unicorn has been killed (it never returns)
 ///     "ruinedcastle <x> <z>"    the ruined castle with the sword in the stone, centred on that column
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
 ///     "dimension skylands"     the player is in the Skylands (everything above is then the overworld)
@@ -277,6 +279,12 @@ pub fn serialize_save_full(
     if extras.bat_kills > 0 {
         out.push_str(&format!("batkills {}\n", extras.bat_kills));
     }
+    if world.landmarks.unicorn_summoned {
+        out.push_str("unicornsummoned\n");
+    }
+    if world.landmarks.unicorn_slain {
+        out.push_str("unicornslain\n");
+    }
     if world.landmarks.orangutan_slain {
         out.push_str("orangutanslain\n");
     }
@@ -397,6 +405,8 @@ fn apply_line(data: &mut SaveData, line: &str) {
             }
             Some("yetislain") => data.landmarks.yeti_slain = true,
             Some("orangutanslain") => data.landmarks.orangutan_slain = true,
+            Some("unicornsummoned") => data.landmarks.unicorn_summoned = true,
+            Some("unicornslain") => data.landmarks.unicorn_slain = true,
             Some("batkills") => data.bat_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("nessie") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();

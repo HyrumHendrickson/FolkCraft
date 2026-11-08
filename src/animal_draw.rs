@@ -336,6 +336,151 @@ fn metal_bird_parts(a: &Animal, time: f32, night: bool, bronze: bool) -> Vec<Pie
         let t = i as f32;
         parts.push(tilted((head.0 - 0.10 - 0.10 * t, head.1 + 0.50 + 0.04 * t, 0.0), (0.04, 0.22 - 0.03 * t, 0.025), polish(0.8 - 0.1 * t, 1.0), 0.6 + 0.1 * t));
     }
+    metal_bird_features(&mut parts, a, time, bronze, flying, lean, &body, &polish);
+    parts
+}
+
+/// What makes the big metal birds read as birds rather than as armoured blocks: a ruff of neck feathers, a hooked beak, folded wings of
+/// layered flight feathers (or, in the air, long primaries spread past the wing), a fanned tail of long quills, and taloned feet.
+/// `body` places a point on the tilted torso and `polish` gives the burnished colour at a point (see `metal_bird_parts`).
+#[allow(clippy::too_many_arguments)]
+fn metal_bird_features(parts: &mut Vec<Piece>, a: &Animal, time: f32, bronze: bool, flying: bool, lean: f32, body: &dyn Fn(f32, f32, f32) -> (f32, f32, f32), polish: &dyn Fn(f32, f32) -> Color) {
+    let beak = if bronze { col(0.16, 0.12, 0.08) } else { col(0.86, 0.64, 0.24) };
+    let talon = if bronze { col(0.20, 0.15, 0.10) } else { col(0.20, 0.21, 0.25) };
+    let dark = if bronze { col(0.34, 0.22, 0.09) } else { col(0.30, 0.33, 0.40) };
+    // A ruff of feathers round the base of the neck.
+    for k in 0..3 {
+        let (x, y, z) = body(0.72 + 0.05 * k as f32, 0.22 - 0.10 * k as f32, 0.0);
+        parts.push(tilted((x, y, z), (0.12, 0.20 - 0.03 * k as f32, 0.30 - 0.04 * k as f32), if k % 2 == 0 { polish(0.7, 0.2) } else { dark }, lean));
+    }
+    // The hooked beak: a deep upper bill with a hook curving down at its tip.
+    let head = body(0.95, 0.38, 0.0);
+    parts.push(tilted((head.0 + 0.50, head.1 - 0.10, 0.0), (0.26, 0.10, 0.09), beak, lean));
+    parts.push(tilted((head.0 + 0.72, head.1 - 0.24, 0.0), (0.06, 0.16, 0.07), beak, lean + 0.35));
+    // The tail: a fan of five long quills, the middle ones longest.
+    for k in -2i32..=2 {
+        let len = 0.62 - 0.07 * k.abs() as f32;
+        let (x, y, z) = body(-0.95 - len * 0.5, 0.10 - 0.03 * k.abs() as f32, 0.15 * k as f32);
+        parts.push(tilted((x, y, z), (len, 0.03, 0.07), if k % 2 == 0 { polish(-0.9, 0.1) } else { dark }, lean + 0.05));
+    }
+    if flying {
+        // Long primaries fanned out from the tips of the beating wings.
+        let flap = (time * 24.0).sin();
+        for side in [-1.0, 1.0] {
+            for k in 0..4 {
+                let (x, y, z) = body(-0.05 - 0.22 * k as f32, 0.55 + 0.35 * flap, side * (1.55 + 0.30 * k as f32));
+                parts.push(tilted((x, y, z), (0.30, 0.03, 0.22), if k % 2 == 0 { polish(0.0, 0.5) } else { dark }, lean - flap * 0.25));
+            }
+        }
+        // Feet tucked up, talons curled.
+        for side in [-1.0, 1.0] {
+            let (x, y, z) = body(-0.10, -0.62, 0.25 * side);
+            for t in -1i32..=1 {
+                parts.push(block((x + 0.20, y - 0.04, z + 0.07 * t as f32), (0.18, 0.03, 0.025), talon));
+            }
+        }
+    } else {
+        // Wings folded along the flanks: three rows of flight feathers, each longer than the last and swept back past the tail.
+        for side in [-1.0, 1.0] {
+            for row in 0..3 {
+                let r = row as f32;
+                let (x, y, z) = body(-0.20 - 0.22 * r, 0.12 - 0.17 * r, 0.70 * side);
+                parts.push(tilted((x, y, z), (0.52 + 0.14 * r, 0.075, 0.045), if row % 2 == 0 { polish(-0.2 - 0.2 * r, 0.1) } else { dark }, lean + 0.22));
+            }
+        }
+        // Taloned feet: three toes forward and one back.
+        let moving = is_moving(a);
+        for (i, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+            let step = (a.phase * 6.0 + if i == 0 { 0.0 } else { std::f32::consts::PI }).sin() * 0.30 * moving;
+            for t in -1i32..=1 {
+                parts.push(block((0.30 + step, 0.05, 0.25 * side + 0.13 * t as f32), (0.28, 0.045, 0.04), talon));
+            }
+            parts.push(block((-0.22 + step, 0.05, 0.25 * side), (0.14, 0.04, 0.04), talon));
+        }
+    }
+}
+
+/// A newt: a small, low, long-tailed amphibian, dark olive above and orange beneath, that sways its body as it creeps along.
+fn newt_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
+    let back = col(0.26, 0.32, 0.13);
+    let belly = col(0.95, 0.52, 0.12);
+    let dark = col(0.09, 0.11, 0.05);
+    let moving = is_moving(a);
+    let sway = (a.phase * 6.0).sin() * moving;
+    let mut parts = Vec::new();
+    // Body and tail: a chain of segments, each swaying a little more than the one before.
+    for i in 0..4 {
+        let x = 0.12 - 0.08 * i as f32;
+        let z = sway * 0.012 * i as f32;
+        parts.push(block((x, 0.075, z), (0.05, 0.04, 0.04), back));
+        parts.push(block((x, 0.034, z), (0.045, 0.012, 0.035), belly));
+    }
+    for i in 0..5 {
+        let x = -0.22 - 0.065 * i as f32;
+        let z = sway * 0.02 * (i as f32 + 3.0);
+        parts.push(block((x, 0.065 - 0.004 * i as f32, z), (0.04, 0.03 - 0.004 * i as f32, 0.014), back));
+    }
+    // A flat head with eyes on top, and a stripe of orange under the jaw.
+    parts.push(block((0.21, 0.075, -sway * 0.012), (0.055, 0.032, 0.045), back));
+    parts.push(block((0.21, 0.04, -sway * 0.012), (0.05, 0.01, 0.04), belly));
+    eyes(&mut parts, (0.235, 0.11, -sway * 0.012), 0.032, 0.014, night, dark);
+    // Four splayed legs, stepping in diagonal pairs.
+    for (x, side, offset) in [(0.12, 1.0f32, 0.0f32), (0.12, -1.0, std::f32::consts::PI), (-0.06, 1.0, std::f32::consts::PI), (-0.06, -1.0, 0.0)] {
+        let step = (a.phase * 6.0 + offset).sin() * 0.035 * moving;
+        parts.push(block((x + step, 0.032, 0.085 * side), (0.032, 0.014, 0.022), back));
+        parts.push(block((x + step + 0.02, 0.014, 0.10 * side), (0.03, 0.01, 0.02), dark));
+    }
+    parts
+}
+
+/// The Unicorn: a tall white horse with a golden spiralled horn, a mane and tail in three pastel colours, and golden hooves. It
+/// rears its head and gallops when it charges, and stands calmly (tail swishing) while the player is in the jungle.
+fn unicorn_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let coat = col(0.97, 0.97, 0.99);
+    let shade = col(0.84, 0.86, 0.92);
+    let hoof = col(0.88, 0.74, 0.34);
+    let horn = col(1.0, 0.86, 0.32);
+    let dark = col(0.16, 0.14, 0.20);
+    let manes = [col(0.96, 0.46, 0.72), col(0.52, 0.60, 1.0), col(0.50, 0.92, 0.76)];
+    let moving = is_moving(a);
+    let charging = a.mode == Mode::Charge;
+    let (rate, amp) = if charging { (2.6, 0.75) } else { (1.5, 0.40) };
+    let breath = (time * 1.6 + a.phase).sin() * 0.015;
+    let gallop = if charging { (a.phase * rate).sin() * 0.07 } else { 0.0 };
+    let swish = (time * 1.3 + a.phase).sin() * 0.25;
+    let mut parts = vec![
+        tilted((0.0, 1.15 + breath, 0.0), (0.62, 0.30 + breath, 0.27), coat, gallop),
+        tilted((0.45, 1.22, 0.0), (0.26, 0.34, 0.26), coat, gallop),
+        tilted((-0.42, 1.18, 0.0), (0.26, 0.32, 0.28), shade, gallop),
+    ];
+    // A long arched neck and a fine head held high (lowered a little for the charge), with a gold horn between the ears.
+    let up = if charging { 0.0 } else { 0.12 };
+    parts.push(tilted((0.78, 1.58 + up * 0.3, 0.0), (0.15, 0.34, 0.13), coat, -0.55));
+    let head = (1.02, 1.86 + up - if charging { 0.12 } else { 0.0 }, 0.0);
+    parts.push(tilted(head, (0.24, 0.13, 0.12), coat, -0.30));
+    parts.push(tilted((head.0 + 0.24, head.1 - 0.10, 0.0), (0.12, 0.09, 0.10), shade, -0.30));
+    parts.push(block((head.0 + 0.34, head.1 - 0.14, 0.0), (0.03, 0.03, 0.07), dark));
+    eyes(&mut parts, (head.0 + 0.08, head.1 + 0.04, 0.0), 0.12, 0.028, night, dark);
+    for side in [-1.0, 1.0] {
+        parts.push(block((head.0 - 0.10, head.1 + 0.18, 0.07 * side), (0.03, 0.08, 0.025), coat));
+    }
+    for i in 0..4 {
+        let t = i as f32;
+        parts.push(tilted((head.0 + 0.10 + 0.07 * t, head.1 + 0.30 + 0.16 * t, 0.0), (0.035 - 0.006 * t, 0.12, 0.035 - 0.006 * t), if i % 2 == 0 { horn } else { col(0.96, 0.72, 0.20) }, -0.45));
+    }
+    // A mane down the neck and a tail streaming behind, both in stripes of colour.
+    for i in 0..6 {
+        let t = i as f32;
+        parts.push(tilted((0.92 - 0.10 * t, 1.84 - 0.12 * t + up * 0.3, 0.0), (0.05, 0.14, 0.06), manes[i % 3], -0.55));
+    }
+    for i in 0..5 {
+        let t = i as f32;
+        parts.push(tilted((-0.72 - 0.06 * t, 1.20 - 0.17 * t, swish * 0.1 * t), (0.05, 0.18, 0.07), manes[i % 3], 0.25 + swish * 0.2));
+    }
+    for (i, &(lx, lz)) in [(0.46, 0.17), (0.46, -0.17), (-0.42, 0.17), (-0.42, -0.17)].iter().enumerate() {
+        let swing = (a.phase * rate + if i == 0 || i == 3 { 0.0 } else { std::f32::consts::PI }).sin() * amp * moving;
+        leg(&mut parts, (lx, 0.88, lz), 0.46, 0.44, 0.075, swing, coat, hoof);
+    }
     parts
 }
 
@@ -620,7 +765,7 @@ fn bat_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
 
 /// A vampire bat: a bat five times the size, with crimson wings, a blood-red gleam in its eyes by day and night, and two white fangs.
 fn vampire_bat_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
-    const K: f32 = 5.0;
+    const K: f32 = 3.4;
     let mut parts = scaled(bat_parts(a, time, night), K);
     for ((_, _, c), _) in parts.iter_mut() {
         // The membrane of the small bat becomes a deep crimson, and its fur a purple-black.
@@ -1003,6 +1148,8 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::Orangutan => orangutan_parts(a, time, night),
             AnimalKind::Jaguar => jaguar_parts(a, time, night),
             AnimalKind::FlyingSnake => flying_snake_parts(a, time, night),
+            AnimalKind::Newt => newt_parts(a, time, night),
+            AnimalKind::Unicorn => unicorn_parts(a, time, night),
             // Drawn by `draw_ghosts`, see-through.
             AnimalKind::SpiritArcher => continue,
             _ => continue,
@@ -1062,6 +1209,100 @@ mod tests {
     use super::*;
     use crate::rng::Rng;
 
+    /// A flying snake whose head has flown along a curve, so its body bends.
+    fn coiled_snake(heading: f32) -> Animal {
+        let mut a = Animal::new(AnimalKind::FlyingSnake, vec3(10.0, 40.0, 10.0), &mut Rng::new(3));
+        a.heading = heading;
+        a.trail = (0..SNAKE_SEGMENTS).map(|i| {
+            let t = i as f32 * 0.09;
+            vec3(10.0 - 3.6 * t.sin() - i as f32 * 0.12, 40.0 - 0.05 * i as f32 + 0.8 * (t * 1.7).sin(), 10.0 + 3.6 * (1.0 - t.cos()))
+        }).collect();
+        a
+    }
+
+    fn inside_any(boxes: &[(Vec3, Vec3)], p: Vec3) -> bool {
+        boxes.iter().any(|&(lo, hi)| p.cmpge(lo).all() && p.cmple(hi).all())
+    }
+
+    #[test]
+    fn every_part_of_a_drawn_flying_snake_is_a_target_wings_head_and_the_whole_body() {
+        for heading in [0.0_f32, 0.7, 1.57, 2.4, 3.9] {
+            let a = coiled_snake(heading);
+            let boxes = a.hitboxes();
+            let (s, c) = heading.sin_cos();
+            // The head and the wings, whatever the beat of the wings: every corner of every part.
+            for time in [0.0_f32, 0.03, 0.06, 0.1, 0.2] {
+                for (((fx, fy, fz), (hx, hy, hz), _), pitch) in flying_snake_parts(&a, time, false) {
+                    let reach_y = hz * pitch.abs().sin();
+                    for (sx, sy, sz) in [(-1.0_f32, -1.0_f32, -1.0_f32), (1.0, 1.0, 1.0), (-1.0, 1.0, 1.0), (1.0, -1.0, -1.0), (1.0, 1.0, -1.0), (-1.0, -1.0, 1.0)] {
+                        let (lx, lz) = (fx + sx * hx, fz + sz * hz);
+                        let p = a.pos + vec3(lx * c - lz * s, fy + sy * (hy + reach_y), lx * s + lz * c);
+                        assert!(inside_any(&boxes, p), "heading {heading}, t {time}: part corner {p:?} is not a target");
+                    }
+                }
+            }
+            // The body: every box drawn, and every point on the line between the centres of neighbouring boxes, can be hit.
+            let drawn = snake_body_boxes(&a, 0.0);
+            for w in drawn.windows(2) {
+                for k in 0..=4 {
+                    let p = w[0].0.lerp(w[1].0, k as f32 / 4.0);
+                    assert!(inside_any(&boxes, p), "heading {heading}: a gap in the body at {p:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_ray_aimed_at_any_segment_of_a_flying_snakes_body_hits_it() {
+        let a = coiled_snake(0.7);
+        for (i, (centre, ..)) in snake_body_boxes(&a, 0.0).into_iter().enumerate() {
+            for dir in [vec3(1.0, 0.2, 0.0), vec3(0.0, 0.3, 1.0), vec3(-0.7, -0.1, 0.7), vec3(0.0, 1.0, 0.0)] {
+                let dir = dir.normalize();
+                let origin = centre - dir * 3.0;
+                let hit = a.hitboxes().iter().any(|&(lo, hi)| crate::world::ray_box(origin, dir, lo.to_array(), hi.to_array()).map_or(false, |t| t <= 3.0 + 1e-3));
+                assert!(hit, "segment {i} was missed along {dir:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_big_metal_birds_have_wings_a_fanned_tail_a_hooked_beak_and_talons_and_the_vampire_bat_is_smaller() {
+        for kind in [AnimalKind::IronQuail, AnimalKind::BronzeParrot] {
+            let mut a = creature(kind);
+            a.on_ground = true;
+            let perched = models(&a, 0.0, false);
+            // Folded wings (three long feather rows a side), five tail quills, a hooked beak and a ruff: 24 more than the old plate-and-rivet model (55).
+            assert!(perched.len() > 70, "{kind:?}: {} boxes", perched.len());
+            let longest_back = perched.iter().map(|((off, half, _), _)| off.0 - half.0).fold(f32::INFINITY, f32::min);
+            assert!(longest_back < -1.5, "{kind:?}: the tail and folded primaries stream out behind: {longest_back}");
+            let low = perched.iter().filter(|((off, half, _), _)| off.1 - half.1 < 0.12 && half.0 > 0.2 && half.2 < 0.06).count();
+            assert!(low >= 6, "{kind:?}: talons on the ground ({low})");
+            a.on_ground = false;
+            a.mode = Mode::Fly;
+            let flying = models(&a, 0.3, false);
+            let wing_span = flying.iter().map(|((off, half, _), _)| off.2.abs() + half.2).fold(0.0_f32, f32::max);
+            assert!(wing_span > 2.5, "{kind:?}: wings spread {wing_span} blocks out");
+        }
+        assert!(VAMPIRE_BAT_HEIGHT < 0.7, "lower than it was");
+        let bat = creature(AnimalKind::VampireBat);
+        let span = models(&bat, 0.0, false).iter().map(|((off, half, _), _)| off.2.abs() + half.2).fold(0.0_f32, f32::max);
+        assert!(span < 2.0, "its wings reach {span} (they reached about 2.6 at the old size)");
+    }
+
+    #[test]
+    fn the_newt_is_small_and_low_and_the_unicorn_is_a_tall_white_horse_with_a_golden_horn() {
+        let newt = models(&creature(AnimalKind::Newt), 0.0, false);
+        let reach = newt.iter().map(|((off, half, _), _)| (off.0.abs() + half.0).max(off.2.abs() + half.2)).fold(0.0_f32, f32::max);
+        let top = newt.iter().map(|((off, half, _), _)| off.1 + half.1).fold(0.0_f32, f32::max);
+        assert!(reach < 0.6 && top < 0.25, "a newt is tiny: {reach} long, {top} high");
+        assert!(newt.iter().any(|((_, _, c), _)| c.r > 0.9 && c.g < 0.6 && c.b < 0.2), "orange beneath");
+        let unicorn = models(&creature(AnimalKind::Unicorn), 0.0, false);
+        let top = unicorn.iter().map(|((off, half, _), _)| off.1 + half.1).fold(0.0_f32, f32::max);
+        assert!(top > 2.0, "tall: {top}");
+        assert!(unicorn.iter().filter(|((_, _, c), _)| c.r > 0.9 && c.g > 0.9 && c.b > 0.9).count() >= 5, "white");
+        assert!(unicorn.iter().filter(|((_, _, c), _)| c.r > 0.9 && c.g > 0.65 && c.b < 0.4).count() >= 4, "a golden horn");
+    }
+
     fn whisp() -> Animal {
         Animal::new(AnimalKind::WillOWhisp, vec3(5.5, 9.0, 5.5), &mut Rng::new(1))
     }
@@ -1105,6 +1346,8 @@ mod tests {
             AnimalKind::Orangutan => orangutan_parts(a, time, night),
             AnimalKind::Jaguar => jaguar_parts(a, time, night),
             AnimalKind::FlyingSnake => flying_snake_parts(a, time, night),
+            AnimalKind::Newt => newt_parts(a, time, night),
+            AnimalKind::Unicorn => unicorn_parts(a, time, night),
             AnimalKind::SpiritArcher => spirit_parts(a, time),
             kind if kind.is_wild_hunt() => hunt_parts(a, time),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => hunt_parts(a, time),

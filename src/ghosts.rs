@@ -18,6 +18,10 @@ pub const KING_GREETING: &str = "I am the king eternal. Give me gold and I shall
 /// What he says when gold has been given, and when it was not enough or he has sent all the spirits he can.
 pub const KING_SENDS: &str = "It is done. My spirits will follow you, and each will loose ten arrows at your foes.";
 pub const KING_WANTS_MORE: &str = "Ten pieces of gold for each spirit. You have not that much.";
+/// The general store's ghost: what he says when the player first comes to trade, when gold has been spent, and when the pipes are played for him.
+pub const SHOP_GREETING: &str = "Welcome, traveller. Gold for goods, and no questions asked.";
+pub const SHOP_BOUGHT: &str = "A fair trade. Come again.";
+pub const SHOP_THANKS: &str = "Thank you, friend. It has been long since anyone played for me.";
 pub const KING_FULL: &str = "My spirits already throng about you. Spend them first.";
 
 /// Cut `text` into lines of at most `max_chars` characters, at spaces (a word longer than that gets a line of its own).

@@ -373,6 +373,20 @@ pub fn nearest_footing(seed: i64, wx: i32, wz: i32, night: bool, reach: i32) -> 
 }
 
 /// Where the player arrives: the middle of the first island, standing on its grass.
+/// Where the general store's ghost stands on the first island (on its ground, a few blocks from where the player arrives).
+pub fn shop_post(seed: i64) -> Vec3 {
+    let spawn = spawn_point();
+    let (x, z) = (spawn.x.floor() as i32 + SHOP_OFFSET.0, spawn.z.floor() as i32 + SHOP_OFFSET.1);
+    let y = island_at(seed, x, z).map_or(spawn.y.floor() as i32 - 1, |i| i.surface_y(x, z)) + 1;
+    vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5)
+}
+
+/// Whether the column under (x, z) belongs to the island where the player arrives (no fire tornado comes there).
+pub fn on_spawn_island(seed: i64, x: f32, z: f32) -> bool {
+    let first = island_in_cell(seed, 0, 0);
+    island_at(seed, x.floor() as i32, z.floor() as i32).map_or(false, |i| (i.x, i.z) == (first.x, first.z))
+}
+
 pub fn spawn_point() -> Vec3 {
     vec3(SKY_SPAWN_CENTRE.0 as f32 + 0.5, SKY_BASE_Y as f32 + 1.01, SKY_SPAWN_CENTRE.1 as f32 + 0.5)
 }

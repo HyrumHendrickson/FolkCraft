@@ -116,9 +116,15 @@ pub const VALLEY_MAX_RADIUS: i32 = 32;
 pub const VALLEY_MIN_DEPTH: i32 = 2;
 pub const VALLEY_MAX_DEPTH: i32 = 4;
 
-pub const RIVER_BIG_SCALE: f32 = 230.0;
+pub const RIVER_BIG_SCALE: f32 = 150.0;
 pub const RIVER_SMALL_SCALE: f32 = 55.0;
 pub const RIVER_WIGGLE: f32 = 0.85;
+/// Rivers run in parallel lanes `RIVER_LANE_SPACING` blocks apart, each bent sideways by up to about `RIVER_BEND` blocks (all by the same amount at a given point along them, so lanes never meet);
+/// `RIVER_LANE_PERCENT` of the lanes carry a river, and a river dwindles away over `RIVER_SPAWN_TAPER` blocks beyond `RIVER_SPAWN_CLEARANCE`.
+pub const RIVER_LANE_SPACING: f32 = 130.0;
+pub const RIVER_BEND: f32 = 45.0;
+pub const RIVER_LANE_PERCENT: u64 = 75;
+pub const RIVER_SPAWN_TAPER: f32 = 10.0;
 pub const RIVER_MIN_HALF_WIDTH: f32 = 2.0;
 pub const RIVER_MAX_HALF_WIDTH: f32 = 3.5;
 pub const RIVER_WIDTH_SCALE: f32 = 90.0;
@@ -126,7 +132,6 @@ pub const RIVER_DEPTH: i32 = 1;
 pub const WATER_SURFACE_DROP: f32 = 0.12;
 pub const WATER_ALPHA: f32 = 0.5;
 pub const RIVER_SPAWN_CLEARANCE: f32 = 34.0;
-pub const RIVER_SPAWN_FADE: f32 = 70.0;
 pub const RIVER_RELIEF_MARGIN: i32 = 4;
 pub const RELIEF_PLACEMENT_TRIES: i32 = 8;
 
@@ -145,10 +150,10 @@ pub fn lake_distance() -> i32 {
 /// The island in the middle of a lake has this share of the lake's radius (about 58 blocks for a big lake).
 pub const LAKE_ISLAND_SHARE: f32 = 0.45;
 /// The island is a hill: it rises this many blocks above the plain to a flat top, which the small castle stands
-/// on. The top is a disc of this radius (the castle's corners reach 14 blocks); the slope runs from it down to the
+/// on. The top is a disc of this radius (the tower's corners reach 6 blocks); the slope runs from it down to the
 /// shore, gently enough to be climbed one block at a time.
 pub const ISLAND_HILL_HEIGHT: i32 = 18;
-pub const ISLAND_PLATEAU_RADIUS: f32 = 18.0;
+pub const ISLAND_PLATEAU_RADIUS: f32 = 12.0;
 /// Half the width of the stretch of water that joins the river to the lake.
 pub const LAKE_CHANNEL_HALF_WIDTH: f32 = 2.5;
 /// Lakes are one block deep, like rivers.
@@ -1146,7 +1151,7 @@ pub const BAT_CAVE_SPAWN_EVERY: u32 = 2;
 pub const BATS_PER_VAMPIRE: u32 = 10;
 pub const VAMPIRE_BAT_HEALTH: i32 = 70;
 pub const VAMPIRE_BAT_HALF_WIDTH: f32 = 0.7;
-pub const VAMPIRE_BAT_HEIGHT: f32 = 0.7;
+pub const VAMPIRE_BAT_HEIGHT: f32 = 0.5;
 pub const VAMPIRE_BAT_DAMAGE: u32 = 3;
 pub const VAMPIRE_BAT_REACH: f32 = 0.9;
 pub const VAMPIRE_BAT_ORBIT_RADIUS: f32 = 8.0;
@@ -1272,6 +1277,13 @@ pub const MAX_FLYING_SNAKE: usize = 5;
 pub const FLYING_SNAKE_HEALTH: i32 = 6;
 pub const SNAKE_HALF_WIDTH: f32 = 0.5;
 pub const SNAKE_HEIGHT: f32 = 0.8;
+/// What can be hit of a flying snake: a box `SNAKE_HIT_HALF_WIDTH` to each side (and `SNAKE_HIT_HEIGHT` tall) round the head and the beating wings,
+/// and a box `SNAKE_BODY_HIT_HALF` to each side of every other body point (`SNAKE_BODY_HIT_HALF_HEIGHT` up and down), so the whole drawn snake
+/// is a target, wings included, and no gap is left along the body.
+pub const SNAKE_HIT_HALF_WIDTH: f32 = 1.5;
+pub const SNAKE_HIT_HEIGHT: f32 = 1.3;
+pub const SNAKE_BODY_HIT_HALF: f32 = 0.6;
+pub const SNAKE_BODY_HIT_HALF_HEIGHT: f32 = 0.6;
 pub const SNAKE_NOTICE_DISTANCE: f32 = 45.0;
 pub const SNAKE_SPIRAL_SPEED: f32 = 3.2;
 pub const SNAKE_SPIRAL_RADIUS: f32 = 12.0;
@@ -1391,3 +1403,43 @@ pub const HORIZEN_RIVER_MEANDER: f32 = 3.5;
 /// Red crystals stand on this many thousandths of a crystal cave's floor (never near its middle, where the tunnels meet).
 pub const HORIZEN_CRYSTAL_PER_MILLE: u64 = 55;
 pub const HORIZEN_CRYSTAL_CLEAR_RADIUS: f32 = 3.5;
+
+// --- The general store, the sword, tornado-free spawn island ------------------------------------
+
+/// A sword hits two harder than an iron axe.
+pub const SWORD_DAMAGE: i32 = IRON_AXE_DAMAGE + 2;
+/// The general store's ghost stands on the Skylands' first island, this many blocks (east, south) of where the player arrives.
+pub const SHOP_OFFSET: (i32, i32) = (5, 2);
+/// How close (blocks) the player must be, looking at him, to trade; and how close for the pipes to be heard.
+pub const SHOP_REACH: f32 = 4.5;
+pub const SHOP_NEAR_RADIUS: f32 = 14.0;
+/// Prices in gold. Arrows are sold `SHOP_ARROWS` at a time. Each kind of meat stew costs `SHOP_STEW_PRICE`.
+pub const SHOP_ARROWS: u32 = 10;
+pub const SHOP_ARROW_PRICE: u32 = 2;
+pub const SHOP_SWORD_PRICE: u32 = 20;
+pub const SHOP_BOW_PRICE: u32 = 10;
+pub const SHOP_STEW_PRICE: u32 = 3;
+
+// --- Newts and the Unicorn ----------------------------------------------------------------------
+
+/// Newts live on the floor of the Horizen's mossy (overgrown, green) caves. They are harmless, have `NEWT_HEALTH` life, and drop an Eye of
+/// Newt `NEWT_EYE_CHANCE` percent of the time (one in five). Up to `MAX_NEWT` are about at once.
+pub const NEWT_HEALTH: i32 = 4;
+pub const NEWT_HALF_WIDTH: f32 = 0.25;
+pub const NEWT_HEIGHT: f32 = 0.18;
+pub const NEWT_WALK_SPEED: f32 = 0.8;
+pub const NEWT_EYE_CHANCE: u64 = 20;
+pub const MAX_NEWT: usize = 8;
+
+/// The Unicorn comes the first time the player uses the Cursed Idol (right click with it in hand), `UNICORN_SPAWN_DISTANCE` blocks away. It
+/// will not attack while the player is in the jungle; once they leave it, it charges at `UNICORN_RUN_SPEED` (a little slower than a sprint),
+/// hits for `UNICORN_DAMAGE` every `UNICORN_ATTACK_COOLDOWN` seconds and never gives up. It drops `UNICORN_GOLD_DROP` gold.
+pub const UNICORN_HEALTH: i32 = 240;
+pub const UNICORN_HALF_WIDTH: f32 = 0.85;
+pub const UNICORN_HEIGHT: f32 = 1.9;
+pub const UNICORN_WALK_SPEED: f32 = 1.6;
+pub const UNICORN_RUN_SPEED: f32 = 6.6;
+pub const UNICORN_DAMAGE: u32 = 3;
+pub const UNICORN_ATTACK_COOLDOWN: f32 = 1.1;
+pub const UNICORN_GOLD_DROP: u32 = 12;
+pub const UNICORN_SPAWN_DISTANCE: f32 = 14.0;

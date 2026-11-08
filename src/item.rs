@@ -95,7 +95,7 @@ pub enum ItemKind {
     Sling,
     /// A small dark lodestone found lying on the ground. With an iron ore it makes a compass.
     Loadstone,
-    /// A loadstone and an iron ore. Held in the hand its needle points north, until the world has its one mountain
+    /// A loadstone and an iron. Held in the hand its needle points north, until the world has its one mountain
     /// (following it ten chunks north brings the mountain out); from then on it always points at the mountain.
     Compass,
     /// Dropped by a moose. With two gold it makes a bone totem.
@@ -156,10 +156,14 @@ pub enum ItemKind {
     WoodenBowl,
     /// What a chunk of stardust (`Block::StardustPile`) drops.
     Stardust,
+    /// A steel sword from the Skylands' general store: a melee weapon that hits two harder than an iron axe.
+    Sword,
+    /// Dropped by a newt now and then.
+    EyeOfNewt,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 87] = [
+    pub const ALL: [ItemKind; 89] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -247,6 +251,8 @@ impl ItemKind {
         ItemKind::MooseJerky,
         ItemKind::WoodenBowl,
         ItemKind::Stardust,
+        ItemKind::Sword,
+        ItemKind::EyeOfNewt,
     ];
 
     /// Display name.
@@ -334,6 +340,8 @@ impl ItemKind {
             ItemKind::PoisonArrow => "Poison Arrow",
             ItemKind::WoodenBowl => "Wooden Bowl",
             ItemKind::Stardust => "Stardust",
+            ItemKind::Sword => "Sword",
+            ItemKind::EyeOfNewt => "Eye of Newt",
             ItemKind::VenisonJerky => "Venison Jerky",
             ItemKind::PoultryJerky => "Poultry Jerky",
             ItemKind::BearJerky => "Bear Jerky",
@@ -427,6 +435,8 @@ impl ItemKind {
             ItemKind::PoisonArrow => "poison_arrow",
             ItemKind::WoodenBowl => "wooden_bowl",
             ItemKind::Stardust => "stardust",
+            ItemKind::Sword => "sword",
+            ItemKind::EyeOfNewt => "eye_of_newt",
             ItemKind::VenisonJerky => "venison_jerky",
             ItemKind::PoultryJerky => "poultry_jerky",
             ItemKind::BearJerky => "bear_jerky",
@@ -531,6 +541,8 @@ impl ItemKind {
             ItemKind::PoisonArrow => Color::new(0.45, 0.78, 0.22, 1.0),
             ItemKind::WoodenBowl => Color::new(0.62, 0.44, 0.24, 1.0),
             ItemKind::Stardust => Color::new(0.96, 0.97, 1.0, 1.0),
+            ItemKind::Sword => Color::new(0.80, 0.83, 0.90, 1.0),
+            ItemKind::EyeOfNewt => Color::new(0.80, 0.78, 0.20, 1.0),
             ItemKind::VenisonJerky => Color::new(0.40, 0.18, 0.12, 1.0),
             ItemKind::PoultryJerky => Color::new(0.62, 0.40, 0.22, 1.0),
             ItemKind::BearJerky => Color::new(0.32, 0.15, 0.10, 1.0),
@@ -706,6 +718,7 @@ impl ItemKind {
             ItemKind::IronAxe => Some(IRON_AXE_DAMAGE),
             ItemKind::BronzeMallet => Some(MALLET_DAMAGE),
             ItemKind::Excalibur => Some(EXCALIBUR_DAMAGE),
+            ItemKind::Sword => Some(SWORD_DAMAGE),
             _ => None,
         }
     }
@@ -889,7 +902,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_drop_a_stick_half_the_time_and_nothing_else() {
+    fn leaves_drop_a_stick_at_the_configured_rate_and_nothing_else() {
         let mut rng = Rng::new(11);
         let mut sticks = 0;
         for block in [Block::Leaves, Block::Needles] {
@@ -900,7 +913,7 @@ mod tests {
             }
         }
         let r = sticks as f64 / (2 * TRIALS) as f64;
-        assert!((r - 0.50).abs() < 0.01, "stick rate {r}");
+        assert!((r - LEAF_STICK_CHANCE as f64 / 100.0).abs() < 0.01, "stick rate {r}");
     }
 
     #[test]
@@ -1082,7 +1095,7 @@ mod tests {
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         assert_eq!((ItemKind::StoneAxe.melee_cooldown(), ItemKind::BronzeMallet.melee_cooldown()), (AXE_COOLDOWN, MALLET_COOLDOWN));
         for k in ItemKind::ALL {
-            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur), "{k:?}");
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur | ItemKind::Sword), "{k:?}");
         }
     }
 
@@ -1214,7 +1227,7 @@ mod tests {
         }
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         for k in ItemKind::ALL {
-            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur), "{k:?}");
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur | ItemKind::Sword), "{k:?}");
         }
     }
 }

@@ -819,3 +819,16 @@ pub fn draw_falling_stars(stars: &[crate::stars::FallingStar], time: f32) {
         }
     }
 }
+
+/// Draw the general store's ghost where he stands (`post`, his feet), translucent and turned to face the player at `eye`. Call while the
+/// 3D camera is active, after the water, with the other translucent things.
+pub fn draw_shopkeeper(post: Vec3, eye: Vec3, time: f32) {
+    let yaw = (eye.z - post.z).atan2(eye.x - post.x);
+    let (s, c) = yaw.sin_cos();
+    for ((fx, fy, fz), (hx, hy, hz), color) in crate::shop::figure_parts(time) {
+        // The model faces +z; turn it so that its front points at the player.
+        let (lx, lz) = (fx, fz);
+        let offset = vec3(lz * c + lx * s, fy, lz * s - lx * c);
+        draw_box(post + offset, vec3(hx, hy, hz), std::f32::consts::FRAC_PI_2 - yaw, color);
+    }
+}

@@ -55,6 +55,7 @@ mod river;
 mod rng;
 mod save;
 mod settings;
+mod shop;
 mod sky;
 mod skylands;
 mod terrain;

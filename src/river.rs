@@ -1,14 +1,12 @@
 //! Rivers: winding bands of shallow water that run across the world.
 //!
-//! A river follows a zero contour of a smooth noise field (`field`): where the field crosses zero the
-//! land is wet. Contours of a smooth field are continuous curves that bend, branch and never end,
-//! which is what a river should do. Two lattices of value noise are mixed, a wide one that decides
-//! where the rivers run and a narrow one that makes them wind. A column is wet when it is within
-//! the river's half-width of the contour; the distance is estimated as `|field| / |gradient|`, which
-//! keeps the width even instead of letting the band swell into a pond where the field is flat.
+//! A river follows a lane (`lane_coordinate`): the world is cut into parallel lanes in a direction the seed
+//! chooses, and each lane is bent sideways by two octaves of smooth noise, so it winds but can never curl back
+//! into a circle. Most lanes carry a river. A column is wet when it is within the river's half-width of the lane
+//! centre, the zero contour of `field`; the distance is estimated as `|field| / |gradient|`, which keeps the width
+//! even.
 //!
-//! The field is lifted around the spawn point, so every contour (and so every river) bends round it and
-//! the spawn area stays dry. Everything here is a pure function of the seed and the column, so chunks
+//! A river dwindles to nothing as it nears the spawn point, so the spawn area stays dry. Everything here is a pure function of the seed and the column, so chunks
 //! agree on where the water is without asking each other.
 
 use crate::config::*;
@@ -30,24 +28,44 @@ fn value_noise(seed: i64, salt: i32, x: f32, z: f32, scale: f32) -> f32 {
     lerp(lerp(corner(0, 0), corner(1, 0), tx), lerp(corner(0, 1), corner(1, 1), tx), tz)
 }
 
-/// How far the field is lifted at the spawn point. More than the field's own range (about 1.5), so no
-/// contour can pass where the lift is full.
-const SPAWN_LIFT: f32 = 3.0;
-
-/// The noise field whose zero contours are the rivers, at the point (x, z).
-fn field(seed: i64, x: f32, z: f32) -> f32 {
-    let base = value_noise(seed, 0x51E1, x, z, RIVER_BIG_SCALE) + RIVER_WIGGLE * value_noise(seed, 0x51E2, x, z, RIVER_SMALL_SCALE);
+/// Seconds-free helper: the river lanes. The world is cut into parallel lanes `RIVER_LANE_SPACING` blocks apart, running in a direction the
+/// seed chooses, and each lane is bent sideways by two octaves of smooth noise along its length. A lane can only wander, never close on
+/// itself, so there are no circular rivers. Every lane is bent the same way at a given point along it, so lanes never touch.
+fn lane_coordinate(seed: i64, x: f32, z: f32) -> f32 {
     let spawn = CHUNK_SIZE as f32 / 2.0;
-    let dist = ((x - spawn).powi(2) + (z - spawn).powi(2)).sqrt();
-    // 1 within the clearance of the spawn point, easing to 0 at the fade distance.
-    let t = ((RIVER_SPAWN_FADE - dist) / (RIVER_SPAWN_FADE - RIVER_SPAWN_CLEARANCE)).clamp(0.0, 1.0);
-    base + SPAWN_LIFT * t * t * (3.0 - 2.0 * t)
+    let angle = (hash3(seed, 7, 11, 0x51E0) % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
+    let offset = (hash3(seed, 13, 17, 0x51E0) % 1000) as f32 / 1000.0 * RIVER_LANE_SPACING;
+    let (s, c) = angle.sin_cos();
+    let (dx, dz) = (x - spawn, z - spawn);
+    let (along, across) = (-dx * s + dz * c, dx * c + dz * s);
+    let bend = RIVER_BEND * value_noise(seed, 0x51E1, along, 0.0, RIVER_BIG_SCALE)
+        + RIVER_BEND * RIVER_WIGGLE * 0.5 * value_noise(seed, 0x51E2, along, 0.0, RIVER_SMALL_SCALE);
+    (across - bend + offset) / RIVER_LANE_SPACING
 }
 
-/// Half the width of the river at (x, z): it swells and narrows slowly along its length.
+/// The noise field whose zero contours are the rivers (the lane centres), at the point (x, z).
+fn field(seed: i64, x: f32, z: f32) -> f32 {
+    (std::f32::consts::PI * lane_coordinate(seed, x, z)).sin()
+}
+
+/// Whether the lane with this index carries a river (most do).
+fn lane_has_river(seed: i64, lane: i32) -> bool {
+    hash3(seed, lane, 5, 0x51E4) % 100 < RIVER_LANE_PERCENT
+}
+
+/// Half the width of the river at (x, z): it swells and narrows slowly along its length, and dwindles to nothing as it nears the
+/// spawn point (so the spawn area is dry). Zero in a lane that carries no river.
 fn half_width(seed: i64, x: f32, z: f32) -> f32 {
-    let t = value_noise(seed, 0x51E3, x, z, RIVER_WIDTH_SCALE) * 0.5 + 0.5;
-    RIVER_MIN_HALF_WIDTH + (RIVER_MAX_HALF_WIDTH - RIVER_MIN_HALF_WIDTH) * t
+    let lane = lane_coordinate(seed, x, z).round() as i32;
+    if !lane_has_river(seed, lane) {
+        return 0.0;
+    }
+    let spawn = CHUNK_SIZE as f32 / 2.0;
+    let dist = ((x - spawn).powi(2) + (z - spawn).powi(2)).sqrt();
+    let t = ((dist - RIVER_SPAWN_CLEARANCE) / RIVER_SPAWN_TAPER).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    let w = value_noise(seed, 0x51E3, x, z, RIVER_WIDTH_SCALE) * 0.5 + 0.5;
+    (RIVER_MIN_HALF_WIDTH + (RIVER_MAX_HALF_WIDTH - RIVER_MIN_HALF_WIDTH) * w) * t
 }
 
 /// Whether the column (wx, wz) is part of a river: its bed lies `RIVER_DEPTH` below the ground around it
@@ -122,6 +140,42 @@ mod tests {
             }
             assert!(wet > 500, "seed {seed}: some river in 400x400 ({wet} columns)");
             assert!(lonely * 100 < wet, "seed {seed}: {lonely} of {wet} river columns stand alone");
+        }
+    }
+
+    #[test]
+    fn no_river_closes_into_a_circle_or_a_pond() {
+        // Flood-fill the river columns (sampled every second column): every connected river must be long (no ring, loop or pond
+        // can be, since a ring's reach is its diameter and these are far bigger than any lake-sized loop).
+        const SIDE: i32 = 300;
+        for seed in 0..6 {
+            let wet = |gx: i32, gz: i32| is_river(seed, (gx - SIDE) * 2, (gz - SIDE) * 2);
+            let mut seen = std::collections::HashSet::new();
+            for gz in 0..2 * SIDE {
+                for gx in 0..2 * SIDE {
+                    if !wet(gx, gz) || seen.contains(&(gx, gz)) {
+                        continue;
+                    }
+                    let (mut stack, mut lo, mut hi) = (vec![(gx, gz)], (gx, gz), (gx, gz));
+                    seen.insert((gx, gz));
+                    while let Some((x, z)) = stack.pop() {
+                        lo = (lo.0.min(x), lo.1.min(z));
+                        hi = (hi.0.max(x), hi.1.max(z));
+                        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)] {
+                            let n = (x + dx, z + dz);
+                            if (0..2 * SIDE).contains(&n.0) && (0..2 * SIDE).contains(&n.1) && wet(n.0, n.1) && seen.insert(n) {
+                                stack.push(n);
+                            }
+                        }
+                    }
+                    // A river cut off by the edge of the sampled square is not a loop.
+                    if lo.0 == 0 || lo.1 == 0 || hi.0 == 2 * SIDE - 1 || hi.1 == 2 * SIDE - 1 {
+                        continue;
+                    }
+                    let reach = (hi.0 - lo.0).max(hi.1 - lo.1) * 2;
+                    assert!(reach >= 120, "seed {seed}: a river only {reach} blocks across near {:?}", ((lo.0 - SIDE) * 2, (lo.1 - SIDE) * 2));
+                }
+            }
         }
     }
 

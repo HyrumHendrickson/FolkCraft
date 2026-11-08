@@ -22,6 +22,7 @@ pub fn play_screen(app: &mut App) {
     if is_key_pressed(KeyCode::Escape) {
         match app.game.as_mut() {
             Some(game) if game.king_dialog.is_some() => game.king_dialog = None,
+            Some(game) if game.shop_open => game.shop_open = false,
             Some(game) if game.inventory_open => set_inventory_open(game, false),
             _ => app.leave_game(),
         }
@@ -54,7 +55,7 @@ pub fn play_screen(app: &mut App) {
         return;
     }
 
-    if is_key_pressed(KeyCode::E) && game.king_dialog.is_none() {
+    if is_key_pressed(KeyCode::E) && game.king_dialog.is_none() && !game.shop_open {
         let open = !game.inventory_open;
         set_inventory_open(game, open);
     }
@@ -112,7 +113,7 @@ fn set_inventory_open(game: &mut Game, open: bool) {
 
 /// While the king's pop-up is open the mouse cursor is released, as it is for the inventory, and taken again when it closes.
 fn sync_dialog_cursor(game: &mut Game) {
-    let open = game.king_dialog.is_some();
+    let open = game.king_dialog.is_some() || game.shop_open;
     if open != game.dialog_cursor_free {
         game.dialog_cursor_free = open;
         if !game.inventory_open {
@@ -203,8 +204,16 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     if game.fill_jar(eye, dir) {
         return;
     }
+    // Right click at the store's ghost opens his shop.
+    if game.open_shop(eye, dir) {
+        return;
+    }
     // Pipes in hand: right click plays a tune.
     if game.play_pipes() {
+        return;
+    }
+    // The Cursed Idol in hand: the first right click calls the Unicorn.
+    if game.use_idol() {
         return;
     }
     // The Horn of the Hunt in hand: right click blows it (it calls the Wild Hunt in Stonehenge).
@@ -299,6 +308,9 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     }
     draw_acid(&game.world, &game.acid, get_time() as f32);
     draw_ghosts(&game.animals, get_time() as f32, World::chunk_of_pos(eye));
+    if let Some(post) = game.shop_post() {
+        crate::effects::draw_shopkeeper(post, eye, get_time() as f32);
+    }
     draw_bursts(&game.bursts);
     draw_falling_stars(&game.falling_stars, get_time() as f32);
     if game.storm_active {
@@ -377,6 +389,9 @@ fn render_hud(game: &mut Game, drawn: usize) {
     if game.king_dialog.is_some() {
         draw_king_dialog(game);
     }
+    if game.shop_open {
+        draw_shop_dialog(game);
+    }
     game.toasts.draw();
     let p = game.player.pos;
     draw_text(
@@ -442,6 +457,35 @@ fn draw_king_dialog(game: &mut Game) {
     }
     if button(Rect::new(cx + 20.0, panel.y + 250.0, 210.0, 56.0), "Leave", true) {
         game.king_dialog = None;
+    }
+}
+
+/// The general store's pop-up: each ware with its price and a Buy button (greyed out when the player has too little gold). The rules
+/// live in `Game::buy`.
+fn draw_shop_dialog(game: &mut Game) {
+    use crate::ui::{button, text_centered};
+    let wares = crate::shop::wares();
+    let (w, h) = (screen_width(), screen_height());
+    let row_h = 46.0;
+    let panel = Rect::new(w / 2.0 - 300.0, h / 2.0 - (wares.len() as f32 * row_h + 150.0) / 2.0, 600.0, wares.len() as f32 * row_h + 150.0);
+    draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.45));
+    draw_rectangle(panel.x, panel.y, panel.w, panel.h, Color::new(0.07, 0.09, 0.15, 0.96));
+    draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, 3.0, Color::new(0.62, 0.78, 1.0, 1.0));
+    let cx = panel.x + panel.w / 2.0;
+    text_centered("The General Store", cx, panel.y + 44.0, 38, Color::new(0.80, 0.90, 1.0, 1.0));
+    let gold = game.inventory.count(ItemKind::Gold);
+    text_centered(&format!("You have {gold} gold."), cx, panel.y + 76.0, 22, ItemKind::Gold.color());
+    for (i, ware) in wares.iter().enumerate() {
+        let y = panel.y + 100.0 + i as f32 * row_h;
+        let label = if ware.count > 1 { format!("{} {}s", ware.count, ware.item.name()) } else { ware.item.name().to_string() };
+        draw_text(&label, panel.x + 30.0, y + 28.0, 26.0, WHITE);
+        draw_text(&format!("{} gold", ware.price), panel.x + 330.0, y + 28.0, 24.0, ItemKind::Gold.color());
+        if button(Rect::new(panel.x + panel.w - 150.0, y, 120.0, row_h - 8.0), "Buy", gold >= ware.price) {
+            game.buy(i);
+        }
+    }
+    if button(Rect::new(cx - 90.0, panel.y + panel.h - 56.0, 180.0, 40.0), "Leave", true) {
+        game.shop_open = false;
     }
 }
 
