@@ -226,6 +226,11 @@ pub struct Game {
     pub in_graveyard: bool,
     /// Iron Quails that are due but have not yet found a place to appear (or were left behind in another dimension).
     pub iron_quails_owed: u32,
+    /// Great Bears (`AnimalKind::BearBoss`) that are due but have not yet found a place to appear (a bear was killed in the pelt cloak, or one
+    /// was left behind in another dimension), and the seconds left in which every bear comes for the player (a blow has landed on the Great
+    /// Bear). Neither is saved.
+    pub bear_bosses_owed: u32,
+    pub bear_rage: f32,
     /// Bats the player has killed in the Horizen's caves (a vampire bat comes for every `BATS_PER_VAMPIRE`), and vampire bats that are
     /// due but have not yet appeared (one at a time).
     pub bat_kills: u32,
@@ -371,6 +376,8 @@ impl Game {
             ghost_text: None,
             in_graveyard: false,
             iron_quails_owed: 0,
+            bear_bosses_owed: 0,
+            bear_rage: 0.0,
             bat_kills: data.bat_kills,
             vampire_bats_owed: 0,
             cave_spawn_tick: 0,
@@ -696,6 +703,10 @@ impl Game {
             self.animals.retain(|a| !a.kind.is_wild_hunt());
             // The ravens Nessie called go too, and what the bosses threw.
             self.animals.retain(|a| !(a.kind == AnimalKind::Raven && a.summoned));
+            // The Great Bear has won, and the bears it called calm down.
+            self.animals.retain(|a| a.kind != AnimalKind::BearBoss);
+            self.bear_bosses_owed = 0;
+            self.bear_rage = 0.0;
             // The vampire bat has won, and the king's spirits go with the player's death.
             self.animals.retain(|a| !matches!(a.kind, AnimalKind::VampireBat | AnimalKind::SpiritArcher));
             self.king_dialog = None;
@@ -1315,6 +1326,16 @@ impl Game {
     /// `hurt_animals`, with the survivors thrown back away from `from` (the player for a blow, the strike for lightning).
     fn hurt_animals_from(&mut self, hits: &[(usize, i32)], from: Vec3) {
         let mut dead = Vec::new();
+        // A blow on the Great Bear calls every bear to the player.
+        if hits.iter().any(|&(i, _)| self.animals[i].kind == AnimalKind::BearBoss) {
+            let others = self.animals.iter().any(|a| a.kind == AnimalKind::Bear);
+            let calm_before = self.bear_rage <= 0.0;
+            self.bear_rage = BEAR_BOSS_RAGE_SECONDS;
+            self.enrage_bears();
+            if others && calm_before {
+                self.toasts.push("Every bear in the forest hears the Great Bear roar, and comes for you.".to_string());
+            }
+        }
         for &(i, damage) in hits {
             let animal = &mut self.animals[i];
             if animal.damage(damage) {
@@ -1342,6 +1363,9 @@ impl Game {
             if animal.kind == AnimalKind::Parrot {
                 self.note_parrot_killed();
             }
+            if animal.kind == AnimalKind::Bear {
+                self.note_bear_killed();
+            }
             if animal.kind == AnimalKind::Bat && self.in_horizen() {
                 self.note_cave_bat_killed();
             }
@@ -1366,6 +1390,7 @@ impl Game {
         }
         self.summon_iron_quails();
         self.summon_unicorn();
+        self.summon_bear_bosses();
         self.summon_bronze_parrots();
         self.summon_vampire_bats();
     }
@@ -1546,14 +1571,17 @@ impl Game {
         }
     }
 
-    /// Right click with the Cursed Idol in hand: the first time (in any world), the Unicorn is called. It comes when the player is in the
-    /// normal world (see `summon_unicorn`) and will not attack until they leave the jungle. Returns whether this was that first time.
-    pub fn use_idol(&mut self) -> bool {
-        if self.held_item() != Some(ItemKind::CursedIdol) || self.world.landmarks.unicorn_summoned {
+    /// The Cursed Idol's awakening: the first time it is anywhere in the hotbar while the player is in the normal world and not in the jungle,
+    /// the Unicorn is called (nothing needs to be clicked). It comes in `summon_unicorn` and will not attack while the player is in the
+    /// jungle. In the Horizen and the Skylands, and in the jungle itself, the idol sleeps on, and wakes once the player is back out in the
+    /// open of the normal world. Call every frame. Returns whether this was that first time.
+    pub fn update_idol(&mut self) -> bool {
+        if self.world.landmarks.unicorn_summoned || !self.idol_in_hotbar() || !self.in_overworld() || self.player_in_jungle() {
             return false;
         }
         self.world.landmarks.unicorn_summoned = true;
-        self.toasts.push("The idol grows cold in your hand. Something white stirs among the trees.".to_string());
+        self.toasts.push("The idol grows cold in your pack. Something white stirs among the trees.".to_string());
+        self.summon_unicorn();
         true
     }
 
@@ -1579,6 +1607,48 @@ impl Game {
         if placed {
             self.toasts.push("A white shape with a golden horn steps out of the trees: the Unicorn.".to_string());
         }
+    }
+
+    /// A bear has been killed. If the player is in the pelt cloak (in the normal world), the Great Bear is due, unless one is already out or due.
+    fn note_bear_killed(&mut self) {
+        let out = self.animals.iter().any(|a| a.kind == AnimalKind::BearBoss);
+        if self.worn == Some(ItemKind::PeltCloak) && self.in_overworld() && !out && self.bear_bosses_owed == 0 {
+            self.bear_bosses_owed = 1;
+        }
+    }
+
+    /// Bring out the Great Bear if it is due, `BEAR_BOSS_SPAWN_DISTANCE` from the player on open ground. If no place is found it stays due
+    /// and is tried again with the next wildlife spawn. There is never more than one.
+    fn summon_bear_bosses(&mut self) {
+        if self.bear_bosses_owed == 0 || !self.in_overworld() {
+            return;
+        }
+        if self.animals.iter().any(|a| a.kind == AnimalKind::BearBoss) {
+            self.bear_bosses_owed = 0;
+            return;
+        }
+        let p = self.player.pos;
+        let first = self.rng.unit() * std::f32::consts::TAU;
+        let placed = (0..24).any(|i| {
+            let a = first + i as f32 * std::f32::consts::TAU / 24.0;
+            let (x, z) = ((p.x + a.cos() * BEAR_BOSS_SPAWN_DISTANCE).floor() as i32, (p.z + a.sin() * BEAR_BOSS_SPAWN_DISTANCE).floor() as i32);
+            self.spawn_animal(AnimalKind::BearBoss, x, z)
+        });
+        if placed {
+            self.bear_bosses_owed = 0;
+            self.toasts.push("The ground shakes. A huge bear, far bigger than the one you killed, comes for you: the Great Bear.".to_string());
+        }
+    }
+
+    /// Call every bear to the player: each is provoked (the pelt cloak no longer calms it) and charges from any distance for as long as its
+    /// alarm lasts (`Animal::enrage_bear`). Returns how many there are.
+    fn enrage_bears(&mut self) -> usize {
+        let mut n = 0;
+        for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Bear) {
+            a.enrage_bear();
+            n += 1;
+        }
+        n
     }
 
     /// Count a parrot the player has killed: every `PARROTS_PER_BRONZE_PARROT`th one calls `BRONZE_PARROTS_PER_SUMMON` Bronze Parrots.
@@ -2374,6 +2444,11 @@ impl Game {
                 self.world.landmarks.unicorn_slain = true;
                 self.toasts.push("The Unicorn is slain.".to_string());
             }
+            AnimalKind::BearBoss => {
+                // Its roar is over: the bears it called go back to their ways.
+                self.bear_rage = 0.0;
+                self.toasts.push("The Great Bear is slain.".to_string());
+            }
             AnimalKind::Orangutan => {
                 self.world.open_temple();
                 self.toasts.push("The Orangutan is slain. The boards over the passage to the idol give way.".to_string());
@@ -2610,6 +2685,9 @@ pub fn enter_skylands(&mut self) {
         // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
         self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
         self.bronze_parrots_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).count() as u32;
+        // A Great Bear left behind comes again (whole) when the player is back in the overworld; the rage it caused is over.
+        self.bear_bosses_owed = self.bear_bosses_owed.max(self.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count() as u32).min(1);
+        self.bear_rage = 0.0;
         // A vampire bat left behind in the cave is waiting for the player's next visit. The king's spirits go with the player, whatever
         // dimension they travel to (each keeps the arrows it has left).
         self.vampire_bats_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count() as u32;
@@ -2773,7 +2851,7 @@ pub fn enter_skylands(&mut self) {
             AnimalKind::Jaguar => MAX_JAGUAR,
             AnimalKind::FlyingSnake => MAX_FLYING_SNAKE,
             AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Bat | AnimalKind::Raven | AnimalKind::Phoenix => 0,
-            AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::Orangutan | AnimalKind::Unicorn => 0,
+            AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::Orangutan | AnimalKind::Unicorn | AnimalKind::BearBoss => 0,
             // Newts live only in the Horizen's mossy caves (`spawn_newts`).
             AnimalKind::Newt => 0,
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => 0,
@@ -2853,8 +2931,16 @@ pub fn enter_skylands(&mut self) {
         // Whisps go with the night, except the ones that follow the player.
         // Bats called by the pipes go with the dawn.
         let overworld = self.in_overworld();
+        // While the Great Bear's roar lasts every bear is called to the player (new ones that spawn too), and none is despawned or left
+        // standing for being far away.
+        if self.bear_rage > 0.0 {
+            self.bear_rage = (self.bear_rage - dt).max(0.0);
+            self.enrage_bears();
+        }
+        let raging = self.bear_rage > 0.0;
         self.animals.retain(|a| {
             a.kind.never_gives_up()
+                || (raging && a.kind == AnimalKind::Bear)
                 || flat(a) < if a.kind.is_boss() { BOSS_DESPAWN_DISTANCE } else { ANIMAL_DESPAWN_DISTANCE }
                     && (self.world.night || a.kind != AnimalKind::WillOWhisp || a.bonded)
                     && (self.world.night || !overworld || a.kind != AnimalKind::Bat || a.lives_in_mine)
@@ -2878,7 +2964,7 @@ pub fn enter_skylands(&mut self) {
         let player_vel = self.player.vel;
         let mut events: Vec<BossEvent> = Vec::new();
         for (index, a) in self.animals.iter_mut().enumerate() {
-            let near = a.kind.never_gives_up() || vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
+            let near = a.kind.never_gives_up() || (raging && a.kind == AnimalKind::Bear) || vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
             if !near || !self.world.chunks.contains_key(&World::chunk_of_pos(a.pos)) {
                 continue;
             }
@@ -2956,6 +3042,8 @@ pub fn enter_skylands(&mut self) {
             self.spawn_wildlife();
             self.spawn_bosses();
             self.summon_iron_quails();
+            self.summon_unicorn();
+            self.summon_bear_bosses();
             self.summon_bronze_parrots();
         }
     }
@@ -3226,19 +3314,33 @@ pub fn enter_skylands(&mut self) {
         }
     }
 
-    /// The mossy (overgrown, green) caves' wildlife: newts, up to `MAX_NEWT`, come out of sight onto the open floor of a mossy cave.
+    /// The mossy (overgrown, green) caves' wildlife: newts. Each mossy cave whose walls lie within `NEWT_CAVE_REACH` of the player is kept
+    /// stocked with `NEWTS_PER_CAVE` of them (the nearest cave first, at most `NEWT_SPAWNS_PER_TICK` new ones per call and `MAX_NEWT` in all),
+    /// put anywhere on its open floor at least `NEWT_SPAWN_MIN_DISTANCE` from the player.
     fn spawn_newts(&mut self) {
-        if self.animals.iter().filter(|a| a.kind == AnimalKind::Newt).count() >= MAX_NEWT {
-            return;
-        }
         let p = self.player.pos;
         let seed = self.info.seed;
-        for _ in 0..12 {
-            let angle = self.rng.unit() * std::f32::consts::TAU;
-            let dist = ANIMAL_SPAWN_MIN_DISTANCE + self.rng.unit() * (ANIMAL_SPAWN_MAX_DISTANCE - ANIMAL_SPAWN_MIN_DISTANCE);
-            let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
-            if horizen::is_mossy_floor(seed, x, z) && self.spawn_animal(AnimalKind::Newt, x, z) {
-                return;
+        let caves = horizen::mossy_caves_near(seed, p.x.floor() as i32, p.z.floor() as i32, NEWT_CAVE_REACH);
+        let mut spawned = 0;
+        for cave in caves {
+            let reach = cave.radius * 1.15;
+            let in_cave = |a: &Animal| a.kind == AnimalKind::Newt && vec2(a.pos.x - cave.x, a.pos.z - cave.z).length() <= reach;
+            let mut have = self.animals.iter().filter(|a| in_cave(a)).count();
+            for _ in 0..24 {
+                let total = self.animals.iter().filter(|a| a.kind == AnimalKind::Newt).count();
+                if have >= NEWTS_PER_CAVE || total >= MAX_NEWT || spawned >= NEWT_SPAWNS_PER_TICK {
+                    break;
+                }
+                let angle = self.rng.unit() * std::f32::consts::TAU;
+                let dist = self.rng.unit().sqrt() * reach;
+                let (x, z) = ((cave.x + angle.cos() * dist).floor() as i32, (cave.z + angle.sin() * dist).floor() as i32);
+                if vec2(x as f32 + 0.5 - p.x, z as f32 + 0.5 - p.z).length() < NEWT_SPAWN_MIN_DISTANCE {
+                    continue;
+                }
+                if horizen::is_mossy_floor(seed, x, z) && self.spawn_animal(AnimalKind::Newt, x, z) {
+                    have += 1;
+                    spawned += 1;
+                }
             }
         }
     }
@@ -11083,17 +11185,33 @@ mod store_newt_and_unicorn_tests {
     }
 
     #[test]
-    fn the_first_use_of_the_cursed_idol_calls_the_unicorn_once_and_it_comes_back_whole_until_killed() {
+    fn carrying_the_cursed_idol_into_the_open_normal_world_calls_the_unicorn_once_with_no_click_and_it_comes_back_whole_until_killed() {
         let mut g = game();
-        assert!(!g.use_idol(), "nothing in hand");
+        assert!(!g.update_idol(), "no idol in the hotbar");
+        // An idol that is in the pack but not the hotbar does nothing.
+        g.inventory.slots[20] = Some(ItemStack { kind: ItemKind::CursedIdol, count: 1 });
+        assert!(!g.update_idol() && !g.world.landmarks.unicorn_summoned, "only the hotbar counts");
+        g.inventory.slots[20] = None;
+        // In the hotbar but in the jungle: it sleeps on.
         hold(&mut g, ItemKind::CursedIdol, 1);
+        jungle_edge(&mut g, false);
+        assert!(g.player_in_jungle());
+        assert!(!g.update_idol() && !g.world.landmarks.unicorn_summoned, "not in the jungle");
+        // Nor in another dimension.
+        g.travel_to(Dimension::Skylands);
+        assert!(!g.update_idol() && !g.world.landmarks.unicorn_summoned, "not in the Skylands");
+        g.travel_to(Dimension::Horizen);
+        assert!(!g.update_idol() && !g.world.landmarks.unicorn_summoned, "not in the cave");
+        // Back in the open of the normal world: the first time it wakes, with nothing clicked.
+        g.travel_to(Dimension::Overworld);
+        jungle_edge(&mut g, true);
+        assert!(!g.player_in_jungle() && g.in_overworld());
         assert!(!g.unicorn_due());
-        assert!(g.use_idol(), "the first use");
-        assert!(g.world.landmarks.unicorn_summoned && g.unicorn_due());
-        assert!(!g.use_idol(), "never a second time");
-        g.summon_unicorn();
+        assert!(g.update_idol(), "the first time");
+        assert!(g.world.landmarks.unicorn_summoned);
+        assert!(!g.update_idol(), "never a second time");
         let unicorns = g.animals.iter().filter(|a| a.kind == AnimalKind::Unicorn).count();
-        assert_eq!(unicorns, 1);
+        assert_eq!(unicorns, 1, "it came at once");
         assert!(!g.unicorn_due(), "it is out");
         let u = g.animals.iter().find(|a| a.kind == AnimalKind::Unicorn).unwrap();
         assert!(u.kind.is_boss() && u.kind.never_gives_up() && u.kind.is_huntable());
@@ -11106,6 +11224,268 @@ mod store_newt_and_unicorn_tests {
         let dead = Game::from_save(info, parse_save(&slain), 3);
         assert!(!dead.unicorn_due(), "a dead unicorn does not return");
         assert_eq!(AnimalKind::Unicorn.drops(&mut Rng::new(1)), vec![ItemKind::Gold; UNICORN_GOLD_DROP as usize]);
+    }
+
+    #[test]
+    fn the_unicorn_is_called_by_the_spawn_tick_when_no_place_was_found_at_once() {
+        let mut g = game();
+        g.animals.clear();
+        g.world.landmarks.unicorn_summoned = true;
+        assert!(g.unicorn_due() && g.animals.is_empty());
+        // Nothing has died, yet the next spawn tick brings it out.
+        g.update_animals(ANIMAL_SPAWN_INTERVAL + 0.01);
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Unicorn).count(), 1);
+    }
+
+    // --- newts are common and easy to find ---
+
+    fn mossy_cave(seed: i64) -> horizen::Cave {
+        (-6..6)
+            .flat_map(|cx| (-6..6).map(move |cz| (cx, cz)))
+            .map(|(cx, cz)| horizen::cave_in_cell(seed, cx, cz))
+            .find(|c| c.kind == horizen::CaveKind::Mossy && !c.great && !c.king)
+            .expect("a mossy cave")
+    }
+
+    #[test]
+    fn newts_live_on_all_the_open_floor_of_a_mossy_cave_not_only_in_its_heart() {
+        let seed = 1;
+        let cave = mossy_cave(seed);
+        let (mut open, mut mossy, mut heart) = (0, 0, 0);
+        for dx in -20..=20 {
+            for dz in -20..=20 {
+                let (x, z) = ((cave.x + dx as f32).floor() as i32, (cave.z + dz as f32).floor() as i32);
+                if horizen::cave_of_column(seed, x, z).cell != cave.cell || (dx * dx + dz * dz) as f32 > (cave.radius * 1.1).powi(2) || !horizen::is_open(seed, x, z) {
+                    continue;
+                }
+                open += 1;
+                mossy += horizen::is_mossy_floor(seed, x, z) as i32;
+                heart += horizen::cave_at(seed, x, z).is_some() as i32;
+            }
+        }
+        assert!(open > 100, "{open} open columns");
+        assert_eq!(mossy, open, "every open column inside the green walls is newt floor");
+        assert!(heart < open, "the heart of the cave ({heart}) is only part of it ({open})");
+        // The caves near a column: only mossy ones, nearest first, and only within reach.
+        let near = horizen::mossy_caves_near(seed, cave.x as i32, cave.z as i32, NEWT_CAVE_REACH);
+        assert_eq!(near.first().map(|c| c.cell), Some(cave.cell));
+        assert!(near.iter().all(|c| c.kind == horizen::CaveKind::Mossy));
+        let far = horizen::mossy_caves_near(seed, cave.x as i32, cave.z as i32, -(cave.radius * 1.15) - 1.0);
+        assert!(far.is_empty(), "nothing is that near");
+    }
+
+    #[test]
+    fn a_mossy_cave_is_stocked_with_newts_within_a_few_spawn_ticks_and_never_beyond_the_limits() {
+        let mut g = game();
+        g.travel_to(Dimension::Horizen);
+        let seed = g.info.seed;
+        let cave = mossy_cave(seed);
+        g.player.pos = vec3(cave.x, GROUND_TOP as f32 + 1.01, cave.z);
+        g.world.stream_chunks(g.player.pos);
+        g.animals.clear();
+        g.spawn_newts();
+        let first = g.animals.iter().filter(|a| a.kind == AnimalKind::Newt).count();
+        assert!(first >= 1 && first <= NEWT_SPAWNS_PER_TICK, "{first} on the first tick");
+        for _ in 0..8 {
+            g.spawn_newts();
+        }
+        let newts: Vec<_> = g.animals.iter().filter(|a| a.kind == AnimalKind::Newt).collect();
+        assert_eq!(newts.len(), NEWTS_PER_CAVE.min(MAX_NEWT), "the cave is stocked, and no more");
+        for n in &newts {
+            let flat = vec2(n.pos.x - cave.x, n.pos.z - cave.z).length();
+            assert!(flat <= cave.radius * 1.15, "inside the cave");
+            assert!(horizen::is_mossy_floor(seed, n.pos.x.floor() as i32, n.pos.z.floor() as i32));
+            assert!(vec2(n.pos.x - g.player.pos.x, n.pos.z - g.player.pos.z).length() >= NEWT_SPAWN_MIN_DISTANCE - 1.0, "not on top of the player");
+        }
+        // Kill some: they are replaced.
+        let killed = 4;
+        for _ in 0..killed {
+            let i = g.animals.iter().position(|a| a.kind == AnimalKind::Newt).unwrap();
+            g.animals.remove(i);
+        }
+        for _ in 0..4 {
+            g.spawn_newts();
+        }
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Newt).count(), NEWTS_PER_CAVE);
+        assert!(NEWTS_PER_CAVE <= MAX_NEWT && MAX_NEWT > 8, "more of them than the old limit of eight");
+    }
+
+    #[test]
+    fn no_newts_are_stocked_in_a_plain_cave() {
+        let mut g = game();
+        g.travel_to(Dimension::Horizen);
+        let seed = g.info.seed;
+        let plain = (-6..6).flat_map(|cx| (-6..6).map(move |cz| (cx, cz))).map(|(cx, cz)| horizen::cave_in_cell(seed, cx, cz)).find(|c| c.kind == horizen::CaveKind::Plain && !c.great && !c.king).expect("a plain cave");
+        // Stand in its heart, provided no mossy cave lies within reach of that spot.
+        if horizen::mossy_caves_near(seed, plain.x as i32, plain.z as i32, NEWT_CAVE_REACH).is_empty() {
+            g.player.pos = vec3(plain.x, GROUND_TOP as f32 + 1.01, plain.z);
+            g.world.stream_chunks(g.player.pos);
+            g.animals.clear();
+            for _ in 0..10 {
+                g.spawn_newts();
+            }
+            assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Newt).count(), 0);
+        }
+    }
+
+    // --- the Great Bear ---
+
+    fn bear_at(g: &Game, dx: f32, dz: f32, seed: u64) -> Animal {
+        let p = g.player.pos;
+        Animal::new(AnimalKind::Bear, vec3(p.x + dx, p.y, p.z + dz), &mut Rng::new(seed))
+    }
+
+    #[test]
+    fn the_great_bear_is_a_big_dark_boss_that_hunts_for_ever_and_pays_well() {
+        let k = AnimalKind::BearBoss;
+        assert!(k.is_boss() && k.never_gives_up() && k.is_huntable() && !k.is_leashed() && !k.is_ordinary_wildlife());
+        assert_eq!(k.boss_name(), "The Great Bear");
+        assert_eq!(k.max_health(), BEAR_BOSS_HEALTH);
+        assert!(k.max_health() > AnimalKind::Bear.max_health() * 3, "much tougher than a bear");
+        assert!(k.half_width() > AnimalKind::Bear.half_width() && k.height() > AnimalKind::Bear.height(), "bigger than a bear");
+        assert_eq!(k.attack_damage(), BEAR_BOSS_DAMAGE);
+        assert!(!k.death_message().is_empty() && k.death_message() != "An animal killed you");
+        let drops = k.drops(&mut Rng::new(1));
+        assert_eq!(drops.iter().filter(|&&d| d == ItemKind::BearMeat).count() as u32, BEAR_BOSS_MEAT_DROP);
+        assert_eq!(drops.iter().filter(|&&d| d == ItemKind::BearPelt).count() as u32, BEAR_BOSS_PELT_DROP);
+        assert_eq!(drops.iter().filter(|&&d| d == ItemKind::Gold).count() as u32, BEAR_BOSS_GOLD_DROP);
+        assert!(BEAR_BOSS_RUN_SPEED < SPRINT_SPEED, "a sprinting player outruns it");
+    }
+
+    #[test]
+    fn killing_a_bear_in_the_pelt_cloak_brings_out_one_great_bear_that_charges_and_strikes_through_the_cloak() {
+        let mut g = game();
+        g.animals.clear();
+        g.worn = Some(ItemKind::PeltCloak);
+        g.animals.push(bear_at(&g, 12.0, 0.0, 1));
+        g.hurt_animals(&[(0, 10_000)]);
+        let bosses = || g.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count();
+        assert_eq!(bosses(), 1, "it appeared");
+        assert_eq!(g.bear_bosses_owed, 0);
+        let boss_pos = g.animals.iter().find(|a| a.kind == AnimalKind::BearBoss).unwrap().pos;
+        let gap = vec2(boss_pos.x - g.player.pos.x, boss_pos.z - g.player.pos.z).length();
+        assert!((gap - BEAR_BOSS_SPAWN_DISTANCE).abs() < 2.0, "{gap} blocks away");
+        assert!(g.toasts.contains("Great Bear"));
+        // Another bear killed while it is out brings no second one.
+        g.animals.push(bear_at(&g, 12.0, 3.0, 2));
+        let last = g.animals.len() - 1;
+        g.hurt_animals(&[(last, 10_000)]);
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count(), 1, "never two");
+        // It comes for the player whatever the cloak, and strikes.
+        let start = g.player.pos;
+        let health = g.health;
+        let mut struck = false;
+        for _ in 0..(12 * 60) {
+            g.update_animals(1.0 / 60.0);
+            g.player.pos = start;
+            struck |= g.health < health;
+            if g.health < health {
+                break;
+            }
+        }
+        let boss = g.animals.iter().find(|a| a.kind == AnimalKind::BearBoss).expect("still hunting");
+        assert!(!boss.pacified, "the cloak does not calm it");
+        assert!(struck, "it charged and struck");
+    }
+
+    #[test]
+    fn a_bear_killed_without_the_pelt_cloak_or_outside_the_normal_world_brings_no_great_bear() {
+        let mut g = game();
+        g.animals.clear();
+        g.animals.push(bear_at(&g, 12.0, 0.0, 1));
+        g.hurt_animals(&[(0, 10_000)]);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::BearBoss) && g.bear_bosses_owed == 0, "no cloak, no Great Bear");
+        // Other garments do not count.
+        g.worn = Some(ItemKind::RoyalArmor);
+        g.animals.push(bear_at(&g, 12.0, 0.0, 1));
+        let i = g.animals.len() - 1;
+        g.hurt_animals(&[(i, 10_000)]);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::BearBoss) && g.bear_bosses_owed == 0);
+        // Nor does any other animal killed in the cloak.
+        g.worn = Some(ItemKind::PeltCloak);
+        g.animals.push(Animal::new(AnimalKind::Deer, g.player.pos + vec3(10.0, 0.0, 0.0), &mut Rng::new(3)));
+        let i = g.animals.len() - 1;
+        g.hurt_animals(&[(i, 10_000)]);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::BearBoss) && g.bear_bosses_owed == 0);
+    }
+
+    #[test]
+    fn a_great_bear_due_but_with_no_room_is_tried_again_on_the_spawn_tick_and_is_gone_when_the_player_dies() {
+        let mut g = game();
+        g.animals.clear();
+        g.bear_bosses_owed = 1;
+        g.update_animals(ANIMAL_SPAWN_INTERVAL + 0.01);
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count(), 1, "the tick brought it");
+        assert_eq!(g.bear_bosses_owed, 0);
+        g.bear_rage = 5.0;
+        assert!(g.hurt_player(MAX_HEALTH, "A test killed you"));
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::BearBoss), "the Great Bear has won and goes");
+        assert_eq!((g.bear_bosses_owed, g.bear_rage), (0, 0.0));
+        // Left behind in another dimension, it is due again on return.
+        g.animals.clear();
+        g.animals.push(Animal::new(AnimalKind::BearBoss, g.player.pos + vec3(15.0, 0.0, 0.0), &mut Rng::new(4)));
+        g.travel_to(Dimension::Horizen);
+        assert_eq!(g.bear_bosses_owed, 1);
+        g.travel_to(Dimension::Overworld);
+        g.update_animals(ANIMAL_SPAWN_INTERVAL + 0.01);
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count(), 1, "it is back");
+    }
+
+    #[test]
+    fn hitting_the_great_bear_calls_every_bear_even_through_the_pelt_cloak_and_even_far_away() {
+        let mut g = game();
+        g.animals.clear();
+        g.worn = Some(ItemKind::PeltCloak);
+        // A near bear, and one past the distance at which animals are normally moved (its chunk is loaded too).
+        g.animals.push(bear_at(&g, 30.0, 0.0, 1));
+        let far = bear_at(&g, -(ANIMAL_UPDATE_DISTANCE + 10.0), 0.0, 2);
+        g.world.stream_chunks(far.pos);
+        g.animals.push(far);
+        g.animals.push(Animal::new(AnimalKind::BearBoss, g.player.pos + vec3(0.0, 0.0, 25.0), &mut Rng::new(3)));
+        let player = g.player.pos;
+        let dist = |g: &Game, i: usize| vec2(g.animals[i].pos.x - player.x, g.animals[i].pos.z - player.z).length();
+        // Before a blow the cloak keeps the bears out of it.
+        let (near_before, far_before) = (dist(&g, 0), dist(&g, 1));
+        for _ in 0..(3 * 60) {
+            g.update_animals(1.0 / 60.0);
+            g.player.pos = player;
+        }
+        assert!(g.animals[0].pacified && g.animals[1].pacified, "calmed by the cloak");
+        assert!(dist(&g, 0) > BEAR_CHARGE_DISTANCE && dist(&g, 1) > ANIMAL_UPDATE_DISTANCE - 1.0, "and not coming");
+        // A blow on the Great Bear (it is the third animal).
+        let boss = g.animals.iter().position(|a| a.kind == AnimalKind::BearBoss).unwrap();
+        g.hurt_animals(&[(boss, 1)]);
+        assert_eq!(g.bear_rage, BEAR_BOSS_RAGE_SECONDS);
+        assert!(g.animals.iter().filter(|a| a.kind == AnimalKind::Bear).all(|a| a.provoked && !a.pacified), "both bears provoked");
+        for _ in 0..(6 * 60) {
+            g.update_animals(1.0 / 60.0);
+            g.player.pos = player;
+        }
+        let bears: Vec<usize> = (0..g.animals.len()).filter(|&i| g.animals[i].kind == AnimalKind::Bear).collect();
+        assert_eq!(bears.len(), 2, "neither was despawned");
+        assert!(dist(&g, bears[0]) < near_before - 10.0, "the near bear came");
+        assert!(dist(&g, bears[1]) < far_before - 10.0, "so did the far one");
+        assert!(g.animals.iter().filter(|a| a.kind == AnimalKind::Bear).all(|a| a.mode == crate::animal::Mode::Charge), "all charging");
+        // The rage runs out, and killing the Great Bear ends it at once.
+        g.bear_rage = 0.5;
+        g.update_animals(1.0);
+        assert_eq!(g.bear_rage, 0.0);
+        g.bear_rage = 10.0;
+        let boss = g.animals.iter().position(|a| a.kind == AnimalKind::BearBoss).unwrap();
+        g.hurt_animals_from(&[(boss, 10_000)], player);
+        assert_eq!(g.bear_rage, 0.0, "the roar ends with the Great Bear");
+    }
+
+    #[test]
+    fn a_bear_that_spawns_while_the_rage_lasts_comes_for_the_player_at_once() {
+        let mut g = game();
+        g.animals.clear();
+        g.worn = Some(ItemKind::PeltCloak);
+        g.bear_rage = BEAR_BOSS_RAGE_SECONDS;
+        g.animals.push(bear_at(&g, 25.0, 0.0, 5));
+        assert!(!g.animals[0].provoked, "a fresh bear");
+        g.update_animals(1.0 / 60.0);
+        assert!(g.animals[0].provoked && !g.animals[0].pacified && g.animals[0].mode == crate::animal::Mode::Charge);
     }
 
     #[test]

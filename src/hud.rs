@@ -991,6 +991,11 @@ fn grid_size(slots: usize) -> Vec2 {
     vec2(w, h)
 }
 
+/// Screen rectangle of the Worn slot, beside the inventory title.
+fn worn_slot_rect(lay: &Layout) -> Rect {
+    Rect::new(lay.grid.x + 190.0, lay.panel.y + 24.0 + 4.0, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0)
+}
+
 fn layout(slots: usize) -> Layout {
     let (w, h) = (screen_width(), screen_height());
     let grid = grid_size(slots);
@@ -1060,7 +1065,7 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     let hovered_slot = slot_at(lay.grid, slots, mouse);
     // The worn slot, beside the title: click it to take the garment off; drop a cloak, armour, crown or backpack on it to put it
     // on. They all share it. A backpack's rows must be emptied into the other slots before it comes off.
-    let worn_rect = Rect::new(lay.grid.x + 190.0, lay.panel.y + 24.0 + 4.0, SLOT_SIZE - 10.0, SLOT_SIZE - 10.0);
+    let worn_rect = worn_slot_rect(&lay);
     if is_mouse_button_pressed(MouseButton::Left) && worn_rect.contains(mouse) {
         match inventory.take_off(worn) {
             Ok(Some(kind)) => toasts.push(format!("You take off the {}", kind.name())),
@@ -1072,7 +1077,7 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     // --- Drag and drop input ---
     if is_mouse_button_pressed(MouseButton::Left) {
         if let Some(slot) = hovered_slot {
-            if inventory.slots[slot].is_some() {
+            if inventory.slots.get(slot).map_or(false, |s| s.is_some()) {
                 ui.drag_from = Some(slot);
             }
         }
@@ -1081,7 +1086,7 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
     if is_mouse_button_released(MouseButton::Left) {
         if let Some(from) = ui.drag_from.take() {
             if worn_rect.contains(mouse) {
-                if inventory.slots[from].map_or(false, |s| s.kind.is_wearable()) {
+                if inventory.slots.get(from).copied().flatten().map_or(false, |s| s.kind.is_wearable()) {
                     match inventory.put_on(worn, from) {
                         Ok(kind) => toasts.push(format!("You put on the {}", kind.name())),
                         Err(why) => toasts.push(why.to_string()),
@@ -1094,7 +1099,13 @@ pub fn inventory_screen(inventory: &mut Inventory, worn: &mut Option<ItemKind>, 
             }
         }
     }
-    let dragged = ui.drag_from.and_then(|s| inventory.slots[s].map(|stack| (s, stack)));
+    let dragged = ui.drag_from.and_then(|s| inventory.slots.get(s).copied().flatten().map(|stack| (s, stack)));
+
+    // Putting on or taking off a backpack adds or removes its rows, so the inventory may now have a different number of slots than
+    // when this frame began. Everything from here on (drawing, the crafting list, the footer) uses the new size and layout.
+    let slots = inventory.slots.len();
+    let lay = layout(slots);
+    let worn_rect = worn_slot_rect(&lay);
 
     // --- Panel ---
     let (pad, panel) = (24.0, lay.panel);

@@ -761,3 +761,12 @@ the creature can be hunted, attacks, or drops anything. Add focused behaviour te
   `animal_draw` check that every drawn part and every point along the body is a target.
 - **Tests**: the suite is green. Balance tests compute their expectations from `config.rs` (for example a bear dies in `ceil(BEAR_HEALTH / AXE_DAMAGE)` blows) instead of hard-coding old numbers: do the same.
 - Save format additions: `unicornsummoned`, `unicornslain`; items `sword`, `eye_of_newt`.
+
+## Update: the backpack swap fix, common newts, the idol wakes by itself and the Great Bear
+
+(Where this contradicts an earlier section, this one holds.)
+
+- **Inventory screen** (`hud::inventory_screen`): putting on or taking off a backpack changes `Inventory::slots.len()` in the middle of the frame, so the slot count, layout and Worn rect are measured again after the input is handled, and raw slot reads use `get`. (It used to index past the end and crash.)
+- **Newts**: `horizen::is_mossy_floor` is all open floor inside a mossy cave's green walls (`mossy_wall`), not just its heart. `horizen::mossy_caves_near` lists mossy caves within `NEWT_CAVE_REACH`; `Game::spawn_newts` keeps each stocked with `NEWTS_PER_CAVE`, at most `NEWT_SPAWNS_PER_TICK` per tick, `MAX_NEWT` (24) overall, never within `NEWT_SPAWN_MIN_DISTANCE` of the player. The model has a bright back and orange stripe.
+- **Cursed Idol** is no longer right-clicked (`use_idol` is gone). `Game::update_idol` (every frame, `play.rs`) calls the Unicorn the first time the idol is in the hotbar in the overworld outside the jungle. `summon_unicorn` also runs on the spawn tick.
+- **Great Bear** (`AnimalKind::BearBoss`, boss, `never_gives_up`, not saved): killing a `Bear` while `worn == PeltCloak` in the overworld makes one due (`note_bear_killed`, `bear_bosses_owed`); `summon_bear_bosses` places it `BEAR_BOSS_SPAWN_DISTANCE` away (retried on the spawn tick; never two). It always charges, ignores the cloak, and is quicker below half health. A blow on it (`hurt_animals_from`) sets `Game::bear_rage` to `BEAR_BOSS_RAGE_SECONDS` and `Animal::enrage_bear`s every bear; while the rage lasts bears are re-enraged each frame, moved at any distance and not despawned, so bears that spawn then come too. Death of the player removes it; leaving the dimension makes it due again; its own death ends the rage.

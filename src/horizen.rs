@@ -344,9 +344,25 @@ pub fn moss_at(seed: i64, wx: i32, wz: i32) -> bool {
         && moss_pools(seed, &cave).iter().any(|p| Pond { rx: p.rx + HORIZEN_MOSS_RING, rz: p.rz + HORIZEN_MOSS_RING, ..*p }.contains(wx, wz))
 }
 
-/// Whether the column (wx, wz) is open floor inside a mossy cave (where newts live).
+/// Whether the column (wx, wz) is open floor inside a mossy cave (where newts live): anywhere on the floor within the green walls
+/// (`mossy_wall`), not only in the heart of the cave (`cave_at`), which is a small share of it.
 pub fn is_mossy_floor(seed: i64, wx: i32, wz: i32) -> bool {
-    cave_at(seed, wx, wz).map_or(false, |c| c.kind == CaveKind::Mossy) && air_height(seed, wx, wz) > 0
+    mossy_wall(seed, wx, wz) && air_height(seed, wx, wz) > 0
+}
+
+/// The mossy caves near the column (wx, wz): those whose green walls come within `reach` blocks of it, nearest first. Looks only in the
+/// cave squares round the column's own, so `reach` should be well under `HORIZEN_CAVE_CELL`.
+pub fn mossy_caves_near(seed: i64, wx: i32, wz: i32, reach: f32) -> Vec<Cave> {
+    let (ci, cj) = (wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL));
+    let p = (wx as f32 + 0.5, wz as f32 + 0.5);
+    let gap = |c: &Cave| ((p.0 - c.x).powi(2) + (p.1 - c.z).powi(2)).sqrt() - c.radius * 1.15;
+    let mut caves: Vec<Cave> = (-1..=1)
+        .flat_map(|di| (-1..=1).map(move |dj| (ci + di, cj + dj)))
+        .map(|(i, j)| cave_in_cell(seed, i, j))
+        .filter(|c| c.kind == CaveKind::Mossy && gap(c) <= reach)
+        .collect();
+    caves.sort_by(|a, b| gap(a).partial_cmp(&gap(b)).unwrap_or(std::cmp::Ordering::Equal));
+    caves
 }
 
 /// Whether the column (wx, wz) lies in the rock walls and roof round a mossy cave (which are green with moss).

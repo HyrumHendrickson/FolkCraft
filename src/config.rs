@@ -1424,14 +1424,24 @@ pub const SHOP_STEW_PRICE: u32 = 3;
 
 /// Newts live on the floor of the Horizen's mossy (overgrown, green) caves. They are harmless, have `NEWT_HEALTH` life, and drop an Eye of
 /// Newt `NEWT_EYE_CHANCE` percent of the time (one in five). Up to `MAX_NEWT` are about at once.
+///
+/// Newts are common: while the player is within `NEWT_CAVE_REACH` blocks of a mossy cave (past its walls), the cave is kept stocked with
+/// `NEWTS_PER_CAVE` of them, up to `NEWT_SPAWNS_PER_TICK` new ones on each wildlife spawn tick, placed anywhere on the cave's open floor
+/// (`horizen::is_mossy_floor`) but at least `NEWT_SPAWN_MIN_DISTANCE` blocks from the player, so one walking into a green cave finds
+/// a crowd of them within a few seconds.
 pub const NEWT_HEALTH: i32 = 4;
 pub const NEWT_HALF_WIDTH: f32 = 0.25;
 pub const NEWT_HEIGHT: f32 = 0.18;
 pub const NEWT_WALK_SPEED: f32 = 0.8;
 pub const NEWT_EYE_CHANCE: u64 = 20;
-pub const MAX_NEWT: usize = 8;
+pub const MAX_NEWT: usize = 24;
+pub const NEWTS_PER_CAVE: usize = 10;
+pub const NEWT_SPAWNS_PER_TICK: usize = 3;
+pub const NEWT_SPAWN_MIN_DISTANCE: f32 = 6.0;
+pub const NEWT_CAVE_REACH: f32 = 40.0;
 
-/// The Unicorn comes the first time the player uses the Cursed Idol (right click with it in hand), `UNICORN_SPAWN_DISTANCE` blocks away. It
+/// The Unicorn comes the first time the player carries the Cursed Idol in the hotbar in the normal world outside the jungle (nothing
+/// needs to be clicked), `UNICORN_SPAWN_DISTANCE` blocks away. It
 /// will not attack while the player is in the jungle; once they leave it, it charges at `UNICORN_RUN_SPEED` (a little slower than a sprint),
 /// hits for `UNICORN_DAMAGE` every `UNICORN_ATTACK_COOLDOWN` seconds and never gives up. It drops `UNICORN_GOLD_DROP` gold.
 pub const UNICORN_HEALTH: i32 = 240;
@@ -1443,3 +1453,32 @@ pub const UNICORN_DAMAGE: u32 = 3;
 pub const UNICORN_ATTACK_COOLDOWN: f32 = 1.1;
 pub const UNICORN_GOLD_DROP: u32 = 12;
 pub const UNICORN_SPAWN_DISTANCE: f32 = 14.0;
+
+// --- The Great Bear -----------------------------------------------------------------------------
+
+/// Killing a bear while wearing the pelt cloak brings out the Great Bear (`AnimalKind::BearBoss`), `BEAR_BOSS_SPAWN_DISTANCE` blocks from the
+/// player; there is never more than one. It charges at `BEAR_BOSS_RUN_SPEED` (a little slower than a sprint) from any distance, hits for
+/// `BEAR_BOSS_DAMAGE` every `BEAR_BOSS_ATTACK_COOLDOWN` seconds (quicker, and faster on its feet, below half health) and never gives up
+/// until the player dies, when it has won. The cloak does not calm it.
+///
+/// Every blow that lands on it calls every bear in the world to the player for `BEAR_BOSS_RAGE_SECONDS` (each blow starts the time again):
+/// bears that are already out, however far (they are kept and moved while the rage lasts), and any that spawn during it. Those bears are
+/// provoked, so the pelt cloak does not calm them either.
+pub const BEAR_BOSS_HEALTH: i32 = 220;
+pub const BEAR_BOSS_HALF_WIDTH: f32 = 0.95;
+pub const BEAR_BOSS_HEIGHT: f32 = 2.4;
+pub const BEAR_BOSS_WALK_SPEED: f32 = 2.6;
+pub const BEAR_BOSS_RUN_SPEED: f32 = 6.2;
+pub const BEAR_BOSS_ENRAGED_SPEED_FACTOR: f32 = 1.15;
+pub const BEAR_BOSS_REACH: f32 = 0.9;
+pub const BEAR_BOSS_DAMAGE: u32 = 3;
+pub const BEAR_BOSS_ATTACK_COOLDOWN: f32 = 1.1;
+pub const BEAR_BOSS_ENRAGED_COOLDOWN_FACTOR: f32 = 0.75;
+pub const BEAR_BOSS_MEAT_DROP: u32 = 6;
+pub const BEAR_BOSS_PELT_DROP: u32 = 3;
+pub const BEAR_BOSS_GOLD_DROP: u32 = 6;
+pub const BEAR_BOSS_SPAWN_DISTANCE: f32 = 18.0;
+pub const BEAR_BOSS_RAGE_SECONDS: f32 = 30.0;
+/// How much darker than a bear's the Great Bear's fur is, and how much bigger it is drawn.
+pub const BEAR_BOSS_FUR_SHADE: f32 = 0.55;
+pub const BEAR_BOSS_MODEL_SCALE: f32 = 1.7;

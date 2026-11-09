@@ -180,6 +180,42 @@ impl Inventory {
 mod tests {
     use super::*;
 
+    /// The inventory screen used to measure the inventory once at the start of the frame and then draw that many slots even after a drag
+    /// onto the Worn slot had put the backpack away (fewer slots), which indexed past the end and crashed. The screen now measures again
+    /// after the input; this checks the part of it that is plain logic: what a swap leaves behind, and that nothing is lost.
+    #[test]
+    fn swapping_the_worn_backpack_for_another_garment_shrinks_the_inventory_without_losing_anything() {
+        let mut inv = Inventory::new();
+        let mut worn = Some(ItemKind::LeatherBackpack);
+        inv.add_pack_rows();
+        assert_eq!(inv.slots.len(), INVENTORY_SLOTS + BACKPACK_SLOTS);
+        // A cloak lies in the hotbar, a stone in the pack's last row.
+        inv.slots[2] = Some(ItemStack { kind: ItemKind::PeltCloak, count: 1 });
+        let last = inv.slots.len() - 1;
+        inv.slots[last] = Some(ItemStack { kind: ItemKind::Stone, count: 7 });
+        let before = inv.slots.len();
+        assert_eq!(inv.put_on(&mut worn, 2), Ok(ItemKind::PeltCloak));
+        assert_eq!(worn, Some(ItemKind::PeltCloak));
+        assert_eq!(inv.slots.len(), INVENTORY_SLOTS, "the pack's rows went with the pack (it was {before})");
+        assert_eq!((inv.count(ItemKind::LeatherBackpack), inv.count(ItemKind::Stone)), (1, 7), "the pack and the stone are in the other slots");
+        // A caller that measured before the swap now holds an index past the end: reading it must be guarded, as the screen's is.
+        assert!(inv.slots.get(last).is_none());
+        // The same from a slot in the pack's own rows: a cloak in the pack goes on, and the pack comes off.
+        let mut inv = Inventory::new();
+        let mut worn = Some(ItemKind::LeatherBackpack);
+        inv.add_pack_rows();
+        let slot = INVENTORY_SLOTS + 3;
+        inv.slots[slot] = Some(ItemStack { kind: ItemKind::PeltCloak, count: 1 });
+        assert_eq!(inv.put_on(&mut worn, slot), Ok(ItemKind::PeltCloak));
+        assert_eq!((worn, inv.slots.len(), inv.count(ItemKind::PeltCloak), inv.count(ItemKind::LeatherBackpack)), (Some(ItemKind::PeltCloak), INVENTORY_SLOTS, 0, 1));
+        // And taking the pack off outright.
+        let mut inv = Inventory::new();
+        let mut worn = Some(ItemKind::LeatherBackpack);
+        inv.add_pack_rows();
+        assert_eq!(inv.take_off(&mut worn), Ok(Some(ItemKind::LeatherBackpack)));
+        assert_eq!((worn, inv.slots.len()), (None, INVENTORY_SLOTS));
+    }
+
     #[test]
     fn a_backpack_adds_three_rows_that_can_only_be_taken_away_when_what_is_in_them_fits_elsewhere() {
         let mut inv = Inventory::new();

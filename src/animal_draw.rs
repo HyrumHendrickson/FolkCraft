@@ -402,8 +402,10 @@ fn metal_bird_features(parts: &mut Vec<Piece>, a: &Animal, time: f32, bronze: bo
 
 /// A newt: a small, low, long-tailed amphibian, dark olive above and orange beneath, that sways its body as it creeps along.
 fn newt_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
-    let back = col(0.26, 0.32, 0.13);
+    // A bright olive-yellow back with an orange stripe down it: the moss floor is green, so a dark green newt cannot be seen on it.
+    let back = col(0.62, 0.66, 0.14);
     let belly = col(0.95, 0.52, 0.12);
+    let stripe = col(1.0, 0.42, 0.08);
     let dark = col(0.09, 0.11, 0.05);
     let moving = is_moving(a);
     let sway = (a.phase * 6.0).sin() * moving;
@@ -414,6 +416,7 @@ fn newt_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
         let z = sway * 0.012 * i as f32;
         parts.push(block((x, 0.075, z), (0.05, 0.04, 0.04), back));
         parts.push(block((x, 0.034, z), (0.045, 0.012, 0.035), belly));
+        parts.push(block((x, 0.118, z), (0.04, 0.006, 0.012), stripe));
     }
     for i in 0..5 {
         let x = -0.22 - 0.065 * i as f32;
@@ -619,6 +622,18 @@ fn bear_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     for (i, &(lx, lz)) in [(0.42, 0.27), (0.42, -0.27), (-0.42, 0.27), (-0.42, -0.27)].iter().enumerate() {
         let swing = (a.phase * rate + if i == 0 || i == 3 { 0.0 } else { std::f32::consts::PI }).sin() * amp * moving;
         leg(&mut parts, (lx, 0.62, lz + roll), 0.31, 0.31, 0.12, swing, dark, col(0.07, 0.05, 0.04));
+    }
+    parts
+}
+
+/// The Great Bear: a bear's body drawn `BEAR_BOSS_MODEL_SCALE` times the size with much darker fur and eyes that glow red by day as well as
+/// by night. (The glow and the halo round it keep their colours; only the fur is darkened.)
+fn bear_boss_parts(a: &Animal, time: f32, _night: bool) -> Vec<Piece> {
+    let mut parts = scaled(bear_parts(a, time, true), BEAR_BOSS_MODEL_SCALE);
+    for ((_, _, c), _) in parts.iter_mut() {
+        if c.a >= 1.0 && c.r < 0.9 {
+            *c = Color::new(c.r * BEAR_BOSS_FUR_SHADE, c.g * BEAR_BOSS_FUR_SHADE, c.b * BEAR_BOSS_FUR_SHADE, 1.0);
+        }
     }
     parts
 }
@@ -1150,6 +1165,7 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::FlyingSnake => flying_snake_parts(a, time, night),
             AnimalKind::Newt => newt_parts(a, time, night),
             AnimalKind::Unicorn => unicorn_parts(a, time, night),
+            AnimalKind::BearBoss => bear_boss_parts(a, time, night),
             // Drawn by `draw_ghosts`, see-through.
             AnimalKind::SpiritArcher => continue,
             _ => continue,
@@ -1303,6 +1319,33 @@ mod tests {
         assert!(unicorn.iter().filter(|((_, _, c), _)| c.r > 0.9 && c.g > 0.65 && c.b < 0.4).count() >= 4, "a golden horn");
     }
 
+    #[test]
+    fn the_newt_has_a_bright_back_and_stripe_so_it_stands_out_on_the_green_moss() {
+        let newt = models(&creature(AnimalKind::Newt), 0.0, false);
+        // The moss floor is (0.20, 0.46, 0.16): no part of the newt's back may be a dark green like it.
+        let backs: Vec<_> = newt.iter().filter(|((off, _, _), _)| off.1 > 0.05).collect();
+        assert!(backs.iter().all(|((_, _, c), _)| c.r + c.g + c.b > 0.5 || c.r < 0.15), "a dark green back is camouflage: {:?}", backs.iter().map(|((_, _, c), _)| (c.r, c.g, c.b)).collect::<Vec<_>>());
+        assert!(newt.iter().any(|((off, _, c), _)| off.1 > 0.1 && c.r > 0.9 && c.g < 0.5 && c.b < 0.15), "an orange stripe down the back");
+    }
+
+    #[test]
+    fn the_great_bear_is_drawn_bigger_and_darker_than_a_bear_with_glowing_eyes() {
+        let bear = models(&creature(AnimalKind::Bear), 0.0, false);
+        let boss = models(&creature(AnimalKind::BearBoss), 0.0, false);
+        let top = |m: &Vec<Piece>| m.iter().map(|((off, half, _), _)| off.1 + half.1).fold(0.0_f32, f32::max);
+        let reach = |m: &Vec<Piece>| m.iter().map(|((off, half, _), _)| (off.0.abs() + half.0).max(off.2.abs() + half.2)).fold(0.0_f32, f32::max);
+        assert!(top(&boss) > top(&bear) * 1.5 && reach(&boss) > reach(&bear) * 1.5, "much bigger");
+        // Its model fits its collision box, as a bear's does.
+        assert!(top(&boss) <= AnimalKind::BearBoss.height() * 1.25, "{} high against a {} box", top(&boss), AnimalKind::BearBoss.height());
+        let brightness = |m: &Vec<Piece>| {
+            let furs: Vec<f32> = m.iter().filter(|((_, _, c), _)| c.a >= 1.0 && c.r < 0.9).map(|((_, _, c), _)| c.r + c.g + c.b).collect();
+            furs.iter().sum::<f32>() / furs.len() as f32
+        };
+        assert!(brightness(&boss) < brightness(&bear) * 0.7, "darker fur");
+        let glow = boss.iter().any(|((_, _, c), _)| c.r > 0.95 && c.g < 0.1 && c.b < 0.1);
+        assert!(glow, "red eyes by day");
+    }
+
     fn whisp() -> Animal {
         Animal::new(AnimalKind::WillOWhisp, vec3(5.5, 9.0, 5.5), &mut Rng::new(1))
     }
@@ -1348,6 +1391,7 @@ mod tests {
             AnimalKind::FlyingSnake => flying_snake_parts(a, time, night),
             AnimalKind::Newt => newt_parts(a, time, night),
             AnimalKind::Unicorn => unicorn_parts(a, time, night),
+            AnimalKind::BearBoss => bear_boss_parts(a, time, night),
             AnimalKind::SpiritArcher => spirit_parts(a, time),
             kind if kind.is_wild_hunt() => hunt_parts(a, time),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => hunt_parts(a, time),

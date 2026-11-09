@@ -70,6 +70,7 @@ pub fn play_screen(app: &mut App) {
     game.apply_worn_effects();
     game.player.update(&game.world, dt, &input);
     game.update_landmarks();
+    game.update_idol();
 
     let eye = game.player.eye();
     let dir = game.player.look_dir();
@@ -210,10 +211,6 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     }
     // Pipes in hand: right click plays a tune.
     if game.play_pipes() {
-        return;
-    }
-    // The Cursed Idol in hand: the first right click calls the Unicorn.
-    if game.use_idol() {
         return;
     }
     // The Horn of the Hunt in hand: right click blows it (it calls the Wild Hunt in Stonehenge).
