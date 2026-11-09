@@ -192,12 +192,55 @@ fn surface(seed: i64, relief: Option<Relief>, landmarks: &Landmarks, wx: i32, wz
     let mountain = landmarks.mountain_rise(wx, wz);
     let island = landmarks.island_rise(wx, wz);
     // No river runs over a mountain, an island hill or the ground round the grand castle, the well and the graveyard.
-    let wet = mountain == 0
-        && island == 0
-        && !landmarks.keeps_rivers_out(wx, wz)
-        && (is_river(seed, wx, wz) || landmarks.is_lake(wx, wz));
+    let calm = mountain == 0 && island == 0 && !landmarks.keeps_rivers_out(wx, wz);
     let hill = relief.map_or(0, |r| (r.rise_at(wx, wz) as f32 * landmarks.relief_scale(wx, wz)).round() as i32);
+    let wet = calm && (is_river(seed, wx, wz) || landmarks.is_lake(wx, wz) || (hill == 0 && jungle_pond_site(seed, landmarks, wx, wz)));
     (GROUND_TOP + hill + mountain + island - if wet { LAKE_DEPTH } else { 0 }, wet)
+}
+
+/// The height the hill (or, negative, the valley) makes the ground at (wx, wz), landmarks included.
+fn hill_height(seed: i64, landmarks: &Landmarks, wx: i32, wz: i32) -> i32 {
+    relief_for_column(seed, wx, wz).map_or(0, |r| (r.rise_at(wx, wz) as f32 * landmarks.relief_scale(wx, wz)).round() as i32)
+}
+
+/// Whether the column (wx, wz) is under water in one of the jungle's small ponds (`jungle_pond`) and the ground there can hold one: flat,
+/// with no valley beside it (the water would stand over the lower ground as a wall), and clear of the lakes' and mountains' land.
+fn jungle_pond_site(seed: i64, landmarks: &Landmarks, wx: i32, wz: i32) -> bool {
+    jungle_pond(seed, wx, wz)
+        && [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().all(|(dx, dz)| hill_height(seed, landmarks, wx + dx, wz + dz) >= 0 && landmarks.mountain_rise(wx + dx, wz + dz) == 0)
+}
+
+/// Whether the column (wx, wz) lies in one of the jungle's small ponds. Ponds sit on a grid of `JUNGLE_POND_CELL` squares, one at most in
+/// each, at a place and of a size the seed decides, with a wavy shore; none comes near the bare middle of the jungle. A pure function.
+pub fn jungle_pond(seed: i64, wx: i32, wz: i32) -> bool {
+    if !in_jungle(seed, wx, wz) || jungle_distance(seed, wx, wz) <= JUNGLE_CLEARING_RADIUS as f32 + JUNGLE_POND_CLEARING_MARGIN {
+        return false;
+    }
+    let (cx, cz) = (wx.div_euclid(JUNGLE_POND_CELL), wz.div_euclid(JUNGLE_POND_CELL));
+    for gz in cz - 1..=cz + 1 {
+        for gx in gx_range(cx) {
+            let h = hash3(seed, gx, gz, 0x90ED);
+            if h % 100 >= JUNGLE_POND_PERCENT {
+                continue;
+            }
+            let unit = |shift: u32| ((h >> shift) & 0xFFFF) as f32 / 65535.0;
+            let radius = JUNGLE_POND_MIN_RADIUS + unit(8) * (JUNGLE_POND_MAX_RADIUS - JUNGLE_POND_MIN_RADIUS);
+            let margin = JUNGLE_POND_MAX_RADIUS.ceil() + 1.0;
+            let span = JUNGLE_POND_CELL as f32 - 2.0 * margin;
+            let (px, pz) = ((gx * JUNGLE_POND_CELL) as f32 + margin + unit(24) * span, (gz * JUNGLE_POND_CELL) as f32 + margin + unit(40) * span);
+            let (dx, dz) = (wx as f32 + 0.5 - px, wz as f32 + 0.5 - pz);
+            let wave = 1.0 + 0.22 * (3.0 * dz.atan2(dx) + unit(0) * std::f32::consts::TAU).sin();
+            if (dx * dx + dz * dz).sqrt() < radius * wave {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The grid columns whose ponds can reach column `cx` (the cell itself and its two neighbours).
+fn gx_range(cx: i32) -> std::ops::RangeInclusive<i32> {
+    cx - 1..=cx + 1
 }
 
 /// y of the lowest snow block: the ground this far up a mountain is white.
@@ -453,6 +496,28 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
             place_oak(&mut blocks, &mut rng, lx, lz, ground);
         } else {
             place_pine(&mut blocks, &mut rng, lx, lz, ground);
+        }
+    }
+
+    // Foliage on the jungle floor: broad-leaved clumps, one in `JUNGLE_FIG_ONE_IN` bearing figs. None on the bare middle, in a pond or
+    // where the temple stands.
+    if jungle_chunk || in_jungle(seed, cx * CHUNK_SIZE, cz * CHUNK_SIZE) || in_jungle(seed, cx * CHUNK_SIZE + CHUNK_SIZE - 1, cz * CHUNK_SIZE + CHUNK_SIZE - 1) {
+        for lz in 0..CHUNK_SIZE {
+            for lx in 0..CHUNK_SIZE {
+                let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                if !in_jungle(seed, wx, wz) || in_jungle_clearing(seed, wx, wz) || wet_at(lx, lz) || mined[column(lx, lz)] {
+                    continue;
+                }
+                let roll = hash3(seed, wx, wz, 0xF011) % 1000;
+                if roll >= JUNGLE_FOLIAGE_PERCENT * 10 {
+                    continue;
+                }
+                let plant = if hash3(seed, wx, wz, 0xF16) % JUNGLE_FIG_ONE_IN == 0 { Block::FigFoliage } else { Block::Foliage };
+                let i = idx(lx, top_at(lx, lz) + 1, lz);
+                if blocks[i] == Block::Air {
+                    blocks[i] = plant;
+                }
+            }
         }
     }
 

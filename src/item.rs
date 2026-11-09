@@ -158,12 +158,37 @@ pub enum ItemKind {
     Stardust,
     /// A steel sword from the Skylands' general store: a melee weapon that hits two harder than an iron axe.
     Sword,
-    /// Dropped by a newt now and then.
+    /// Dropped by a newt (one or two every time). It can be eaten and heals `NEWT_EYE_HEAL`.
     EyeOfNewt,
+    /// Cut out of a crystal cluster in a crystal cave (`Block::RubyCrystal` and its kin). A sling shoots them before pebbles, for
+    /// `CRYSTAL_DAMAGE_FACTOR` times the damage.
+    Ruby,
+    Sapphire,
+    Amethyst,
+    /// Picked in a mushroom cave. Eating one costs 1 life and doubles the player's running speed for `MUSHROOM_BOOST_SECONDS`.
+    Mushroom,
+    /// `CRYSTAL_BALL_STARDUST` Stardust make one. A left click turns night to day and day to night.
+    CrystalBall,
+    /// Dropped by the Unicorn. Craft it into a Unicorn Sword.
+    UnicornHorn,
+    /// A sword that hits harder than Excalibur (but has no bonus against the Wild Hunt).
+    UnicornSword,
+    /// Dropped by crawfish. `SHELL_ARMOR_FRAGMENTS` of them make a Shell Armor.
+    ShellFragment,
+    /// Worn: every blow costs one life less, but never less than half.
+    ShellArmor,
+    /// Picked (or broken out) of the jungle's fig foliage. Eaten, it heals `FIG_HEAL`.
+    Fig,
+    /// What a fairy gives for a piece of ash. Drunk, it raises the most life the player can have by one for `MOONLIGHT_SECONDS`.
+    MoonlightVial,
+    /// Dropped by a mountain goat. Craft it into ivory throwing knives.
+    GoatHorn,
+    /// A throwing knife of ivory: thrown like an iron feather, but it is never used up and can be picked up again.
+    IvoryKnife,
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 89] = [
+    pub const ALL: [ItemKind; 102] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -253,6 +278,19 @@ impl ItemKind {
         ItemKind::Stardust,
         ItemKind::Sword,
         ItemKind::EyeOfNewt,
+        ItemKind::Ruby,
+        ItemKind::Sapphire,
+        ItemKind::Amethyst,
+        ItemKind::Mushroom,
+        ItemKind::CrystalBall,
+        ItemKind::UnicornHorn,
+        ItemKind::UnicornSword,
+        ItemKind::ShellFragment,
+        ItemKind::ShellArmor,
+        ItemKind::Fig,
+        ItemKind::MoonlightVial,
+        ItemKind::GoatHorn,
+        ItemKind::IvoryKnife,
     ];
 
     /// Display name.
@@ -342,6 +380,19 @@ impl ItemKind {
             ItemKind::Stardust => "Stardust",
             ItemKind::Sword => "Sword",
             ItemKind::EyeOfNewt => "Eye of Newt",
+            ItemKind::Ruby => "Ruby",
+            ItemKind::Sapphire => "Sapphire",
+            ItemKind::Amethyst => "Amethyst",
+            ItemKind::Mushroom => "Mushroom",
+            ItemKind::CrystalBall => "Crystal Ball",
+            ItemKind::UnicornHorn => "Unicorn Horn",
+            ItemKind::UnicornSword => "Unicorn Sword",
+            ItemKind::ShellFragment => "Shell Fragment",
+            ItemKind::ShellArmor => "Shell Armor",
+            ItemKind::Fig => "Fig",
+            ItemKind::MoonlightVial => "Vial of Moonlight",
+            ItemKind::GoatHorn => "Goat Horn",
+            ItemKind::IvoryKnife => "Ivory Knife",
             ItemKind::VenisonJerky => "Venison Jerky",
             ItemKind::PoultryJerky => "Poultry Jerky",
             ItemKind::BearJerky => "Bear Jerky",
@@ -437,6 +488,19 @@ impl ItemKind {
             ItemKind::Stardust => "stardust",
             ItemKind::Sword => "sword",
             ItemKind::EyeOfNewt => "eye_of_newt",
+            ItemKind::Ruby => "ruby",
+            ItemKind::Sapphire => "sapphire",
+            ItemKind::Amethyst => "amethyst",
+            ItemKind::Mushroom => "mushroom",
+            ItemKind::CrystalBall => "crystal_ball",
+            ItemKind::UnicornHorn => "unicorn_horn",
+            ItemKind::UnicornSword => "unicorn_sword",
+            ItemKind::ShellFragment => "shell_fragment",
+            ItemKind::ShellArmor => "shell_armor",
+            ItemKind::Fig => "fig",
+            ItemKind::MoonlightVial => "moonlight_vial",
+            ItemKind::GoatHorn => "goat_horn",
+            ItemKind::IvoryKnife => "ivory_knife",
             ItemKind::VenisonJerky => "venison_jerky",
             ItemKind::PoultryJerky => "poultry_jerky",
             ItemKind::BearJerky => "bear_jerky",
@@ -543,6 +607,19 @@ impl ItemKind {
             ItemKind::Stardust => Color::new(0.96, 0.97, 1.0, 1.0),
             ItemKind::Sword => Color::new(0.80, 0.83, 0.90, 1.0),
             ItemKind::EyeOfNewt => Color::new(0.80, 0.78, 0.20, 1.0),
+            ItemKind::Ruby => Color::new(0.86, 0.12, 0.20, 1.0),
+            ItemKind::Sapphire => Color::new(0.16, 0.38, 0.92, 1.0),
+            ItemKind::Amethyst => Color::new(0.62, 0.28, 0.84, 1.0),
+            ItemKind::Mushroom => Color::new(0.88, 0.48, 0.18, 1.0),
+            ItemKind::CrystalBall => Color::new(0.72, 0.82, 0.98, 1.0),
+            ItemKind::UnicornHorn => Color::new(1.0, 0.88, 0.40, 1.0),
+            ItemKind::UnicornSword => Color::new(0.92, 0.94, 1.0, 1.0),
+            ItemKind::ShellFragment => Color::new(0.90, 0.46, 0.34, 1.0),
+            ItemKind::ShellArmor => Color::new(0.82, 0.38, 0.28, 1.0),
+            ItemKind::Fig => Color::new(0.46, 0.18, 0.34, 1.0),
+            ItemKind::MoonlightVial => Color::new(0.70, 0.80, 1.0, 1.0),
+            ItemKind::GoatHorn => Color::new(0.90, 0.86, 0.74, 1.0),
+            ItemKind::IvoryKnife => Color::new(0.96, 0.93, 0.82, 1.0),
             ItemKind::VenisonJerky => Color::new(0.40, 0.18, 0.12, 1.0),
             ItemKind::PoultryJerky => Color::new(0.62, 0.40, 0.22, 1.0),
             ItemKind::BearJerky => Color::new(0.32, 0.15, 0.10, 1.0),
@@ -633,9 +710,9 @@ impl ItemKind {
     }
 
     /// Whether this can be worn. A player wears one thing at a time, all in the same place: a pelt cloak, the royal armour,
-    /// the king's crown, a leather backpack or the boots of the sky.
+    /// the king's crown, a leather backpack, the boots of the sky or a shell armor.
     pub fn is_wearable(self) -> bool {
-        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown | ItemKind::LeatherBackpack | ItemKind::BootsOfTheSky)
+        matches!(self, ItemKind::PeltCloak | ItemKind::RoyalArmor | ItemKind::AncientCrown | ItemKind::LeatherBackpack | ItemKind::BootsOfTheSky | ItemKind::ShellArmor)
     }
 
     /// Whether this is a backpack: it shares the one worn place with the cloak, the armour and the crown, and while it is on
@@ -651,7 +728,7 @@ impl ItemKind {
 
     /// Whether a click throws this item itself (an iron feather, like a throwing star), rather than shooting something else.
     pub fn is_thrown(self) -> bool {
-        self == ItemKind::IronFeather
+        matches!(self, ItemKind::IronFeather | ItemKind::IvoryKnife)
     }
 
     /// What a launcher shoots, taken from the inventory (`None` for anything that is not a launcher).
@@ -661,6 +738,11 @@ impl ItemKind {
             ItemKind::Sling => Some(ItemKind::Pebble),
             _ => None,
         }
+    }
+
+    /// Whether this is one of the three kinds of crystal a sling shoots before it uses pebbles.
+    pub fn is_crystal(self) -> bool {
+        matches!(self, ItemKind::Ruby | ItemKind::Sapphire | ItemKind::Amethyst)
     }
 
     /// Whether this can be added to a burning log or embers to extend the fire by `FIRE_SECONDS`.
@@ -719,6 +801,7 @@ impl ItemKind {
             ItemKind::BronzeMallet => Some(MALLET_DAMAGE),
             ItemKind::Excalibur => Some(EXCALIBUR_DAMAGE),
             ItemKind::Sword => Some(SWORD_DAMAGE),
+            ItemKind::UnicornSword => Some(UNICORN_SWORD_DAMAGE),
             _ => None,
         }
     }
@@ -728,13 +811,18 @@ impl ItemKind {
         match self {
             ItemKind::BronzeMallet => MALLET_COOLDOWN,
             ItemKind::Excalibur => EXCALIBUR_COOLDOWN,
+            ItemKind::UnicornSword => UNICORN_SWORD_COOLDOWN,
             _ => AXE_COOLDOWN,
         }
     }
 
     /// How far a swing of this melee item reaches.
     pub fn melee_reach(self) -> f32 {
-        if self == ItemKind::Excalibur { EXCALIBUR_REACH } else { AXE_REACH }
+        match self {
+            ItemKind::Excalibur => EXCALIBUR_REACH,
+            ItemKind::UnicornSword => UNICORN_SWORD_REACH,
+            _ => AXE_REACH,
+        }
     }
 
     /// Life points restored by eating this item, if it can be eaten. Raw meat cannot.
@@ -742,6 +830,8 @@ impl ItemKind {
         match self {
             ItemKind::Berries => Some(BERRY_HEAL),
             ItemKind::RedBerryStew => Some(BERRY_STEW_HEAL),
+            ItemKind::EyeOfNewt => Some(NEWT_EYE_HEAL),
+            ItemKind::Fig => Some(FIG_HEAL),
             ItemKind::CookedVenison => Some(VENISON_HEAL),
             ItemKind::CookedPoultry => Some(POULTRY_HEAL),
             ItemKind::CookedBearMeat => Some(BEAR_MEAT_HEAL),
@@ -835,6 +925,15 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
         Block::StardustPile => drops.extend(std::iter::repeat(ItemKind::Stardust).take(STARDUST_DROP as usize)),
         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
+        Block::RubyCrystal | Block::SapphireCrystal | Block::AmethystCrystal => {
+            let kind = match block {
+                Block::RubyCrystal => ItemKind::Ruby,
+                Block::SapphireCrystal => ItemKind::Sapphire,
+                _ => ItemKind::Amethyst,
+            };
+            drops.extend(std::iter::repeat(kind).take(rng.range(CRYSTAL_DROP_MIN as i32, CRYSTAL_DROP_MAX as i32 + 1) as usize));
+        }
+        Block::Mushroom => drops.push(ItemKind::Mushroom),
         Block::PinkSalt => drops.extend(std::iter::repeat(ItemKind::PinkSalt).take(rng.range(PINK_SALT_DROP_MIN as i32, PINK_SALT_DROP_MAX as i32 + 1) as usize)),
         Block::KeyStand => drops.push(ItemKind::SilverKey),
         Block::GoldBoulder => drops.extend(std::iter::repeat(ItemKind::Gold).take(GOLD_BOULDER_GOLD_DROP as usize)),
@@ -864,6 +963,9 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
             }
         }
         Block::Ash => drops.push(ItemKind::Ash),
+        // Breaking fig foliage gives a few figs; plain foliage gives nothing.
+        Block::FigFoliage => drops.extend(std::iter::repeat(ItemKind::Fig).take(rng.range(FIG_BREAK_MIN as i32, FIG_BREAK_MAX as i32 + 1) as usize)),
+        Block::Foliage => {}
         Block::Air
         | Block::Dirt
         | Block::Stone
@@ -881,7 +983,6 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         | Block::SwordHilt
         | Block::PulledStone
         | Block::MayaStone
-        | Block::RedCrystal
         | Block::Water
         | Block::Flower
         | Block::Fire
@@ -1095,7 +1196,7 @@ mod tests {
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         assert_eq!((ItemKind::StoneAxe.melee_cooldown(), ItemKind::BronzeMallet.melee_cooldown()), (AXE_COOLDOWN, MALLET_COOLDOWN));
         for k in ItemKind::ALL {
-            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur | ItemKind::Sword), "{k:?}");
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur | ItemKind::Sword | ItemKind::UnicornSword), "{k:?}");
         }
     }
 
@@ -1227,7 +1328,7 @@ mod tests {
         }
         assert_eq!(ItemKind::BronzeMallet.melee_damage(), Some(MALLET_DAMAGE));
         for k in ItemKind::ALL {
-            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur | ItemKind::Sword), "{k:?}");
+            assert_eq!(k.melee_damage().is_some(), k.is_axe() || matches!(k, ItemKind::BronzeMallet | ItemKind::Excalibur | ItemKind::Sword | ItemKind::UnicornSword), "{k:?}");
         }
     }
 }

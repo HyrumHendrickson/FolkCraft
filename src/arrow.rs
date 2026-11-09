@@ -43,6 +43,11 @@ impl Arrow {
         Arrow { kind: ItemKind::Pebble, pos: origin, vel: dir * SLING_SPEED, age: 0.0 }
     }
 
+    /// A crystal (`kind`: a ruby, sapphire or amethyst) leaving `origin` along the unit vector `dir` from a sling. It lands as that crystal.
+    pub fn slung_crystal(origin: Vec3, dir: Vec3, kind: ItemKind) -> Arrow {
+        Arrow { kind, pos: origin, vel: dir * SLING_SPEED, age: 0.0 }
+    }
+
     /// A Phoenix Arrow shot from a bow: it flies like an arrow, but is never used up and never lands.
     pub fn fired_phoenix(origin: Vec3, dir: Vec3) -> Arrow {
         Arrow { kind: ItemKind::PhoenixArrow, pos: origin, vel: dir * ARROW_SPEED, age: 0.0 }
@@ -57,6 +62,11 @@ impl Arrow {
     /// An iron feather thrown by the player from `origin` along the unit vector `dir`, like a throwing star.
     pub fn thrown_feather(origin: Vec3, dir: Vec3) -> Arrow {
         Arrow { kind: ItemKind::IronFeather, pos: origin, vel: dir * IRON_FEATHER_SPEED, age: 0.0 }
+    }
+
+    /// An ivory knife thrown by the player from `origin` along the unit vector `dir`.
+    pub fn thrown_knife(origin: Vec3, dir: Vec3) -> Arrow {
+        Arrow { kind: ItemKind::IvoryKnife, pos: origin, vel: dir * IVORY_KNIFE_SPEED, age: 0.0 }
     }
 
     /// An iron feather shot by an Iron Quail from `origin` along the unit vector `dir`. It hurts the player, not animals, and lands as an
@@ -97,7 +107,9 @@ impl Arrow {
     pub fn damage(&self) -> i32 {
         match self.kind {
             ItemKind::Pebble => SLING_DAMAGE,
+            kind if kind.is_crystal() => SLING_DAMAGE * CRYSTAL_DAMAGE_FACTOR,
             ItemKind::IronFeather => IRON_FEATHER_THROW_DAMAGE,
+            ItemKind::IvoryKnife => IVORY_KNIFE_DAMAGE,
             ItemKind::PoisonArrow => POISON_ARROW_DAMAGE,
             _ => ARROW_DAMAGE,
         }

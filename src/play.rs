@@ -90,6 +90,7 @@ pub fn play_screen(app: &mut App) {
     game.update_arrows(dt);
     game.update_health(dt);
     game.update_blackout(dt);
+    game.update_effects(dt);
     game.update_horizen_transition(dt);
 
     game.autosave_timer += dt;
@@ -205,6 +206,10 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     if game.fill_jar(eye, dir) {
         return;
     }
+    // Ash in hand at a fairy: trade it for a vial of moonlight.
+    if game.trade_with_fairy(eye, dir) {
+        return;
+    }
     // Right click at the store's ghost opens his shop.
     if game.open_shop(eye, dir) {
         return;
@@ -220,7 +225,7 @@ fn handle_placing(game: &mut Game, eye: Vec3, dir: Vec3, target: Target) {
     // A bush is an explicit harvest target, even when the player happens to be holding food.
     // This keeps right-clicking a bush from eating the held berries instead.
     if let Some(hit) = target {
-        if hit.block == crate::block::Block::Bush {
+        if hit.block.is_pickable() {
             game.use_held(&hit);
             return;
         }
@@ -371,7 +376,7 @@ fn render_hud(game: &mut Game, drawn: usize) {
         if let Some(progress) = game.mining_progress() {
             draw_break_bar(progress);
         }
-        draw_health(game.health);
+        draw_health(game.health, game.max_health());
         if game.held_item() == Some(ItemKind::Compass) {
             let target = if !game.in_overworld() {
                 CompassTarget::Spawn
@@ -539,14 +544,18 @@ fn draw_break_bar(progress: f32) {
 }
 
 /// Ten hearts above the hotbar, one per life point.
-fn draw_health(health: u32) {
+fn draw_health(health: u32, max: u32) {
     let (w, h) = (screen_width(), screen_height());
     let (size, gap) = (18.0, 4.0);
-    let total = MAX_HEALTH as f32 * (size + gap) - gap;
-    let (x0, y) = (w / 2.0 - total / 2.0, h - 134.0);
-    for i in 0..MAX_HEALTH {
-        let x = x0 + i as f32 * (size + gap);
-        let color = if i < health { Color::new(0.85, 0.12, 0.18, 1.0) } else { Color::new(0.2, 0.2, 0.2, 0.7) };
+    // Ten hearts a row; hearts from a Vial of Moonlight (past ten) make a second row above, in pale blue.
+    let row = |n: u32| n.min(MAX_HEALTH);
+    let total = row(max) as f32 * (size + gap) - gap;
+    let (x0, y0) = (w / 2.0 - total / 2.0, h - 134.0);
+    for i in 0..max {
+        let (col, line) = (i % MAX_HEALTH, i / MAX_HEALTH);
+        let (x, y) = (x0 + col as f32 * (size + gap), y0 - line as f32 * (size + gap));
+        let full = if i < MAX_HEALTH { Color::new(0.85, 0.12, 0.18, 1.0) } else { Color::new(0.45, 0.62, 0.98, 1.0) };
+        let color = if i < health { full } else { Color::new(0.2, 0.2, 0.2, 0.7) };
         draw_rectangle(x - 1.0, y - 1.0, size + 2.0, size + 2.0, Color::new(0.0, 0.0, 0.0, 0.7));
         draw_rectangle(x, y, size, size, color);
     }

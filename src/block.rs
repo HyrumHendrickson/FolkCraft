@@ -102,10 +102,19 @@ pub enum Block {
     PulledStone,
     /// The weathered, pale stone of the jungle temple: a solid cube that cannot be broken or made.
     MayaStone,
-    /// A red crystal in the caves of the Horizen: it looks like a cluster of salt crystals, but it is solid and cannot be mined.
-    RedCrystal,
+    /// A cluster of ruby (red), sapphire (blue) or amethyst (purple) crystals standing on the floor of a crystal cave in the Horizen. Solid;
+    /// broken by hand it drops `CRYSTAL_DROP_MIN..=CRYSTAL_DROP_MAX` crystals of its colour, which the sling shoots before pebbles.
+    RubyCrystal,
+    SapphireCrystal,
+    AmethystCrystal,
+    /// A mushroom growing on the floor of a mushroom cave in the Horizen. Walk-through; taking it by hand drops a mushroom.
+    Mushroom,
     /// Bones scattered on the ground of an altar island in the Skylands. Walk-through; taking them by hand drops a bone.
     Bones,
+    /// Low, broad-leaved foliage on the jungle floor. Walk-through and hand-breakable; it drops nothing.
+    Foliage,
+    /// The same foliage with figs on it. Right click picks the figs once, like a bush (the foliage stays); breaking it gives a few figs too.
+    FigFoliage,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -140,6 +149,22 @@ const BUSH_PARTS: &[Part] = &[
     part([0.62, 0.38, 0.86], [0.72, 0.48, 0.92], (0.75, 0.12, 0.20)),
     part([0.08, 0.35, 0.60], [0.14, 0.45, 0.70], (0.75, 0.12, 0.20)),
     part([0.86, 0.25, 0.30], [0.92, 0.35, 0.40], (0.75, 0.12, 0.20)),
+];
+/// Jungle foliage: broad dark leaves in layers.
+const FOLIAGE_PARTS: &[Part] = &[
+    part([0.08, 0.0, 0.38], [0.92, 0.30, 0.62], (0.10, 0.40, 0.14)),
+    part([0.38, 0.0, 0.08], [0.62, 0.34, 0.92], (0.12, 0.46, 0.16)),
+    part([0.20, 0.30, 0.20], [0.80, 0.56, 0.80], (0.14, 0.50, 0.18)),
+    part([0.34, 0.56, 0.34], [0.66, 0.74, 0.66], (0.18, 0.56, 0.20)),
+];
+/// Foliage with figs: part 0 and 1 are the leaves; every part from index 2 on is a fig (skipped once the figs are picked).
+const FIG_FOLIAGE_PARTS: &[Part] = &[
+    part([0.10, 0.0, 0.10], [0.90, 0.56, 0.90], (0.10, 0.40, 0.14)),
+    part([0.24, 0.56, 0.24], [0.76, 0.76, 0.76], (0.15, 0.50, 0.18)),
+    part([0.28, 0.28, 0.06], [0.40, 0.42, 0.16], (0.42, 0.17, 0.32)),
+    part([0.60, 0.34, 0.84], [0.72, 0.48, 0.94], (0.42, 0.17, 0.32)),
+    part([0.06, 0.30, 0.58], [0.16, 0.44, 0.70], (0.46, 0.20, 0.34)),
+    part([0.84, 0.22, 0.28], [0.94, 0.36, 0.40], (0.46, 0.20, 0.34)),
 ];
 /// A log lying along the x axis. The mesher paints the two x ends as cut wood.
 const LOG_PARTS: &[Part] = &[part([0.05, 0.0, 0.25], [0.95, 0.5, 0.75], (0.36, 0.24, 0.12))];
@@ -325,7 +350,8 @@ const SALT_CRYSTAL_PARTS: &[Part] = &[
     part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.84, 0.46, 0.60)),
 ];
 /// A cluster of red crystals standing on a cave floor: the shape of the salt crystals, in deep reds.
-const RED_CRYSTAL_PARTS: &[Part] = &[
+/// A cluster of ruby crystals: a tall prism with a bright tip and shorter ones round it, on a dark base.
+const RUBY_CRYSTAL_PARTS: &[Part] = &[
     part([0.18, 0.0, 0.18], [0.82, 0.10, 0.82], (0.46, 0.08, 0.10)),
     part([0.38, 0.10, 0.38], [0.62, 0.78, 0.62], (0.80, 0.12, 0.16)),
     part([0.43, 0.78, 0.43], [0.57, 0.95, 0.57], (1.0, 0.45, 0.45)),
@@ -334,6 +360,36 @@ const RED_CRYSTAL_PARTS: &[Part] = &[
     part([0.62, 0.10, 0.22], [0.78, 0.42, 0.38], (0.86, 0.16, 0.20)),
     part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (1.0, 0.50, 0.50)),
     part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.60, 0.07, 0.12)),
+];
+/// The same cluster in sapphire blue.
+const SAPPHIRE_CRYSTAL_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.10, 0.82], (0.07, 0.12, 0.40)),
+    part([0.38, 0.10, 0.38], [0.62, 0.78, 0.62], (0.13, 0.34, 0.86)),
+    part([0.43, 0.78, 0.43], [0.57, 0.95, 0.57], (0.58, 0.78, 1.0)),
+    part([0.20, 0.10, 0.44], [0.36, 0.52, 0.60], (0.10, 0.24, 0.70)),
+    part([0.23, 0.52, 0.48], [0.33, 0.62, 0.56], (0.45, 0.68, 1.0)),
+    part([0.62, 0.10, 0.22], [0.78, 0.42, 0.38], (0.16, 0.40, 0.90)),
+    part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (0.55, 0.76, 1.0)),
+    part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.08, 0.18, 0.58)),
+];
+/// The same cluster in amethyst purple.
+const AMETHYST_CRYSTAL_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.10, 0.82], (0.26, 0.08, 0.38)),
+    part([0.38, 0.10, 0.38], [0.62, 0.78, 0.62], (0.58, 0.24, 0.80)),
+    part([0.43, 0.78, 0.43], [0.57, 0.95, 0.57], (0.88, 0.70, 1.0)),
+    part([0.20, 0.10, 0.44], [0.36, 0.52, 0.60], (0.44, 0.16, 0.66)),
+    part([0.23, 0.52, 0.48], [0.33, 0.62, 0.56], (0.80, 0.56, 1.0)),
+    part([0.62, 0.10, 0.22], [0.78, 0.42, 0.38], (0.64, 0.30, 0.86)),
+    part([0.65, 0.42, 0.26], [0.75, 0.50, 0.34], (0.86, 0.66, 1.0)),
+    part([0.58, 0.10, 0.62], [0.72, 0.34, 0.76], (0.34, 0.12, 0.52)),
+];
+/// A cave mushroom: a pale stem under a round orange cap with a lighter crown, and a small one beside it.
+const MUSHROOM_PARTS: &[Part] = &[
+    part([0.43, 0.0, 0.43], [0.57, 0.30, 0.57], (0.93, 0.89, 0.78)),
+    part([0.24, 0.28, 0.24], [0.76, 0.42, 0.76], (0.86, 0.44, 0.16)),
+    part([0.34, 0.42, 0.34], [0.66, 0.50, 0.66], (0.96, 0.64, 0.32)),
+    part([0.74, 0.0, 0.16], [0.82, 0.12, 0.24], (0.93, 0.89, 0.78)),
+    part([0.66, 0.11, 0.08], [0.90, 0.20, 0.32], (0.78, 0.36, 0.14)),
 ];
 /// A few bones lying on the ground: a long one, a short one across it and a rib.
 const BONES_PARTS: &[Part] = &[
@@ -410,8 +466,8 @@ const CHARCOAL_PARTS: &[Part] = &[
 ];
 
 impl Block {
-    /// Blocks that are saved in `World::placed`: the ones a player can create, and the rainbow's pile of gold.
-    pub const PLAYER_MADE: [Block; 17] = [
+    /// Blocks that are saved in `World::placed`: the ones a player can create, the rainbow's pile of gold, and the flowers fairies plant.
+    pub const PLAYER_MADE: [Block; 18] = [
         Block::PlacedLog,
         Block::PlacedPebble,
         Block::PlacedStone,
@@ -429,6 +485,8 @@ impl Block {
         Block::AncientAltar,
         Block::AltarLoadstone,
         Block::PulledStone,
+        // A flower a fairy has planted (`Game::update_fairy_planting`).
+        Block::Flower,
     ];
 
     /// Whether a player can break this block with their bare hands. Dirt and snow are not among them.
@@ -440,6 +498,8 @@ impl Block {
                 | Block::Grass
                 | Block::Flower
                 | Block::Bush
+                | Block::Foliage
+                | Block::FigFoliage
                 | Block::PlacedLog
                 | Block::PlacedPebble
                 | Block::PlacedStone
@@ -464,6 +524,10 @@ impl Block {
                 | Block::IdolPlinth
                 | Block::GoldBoulder
                 | Block::AltarLoadstone
+                | Block::RubyCrystal
+                | Block::SapphireCrystal
+                | Block::AmethystCrystal
+                | Block::Mushroom
         )
     }
 
@@ -476,6 +540,12 @@ impl Block {
     /// mesher draws the translucent surface of every such cell.
     pub fn is_wet(self) -> bool {
         matches!(self, Block::Water | Block::WetPebble | Block::WetStone | Block::WetClay)
+    }
+
+    /// Whether a right click harvests this block once and leaves it standing: a bush (berries) or fig-bearing foliage (figs). The picked
+    /// fruit is not drawn (`World::berry_picked`).
+    pub fn is_pickable(self) -> bool {
+        matches!(self, Block::Bush | Block::FigFoliage)
     }
 
     /// What is left in the cell when this block is taken away: water for something lying under water, else air.
@@ -494,6 +564,8 @@ impl Block {
         match self {
             Block::Wood => BREAK_SECONDS_WOOD,
             Block::Bush => BREAK_SECONDS_BUSH,
+            Block::Foliage => BREAK_SECONDS_GROUND_FOLIAGE,
+            Block::FigFoliage => BREAK_SECONDS_FIG_FOLIAGE,
             Block::Leaves | Block::Needles => BREAK_SECONDS_FOLIAGE,
             Block::Grass | Block::Flower => BREAK_SECONDS_PLANT,
             Block::PlacedLog
@@ -511,6 +583,8 @@ impl Block {
             Block::StardustPile => BREAK_SECONDS_STARDUST,
             Block::ArmorStand => BREAK_SECONDS_ARMOR,
             Block::PinkSalt => BREAK_SECONDS_SALT,
+            Block::RubyCrystal | Block::SapphireCrystal | Block::AmethystCrystal => BREAK_SECONDS_CRYSTAL,
+            Block::Mushroom => BREAK_SECONDS_MUSHROOM,
             Block::Bones => BREAK_SECONDS_PLACED,
             Block::KeyStand => BREAK_SECONDS_KEY,
             Block::StonePlinth | Block::HornPlinth | Block::CrownPlinth | Block::BootsPlinth | Block::IdolPlinth | Block::AltarLoadstone => BREAK_SECONDS_RELIC,
@@ -532,7 +606,6 @@ impl Block {
             | Block::AncientAltar
             | Block::PulledStone
             | Block::MayaStone
-            | Block::RedCrystal
             | Block::Water
             | Block::Fire
             | Block::Embers
@@ -548,10 +621,10 @@ impl Block {
 
     /// Whether a player holding `held` (or nothing) can break this block.
     /// Wood needs a stone axe and a boulder a bronze mallet. With a bow drill in hand a placed log, charcoal or
-    /// a filled forge is lit instead of broken, and with a bow or a sling in hand nothing is broken: the button
+    /// a filled forge is lit instead of broken, and with a bow, a sling or a crystal ball in hand nothing is broken: the button
     /// shoots instead.
     pub fn can_break_with(self, held: Option<ItemKind>) -> bool {
-        if held.map_or(false, |k| k.is_launcher() || k.is_thrown()) {
+        if held.map_or(false, |k| k.is_launcher() || k.is_thrown() || k == ItemKind::CrystalBall) {
             return false;
         }
         match self {
@@ -585,7 +658,9 @@ impl Block {
                 | Block::TowerDoor
                 | Block::TowerDoorTop
                 | Block::PinkSalt
-                | Block::RedCrystal
+                | Block::RubyCrystal
+                | Block::SapphireCrystal
+                | Block::AmethystCrystal
                 | Block::KeyStand
                 | Block::StonePlinth
                 | Block::HornPlinth
@@ -630,6 +705,8 @@ impl Block {
             Block::Grass => GRASS_PARTS,
             Block::Flower => FLOWER_PARTS,
             Block::Bush => BUSH_PARTS,
+            Block::Foliage => FOLIAGE_PARTS,
+            Block::FigFoliage => FIG_FOLIAGE_PARTS,
             Block::PlacedLog => LOG_PARTS,
             Block::Fire => FIRE_PARTS,
             Block::PlacedPebble => PEBBLE_PARTS,
@@ -653,7 +730,10 @@ impl Block {
             Block::TowerDoorTop => TOWER_DOOR_TOP_PARTS,
             Block::KeyStand => KEY_STAND_PARTS,
             Block::PinkSalt => SALT_CRYSTAL_PARTS,
-            Block::RedCrystal => RED_CRYSTAL_PARTS,
+            Block::RubyCrystal => RUBY_CRYSTAL_PARTS,
+            Block::SapphireCrystal => SAPPHIRE_CRYSTAL_PARTS,
+            Block::AmethystCrystal => AMETHYST_CRYSTAL_PARTS,
+            Block::Mushroom => MUSHROOM_PARTS,
             Block::Bones => BONES_PARTS,
             Block::StonePlinth => STONE_PLINTH_PARTS,
             Block::HornPlinth => HORN_PLINTH_PARTS,
@@ -718,6 +798,7 @@ impl Block {
             Block::AncientAltar => Some("ancient_altar"),
             Block::AltarLoadstone => Some("altar_loadstone"),
             Block::PulledStone => Some("pulled_stone"),
+            Block::Flower => Some("flower"),
             _ => None,
         }
     }
@@ -751,7 +832,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 53] = [
+    const ALL: [Block; 58] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -804,7 +885,12 @@ mod tests {
         Block::PulledStone,
         Block::MayaStone,
         Block::Bones,
-        Block::RedCrystal,
+        Block::RubyCrystal,
+        Block::SapphireCrystal,
+        Block::AmethystCrystal,
+        Block::Mushroom,
+        Block::Foliage,
+        Block::FigFoliage,
     ];
 
     #[test]

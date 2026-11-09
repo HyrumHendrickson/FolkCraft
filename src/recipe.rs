@@ -1,7 +1,7 @@
 //! Crafting recipes. A recipe consumes a fixed number of items; there is no shape or
 //! placement, only counts. To add a recipe, append an entry to `RECIPES`.
 
-use crate::config::{BOWLS_PER_LOG, JERKY_SALT_COST, POISON_ARROW_BATCH};
+use crate::config::{BOWLS_PER_LOG, CRYSTAL_BALL_STARDUST, JERKY_SALT_COST, POISON_ARROW_BATCH, SHELL_ARMOR_FRAGMENTS};
 use crate::inventory::Inventory;
 use crate::item::ItemKind;
 
@@ -74,6 +74,10 @@ pub const RECIPES: &[Recipe] = &[
         inputs: &[(ItemKind::Arrow, POISON_ARROW_BATCH), (ItemKind::SnakeFang, 1)],
     },
     // Jerky: raw meat cured with a lump of pink salt, one kind for each meat. No fire is needed.
+    Recipe { output: ItemKind::CrystalBall, output_count: 1, inputs: &[(ItemKind::Stardust, CRYSTAL_BALL_STARDUST)] },
+    Recipe { output: ItemKind::UnicornSword, output_count: 1, inputs: &[(ItemKind::UnicornHorn, 1), (ItemKind::LeatherCord, 1)] },
+    Recipe { output: ItemKind::IvoryKnife, output_count: crate::config::IVORY_KNIVES_PER_HORN, inputs: &[(ItemKind::GoatHorn, 1)] },
+    Recipe { output: ItemKind::ShellArmor, output_count: 1, inputs: &[(ItemKind::ShellFragment, SHELL_ARMOR_FRAGMENTS)] },
     Recipe { output: ItemKind::VenisonJerky, output_count: 1, inputs: &[(ItemKind::Venison, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
     Recipe { output: ItemKind::PoultryJerky, output_count: 1, inputs: &[(ItemKind::Poultry, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
     Recipe { output: ItemKind::BearJerky, output_count: 1, inputs: &[(ItemKind::BearMeat, 1), (ItemKind::PinkSalt, JERKY_SALT_COST)] },
@@ -166,6 +170,7 @@ mod tests {
                 ItemKind::LeatherCord => 3,
                 ItemKind::WoodenBowl => 5,
                 ItemKind::PoisonArrow => 25,
+                ItemKind::IvoryKnife => crate::config::IVORY_KNIVES_PER_HORN,
                 _ => 1,
             };
             assert_eq!(r.output_count, expected, "{:?}", r.output);

@@ -177,6 +177,8 @@ impl World {
                 Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Skylands => (r, g, b) = (0.30, 0.62, 0.22),
                 // Above the tree line the mountain is bare rock, not grass.
                 Block::Dirt if fi == 2 && y > GROUND_TOP + TREE_LINE_RISE => (r, g, b) = (0.46, 0.43, 0.40),
+                // The jungle's grass is darker than the forest's.
+                Block::Dirt if fi == 2 && self.dimension == crate::horizen::Dimension::Overworld && crate::terrain::in_jungle(self.seed, wx, wz) => (r, g, b) = JUNGLE_GRASS_COLOR,
                 Block::Dirt if fi == 2 => (r, g, b) = (0.28, 0.58, 0.20),
                 // Night makes the tree canopy look lifeless instead of merely turning a green tree dark.
                 Block::Leaves if self.night => (r, g, b) = (0.25, 0.23, 0.17),
@@ -225,7 +227,7 @@ impl World {
     /// is skipped only where it lies on the cell boundary against a solid cube.
     fn emit_parts(&self, out: &mut MeshBuilder, block: Block, wx: i32, y: i32, wz: i32) {
         for (pi, part) in block.parts().iter().enumerate() {
-            if block == Block::Bush && pi >= 2 && self.berry_picked.contains(&(wx, y, wz)) {
+            if block.is_pickable() && pi >= 2 && self.berry_picked.contains(&(wx, y, wz)) {
                 continue;
             }
             for (fi, face) in FACES.iter().enumerate() {

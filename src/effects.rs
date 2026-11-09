@@ -732,6 +732,12 @@ pub fn draw_projectiles(projectiles: &[crate::hazard::Projectile], time: f32) {
                 draw_box(p.pos, Vec3::splat(0.30), -time * 3.0, Color::new(1.0, 0.85, 0.25, 1.0));
                 draw_box(p.pos, Vec3::splat(0.75 + 0.2 * flicker), time, Color::new(1.0, 0.40, 0.05, 0.25));
             }
+            ProjectileKind::DragonFire => {
+                let flicker = 0.5 + 0.5 * (time * 24.0 + p.age * 11.0).sin();
+                draw_box(p.pos, Vec3::splat(0.55 + 0.15 * flicker), time * 5.0, Color::new(1.0, 0.50, 0.06, 1.0));
+                draw_box(p.pos, Vec3::splat(0.32), -time * 4.0, Color::new(1.0, 0.92, 0.40, 1.0));
+                draw_box(p.pos, Vec3::splat(1.1 + 0.3 * flicker), time, Color::new(1.0, 0.35, 0.05, 0.22));
+            }
         }
     }
 }

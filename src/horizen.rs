@@ -174,8 +174,10 @@ pub enum CaveKind {
     Mossy,
     /// A river winds across the floor from wall to wall.
     River,
-    /// Red crystals, like salt crystals, stand on the floor. They cannot be mined.
+    /// Ruby, sapphire and amethyst crystals stand on the floor. They can be broken for crystals.
     Crystal,
+    /// Mushrooms grow on the floor. They can be picked and eaten.
+    Mushroom,
 }
 
 /// One of the Horizen's caves: its square of the grid, its middle, its radius and the air above its middle.
@@ -304,6 +306,8 @@ pub fn cave_in_cell(seed: i64, ci: i32, cj: i32) -> Cave {
             r if r < HORIZEN_MOSSY_PERCENT => CaveKind::Mossy,
             r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT => CaveKind::River,
             r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT + HORIZEN_CRYSTAL_PERCENT => CaveKind::Crystal,
+            // Taken from the plain caves, so the other kinds stay where they were in older worlds.
+            r if r < HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT + HORIZEN_CRYSTAL_PERCENT + HORIZEN_MUSHROOM_PERCENT => CaveKind::Mushroom,
             _ => CaveKind::Plain,
         },
     }
@@ -403,6 +407,43 @@ pub fn crystal_at(seed: i64, wx: i32, wz: i32) -> bool {
         && hash3(seed, wx, wz, 0x4352) % 1000 < HORIZEN_CRYSTAL_PER_MILLE
         && air_height(seed, wx, wz) >= HORIZEN_MIN_AIR
         && !is_pond(seed, wx, wz)
+}
+
+/// The crystal cluster that stands on the column (wx, wz): ruby, sapphire or amethyst by the column's hash (`None` where `crystal_at` is false).
+pub fn crystal_block(seed: i64, wx: i32, wz: i32) -> Option<Block> {
+    crystal_at(seed, wx, wz).then(|| match hash3(seed, wx, wz, 0x4353) % 3 {
+        0 => Block::RubyCrystal,
+        1 => Block::SapphireCrystal,
+        _ => Block::AmethystCrystal,
+    })
+}
+
+/// Whether a mushroom grows on the column (wx, wz): in a mushroom cave, on dry open floor and clear of its middle.
+pub fn mushroom_at(seed: i64, wx: i32, wz: i32) -> bool {
+    let cave = cave_of_column(seed, wx, wz);
+    if cave.kind != CaveKind::Mushroom {
+        return false;
+    }
+    let dist = ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt();
+    dist >= HORIZEN_MUSHROOM_CLEAR_RADIUS
+        && dist <= cave.radius * 0.9
+        && hash3(seed, wx, wz, 0x4D55) % 1000 < HORIZEN_MUSHROOM_PER_MILLE
+        && air_height(seed, wx, wz) >= HORIZEN_MIN_AIR
+        && !is_pond(seed, wx, wz)
+}
+
+/// The caves of `kind` near the column (wx, wz): those whose walls (1.15 times their radius) come within `reach` blocks of it, nearest first.
+pub fn caves_near(seed: i64, wx: i32, wz: i32, reach: f32, kind: CaveKind) -> Vec<Cave> {
+    let (ci, cj) = (wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL));
+    let p = (wx as f32 + 0.5, wz as f32 + 0.5);
+    let gap = |c: &Cave| ((p.0 - c.x).powi(2) + (p.1 - c.z).powi(2)).sqrt() - c.radius * 1.15;
+    let mut caves: Vec<Cave> = (-1..=1)
+        .flat_map(|di| (-1..=1).map(move |dj| (ci + di, cj + dj)))
+        .map(|(i, j)| cave_in_cell(seed, i, j))
+        .filter(|c| c.kind == kind && gap(c) <= reach)
+        .collect();
+    caves.sort_by(|a, b| gap(a).partial_cmp(&gap(b)).unwrap_or(std::cmp::Ordering::Equal));
+    caves
 }
 
 /// The air over the column (wx, wz) from the dome of `cave` and the tunnels that join it to its east and south neighbours (and
@@ -516,8 +557,10 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
             for y in GROUND_TOP + 1 + air..=HORIZEN_ROOF_Y {
                 blocks[idx(lx, y, lz)] = Block::Stone;
             }
-            if crystal_at(seed, wx, wz) {
-                blocks[idx(lx, GROUND_TOP + 1, lz)] = Block::RedCrystal;
+            if let Some(crystal) = crystal_block(seed, wx, wz) {
+                blocks[idx(lx, GROUND_TOP + 1, lz)] = crystal;
+            } else if mushroom_at(seed, wx, wz) {
+                blocks[idx(lx, GROUND_TOP + 1, lz)] = Block::Mushroom;
             }
         }
     }
@@ -594,13 +637,14 @@ mod tests {
                                 crystal_cols += crystal_at(seed, x, z) as i32;
                                 assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z));
                             }
-                            CaveKind::Plain => assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z) && !moss_at(seed, x, z) && !crystal_at(seed, x, z)),
+                            CaveKind::Mushroom => assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z) && !crystal_at(seed, x, z)),
+                            CaveKind::Plain => assert!(!river_at(seed, x, z) && !in_moss_pool(seed, x, z) && !moss_at(seed, x, z) && !crystal_at(seed, x, z) && !mushroom_at(seed, x, z)),
                         }
                     }
                 }
             }
         }
-        assert_eq!(kinds.len(), 4, "all four kinds turn up: {kinds:?}");
+        assert_eq!(kinds.len(), 5, "all five kinds turn up: {kinds:?}");
         assert!(pool_cols > 20 && moss_cols > pool_cols, "mossy caves have pools ringed with moss: {pool_cols} pool, {moss_cols} moss");
         assert!(river_cols > 40, "river caves have rivers: {river_cols}");
         assert!(crystal_cols > 10, "crystal caves have crystals: {crystal_cols}");
@@ -634,31 +678,82 @@ mod tests {
     }
 
     #[test]
-    fn red_crystals_are_generated_into_the_chunks_and_cannot_be_mined() {
-        let seed = 3;
+    fn ruby_sapphire_and_amethyst_clusters_are_generated_in_crystal_caves_and_can_be_broken() {
         let landmarks = Landmarks::default();
-        let mut found = 0;
-        'outer: for cj in -4..5 {
-            for ci in -4..5 {
-                let cave = cave_in_cell(seed, ci, cj);
-                if cave.kind != CaveKind::Crystal {
-                    continue;
-                }
-                let (cx, cz) = ((cave.x as i32).div_euclid(CHUNK_SIZE), (cave.z as i32).div_euclid(CHUNK_SIZE));
-                for dz in -2..=2 {
-                    for dx in -2..=2 {
-                        let blocks = generate_chunk(seed, cx + dx, cz + dz, &landmarks);
-                        found += blocks.iter().filter(|b| **b == Block::RedCrystal).count();
+        let mut seen = std::collections::HashSet::new();
+        for seed in 1..6 {
+            for cj in -4..5 {
+                for ci in -4..5 {
+                    let cave = cave_in_cell(seed, ci, cj);
+                    if cave.kind != CaveKind::Crystal {
+                        continue;
                     }
-                }
-                if found > 0 {
-                    break 'outer;
+                    let (cx, cz) = ((cave.x as i32).div_euclid(CHUNK_SIZE), (cave.z as i32).div_euclid(CHUNK_SIZE));
+                    for dz in -2..=2 {
+                        for dx in -2..=2 {
+                            for b in generate_chunk(seed, cx + dx, cz + dz, &landmarks) {
+                                if matches!(b, Block::RubyCrystal | Block::SapphireCrystal | Block::AmethystCrystal) {
+                                    seen.insert(b);
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        assert!(found > 0, "red crystals stand in the crystal caves");
-        let b = Block::RedCrystal;
-        assert!(!b.breakable() && !b.hand_breakable() && !b.can_break_with(None) && b.collides() && b.parts().len() >= 6, "solid, crystal-shaped and not minable");
+        assert_eq!(seen.len(), 3, "all three colours stand in the crystal caves: {seen:?}");
+        for b in seen {
+            assert!(b.breakable() && b.hand_breakable() && b.can_break_with(None) && b.collides() && b.parts().len() >= 6, "{b:?}: solid, crystal-shaped and breakable by hand");
+        }
+    }
+
+    #[test]
+    fn mushrooms_grow_only_in_mushroom_caves_and_can_be_picked() {
+        let landmarks = Landmarks::default();
+        let mut found = 0;
+        let mut kinds = 0;
+        for seed in 1..6 {
+            for cj in -4..5 {
+                for ci in -4..5 {
+                    let cave = cave_in_cell(seed, ci, cj);
+                    if cave.kind != CaveKind::Mushroom || cave.great || cave.king {
+                        continue;
+                    }
+                    kinds += 1;
+                    let (cx, cz) = ((cave.x as i32).div_euclid(CHUNK_SIZE), (cave.z as i32).div_euclid(CHUNK_SIZE));
+                    for dz in -2..=2 {
+                        for dx in -2..=2 {
+                            found += generate_chunk(seed, cx + dx, cz + dz, &landmarks).iter().filter(|b| **b == Block::Mushroom).count();
+                        }
+                    }
+                }
+            }
+        }
+        assert!(kinds > 0, "the Horizen has mushroom caves");
+        assert!(found > 0, "mushrooms grow in them");
+        let b = Block::Mushroom;
+        assert!(b.breakable() && b.can_break_with(None) && !b.collides(), "a mushroom is picked by hand and walked through");
+        // No mushroom grows in a cave of another kind.
+        for (x, z) in (-200..200).step_by(3).flat_map(|x| (-200..200).step_by(3).map(move |z| (x, z))) {
+            if mushroom_at(2, x, z) {
+                assert_eq!(cave_of_column(2, x, z).kind, CaveKind::Mushroom);
+            }
+        }
+    }
+
+    #[test]
+    fn the_older_cave_kinds_stay_where_they_were_and_mushroom_caves_come_out_of_the_plain_ones() {
+        for seed in 1..4 {
+            for cj in -8..8 {
+                for ci in -8..8 {
+                    let kind = cave_in_cell(seed, ci, cj).kind;
+                    let roll = hash3(seed, ci, cj, 0x4B49) % 100;
+                    if kind == CaveKind::Mushroom {
+                        assert!(roll >= HORIZEN_MOSSY_PERCENT + HORIZEN_RIVER_PERCENT + HORIZEN_CRYSTAL_PERCENT);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

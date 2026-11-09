@@ -69,6 +69,10 @@ pub struct SaveData {
     pub parrot_kills: u32,
     /// How many bats the player has killed in the Horizen's caves (a vampire bat comes for every `BATS_PER_VAMPIRE`).
     pub bat_kills: u32,
+    /// How many day/night switches the player has made (the Dragon comes after `DRAGON_SWITCHES`), and big crawfish killed (the Giant Crawfish
+    /// comes for every `BIG_CRAWFISH_KILLS_PER_GIANT`).
+    pub day_night_switches: u32,
+    pub big_crawfish_kills: u32,
 }
 
 impl SaveData {
@@ -92,6 +96,8 @@ impl SaveData {
             quail_kills: 0,
             parrot_kills: 0,
             bat_kills: 0,
+            day_night_switches: 0,
+            big_crawfish_kills: 0,
             worn: None,
             back: None,
             in_horizen: false,
@@ -137,6 +143,8 @@ impl SaveData {
 ///     "quailkills <n>"          how many quail the player has killed
 ///     "parrotkills <n>"         how many parrots the player has killed
 ///     "batkills <n>"            how many bats the player has killed in the Horizen's caves
+///     "switches <n>"            how many times the player has turned day to night or night to day
+///     "crawfishkills <n>"       how many big crawfish the player has killed
 ///     "orangutanslain"          the Orangutan on the jungle temple has been killed (it never returns)
 ///     "unicornsummoned"         the Cursed Idol has been used: the Unicorn has come (it returns whole when the world is loaded, until killed)
 ///     "unicornslain"            the Unicorn has been killed (it never returns)
@@ -179,6 +187,8 @@ pub struct SaveExtras<'a> {
     /// How many parrots the player has killed (Bronze Parrots come for every `PARROTS_PER_BRONZE_PARROT`).
     pub parrot_kills: u32,
     pub bat_kills: u32,
+    pub day_night_switches: u32,
+    pub big_crawfish_kills: u32,
 }
 
 /// The records of a world's silver tower state, each starting with `prefix`.
@@ -278,6 +288,12 @@ pub fn serialize_save_full(
     }
     if extras.bat_kills > 0 {
         out.push_str(&format!("batkills {}\n", extras.bat_kills));
+    }
+    if extras.day_night_switches > 0 {
+        out.push_str(&format!("switches {}\n", extras.day_night_switches));
+    }
+    if extras.big_crawfish_kills > 0 {
+        out.push_str(&format!("crawfishkills {}\n", extras.big_crawfish_kills));
     }
     if world.landmarks.unicorn_summoned {
         out.push_str("unicornsummoned\n");
@@ -408,6 +424,8 @@ fn apply_line(data: &mut SaveData, line: &str) {
             Some("unicornsummoned") => data.landmarks.unicorn_summoned = true,
             Some("unicornslain") => data.landmarks.unicorn_slain = true,
             Some("batkills") => data.bat_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("switches") => data.day_night_switches = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            Some("crawfishkills") => data.big_crawfish_kills = t.next().and_then(|v| v.parse().ok()).unwrap_or(0),
             Some("nessie") => {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {

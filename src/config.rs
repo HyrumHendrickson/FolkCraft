@@ -419,6 +419,9 @@ pub const SKY_TORNADO_DAMAGE_INTERVAL: f32 = 1.0;
 pub const BREAK_SECONDS_WOOD: f32 = 5.0;
 pub const BREAK_SECONDS_BUSH: f32 = 3.0;
 pub const BREAK_SECONDS_FOLIAGE: f32 = 2.0;
+/// Ground foliage of the jungle (`Block::Foliage`), and the same with figs on it (`Block::FigFoliage`).
+pub const BREAK_SECONDS_GROUND_FOLIAGE: f32 = 1.0;
+pub const BREAK_SECONDS_FIG_FOLIAGE: f32 = 2.0;
 pub const BREAK_SECONDS_PLANT: f32 = 0.5;
 /// Placed logs, pebbles, stones and charcoal.
 pub const BREAK_SECONDS_PLACED: f32 = 0.5;
@@ -772,6 +775,9 @@ pub const SKY_TREE_PERCENT: u64 = 3;
 
 /// Breaking a pink salt crystal, a silver key off its stand and a relic off its plinth.
 pub const BREAK_SECONDS_SALT: f32 = 1.2;
+/// A cluster of ruby, sapphire or amethyst crystals, and a cave mushroom.
+pub const BREAK_SECONDS_CRYSTAL: f32 = 1.5;
+pub const BREAK_SECONDS_MUSHROOM: f32 = 0.5;
 pub const BREAK_SECONDS_KEY: f32 = 0.6;
 pub const BREAK_SECONDS_RELIC: f32 = 1.0;
 /// Lumps of pink salt a crystal drops: this many to this many, inclusive (a random number each time).
@@ -1002,10 +1008,10 @@ pub const BOSS_UNSTICK_PROGRESS: f32 = 0.6;
 
 /// The Yeti's **smash**: within `YETI_SMASH_TRIGGER_RANGE` it may hit the ground (after `YETI_SMASH_WINDUP` seconds of rearing up), and
 /// everything within `YETI_SMASH_RADIUS` blocks takes `YETI_SMASH_DAMAGE` and is thrown `YETI_SMASH_KNOCKBACK` blocks away.
-pub const YETI_SMASH_RADIUS: f32 = 2.0;
+pub const YETI_SMASH_RADIUS: f32 = 6.0;
 pub const YETI_SMASH_DAMAGE: u32 = 4;
 pub const YETI_SMASH_KNOCKBACK: f32 = 10.0;
-pub const YETI_SMASH_TRIGGER_RANGE: f32 = 3.2;
+pub const YETI_SMASH_TRIGGER_RANGE: f32 = 6.0;
 pub const YETI_SMASH_WINDUP: f32 = 0.7;
 pub const YETI_SMASH_COOLDOWN: f32 = 6.0;
 /// The Yeti's **ice throw**, used only while the player is more than `YETI_ICE_MIN_RANGE` blocks away (and within `YETI_ICE_MAX_RANGE`):
@@ -1150,7 +1156,7 @@ pub const BAT_CAVE_SPAWN_EVERY: u32 = 2;
 /// circles the player at `VAMPIRE_BAT_ORBIT_RADIUS`, then swoops (`VAMPIRE_BAT_DIVE_SPEED`) for one blow and flies off again.
 pub const BATS_PER_VAMPIRE: u32 = 10;
 pub const VAMPIRE_BAT_HEALTH: i32 = 70;
-pub const VAMPIRE_BAT_HALF_WIDTH: f32 = 0.7;
+pub const VAMPIRE_BAT_HALF_WIDTH: f32 = 0.6;
 pub const VAMPIRE_BAT_HEIGHT: f32 = 0.5;
 pub const VAMPIRE_BAT_DAMAGE: u32 = 3;
 pub const VAMPIRE_BAT_REACH: f32 = 0.9;
@@ -1345,9 +1351,14 @@ pub const BRONZE_PARROT_DAMAGE: u32 = 2;
 pub const BRONZE_PARROT_ATTACK_COOLDOWN: f32 = 1.1;
 pub const BRONZE_PARROT_REACH: f32 = 0.9;
 pub const BRONZE_PARROT_SPAWN_DISTANCE: f32 = 14.0;
-/// A Parrot gives `PARROT_FEATHER_DROP` feathers, a Bronze Parrot `BRONZE_PARROT_BRONZE_DROP` bronze.
+/// A Parrot gives `PARROT_FEATHER_DROP` feathers; a Bronze Parrot `BRONZE_PARROT_BRONZE_DROP` bronze and
+/// `BRONZE_PARROT_IRON_FEATHER_DROP` iron feathers.
 pub const PARROT_FEATHER_DROP: u32 = 3;
 pub const BRONZE_PARROT_BRONZE_DROP: u32 = 2;
+pub const BRONZE_PARROT_IRON_FEATHER_DROP: u32 = 3;
+/// An Iron Quail no longer leaves a silver key: she drops `IRON_QUAIL_IRON_DROP` iron and `IRON_QUAIL_IRON_FEATHER_DROP` iron feathers.
+pub const IRON_QUAIL_IRON_DROP: u32 = 2;
+pub const IRON_QUAIL_IRON_FEATHER_DROP: u32 = 3;
 
 /// A structure that finds something in its way is tried again `SITE_PUSH_BLOCKS` further out, up to `SITE_PUSH_STEPS` times in all.
 pub const SITE_PUSH_BLOCKS: i32 = 40;
@@ -1369,7 +1380,7 @@ pub const JERKY_SALT_COST: u32 = 1;
 /// Falling stars cross the night sky of the Skylands, one about every `FALLING_STAR_INTERVAL` seconds, and land on an island the player
 /// can see (within `FALLING_STAR_RANGE` blocks, in front of them). A star starts `FALLING_STAR_START_HEIGHT` blocks above its landing
 /// place and `FALLING_STAR_SLANT` blocks to one side, and falls for `FALLING_STAR_FALL_SECONDS` seconds. Its flash lasts `FALLING_STAR_FLASH_SECONDS`.
-pub const FALLING_STAR_INTERVAL: f32 = 10.0;
+pub const FALLING_STAR_INTERVAL: f32 = 5.0;
 pub const FALLING_STAR_RANGE: f32 = 220.0;
 pub const FALLING_STAR_START_HEIGHT: f32 = 140.0;
 pub const FALLING_STAR_SLANT: f32 = 70.0;
@@ -1383,6 +1394,89 @@ pub const FALLING_STAR_VIEW_DEGREES: f32 = 55.0;
 pub const STARDUST_PILE_SECONDS: f32 = 30.0;
 pub const STARDUST_DROP: u32 = 1;
 pub const BREAK_SECONDS_STARDUST: f32 = 1.0;
+
+// --- The jungle's ponds, ground foliage and figs -------------------------------------------------
+
+/// The jungle is full of small ponds. They lie on a grid of `JUNGLE_POND_CELL`-block squares; `JUNGLE_POND_PERCENT` of the squares hold one,
+/// somewhere inside it, `JUNGLE_POND_MIN_RADIUS..=JUNGLE_POND_MAX_RADIUS` blocks across from the middle to the (wavy) edge. A pond is a
+/// river-like cut one block into flat ground (never on a slope, and never within `JUNGLE_POND_CLEARING_MARGIN` of the bare middle).
+pub const JUNGLE_POND_CELL: i32 = 16;
+pub const JUNGLE_POND_PERCENT: u64 = 80;
+pub const JUNGLE_POND_MIN_RADIUS: f32 = 2.0;
+pub const JUNGLE_POND_MAX_RADIUS: f32 = 4.2;
+pub const JUNGLE_POND_CLEARING_MARGIN: f32 = 4.0;
+/// The jungle's grass is darker than the grass of the ordinary forest.
+pub const JUNGLE_GRASS_COLOR: (f32, f32, f32) = (0.13, 0.36, 0.12);
+/// Foliage grows on `JUNGLE_FOLIAGE_PERCENT` of the jungle's dry ground columns (not its bare middle); one clump in `JUNGLE_FIG_ONE_IN` bears figs.
+pub const JUNGLE_FOLIAGE_PERCENT: u64 = 12;
+pub const JUNGLE_FIG_ONE_IN: u64 = 5;
+/// Picking a fig-bearing foliage (right click, like a bush: once, and the foliage stays) gives `FIG_PICK_MIN..=FIG_PICK_MAX` figs; breaking
+/// it gives `FIG_BREAK_MIN..=FIG_BREAK_MAX`. Plain foliage drops nothing.
+pub const FIG_PICK_MIN: u32 = 2;
+pub const FIG_PICK_MAX: u32 = 4;
+pub const FIG_BREAK_MIN: u32 = 2;
+pub const FIG_BREAK_MAX: u32 = 3;
+/// Life a fig heals when eaten.
+pub const FIG_HEAL: u32 = 3;
+
+// --- Fairies and the vial of moonlight --------------------------------------------------------------
+
+/// Fairies flit about the islands of the Skylands (at most `MAX_FAIRY` near the player). They have `FAIRY_HEALTH` life and never do damage, and
+/// now and then one plants a flower on the grass below it (every `FAIRY_PLANT_MIN..=FAIRY_PLANT_MAX` seconds). Hit one and every fairy
+/// is roused (`Animal::enraged`) until the player dies or is `FAIRY_GIVE_UP_DISTANCE` away: they close in and throw the player
+/// (`FAIRY_KNOCKBACK` blocks, one push every `FAIRY_ATTACK_COOLDOWN`), choosing the side that sends the player over an edge they can
+/// find within `FAIRY_EDGE_SEARCH` blocks.
+pub const FAIRY_HEALTH: i32 = 8;
+pub const MAX_FAIRY: usize = 6;
+pub const SPAWN_WEIGHT_FAIRY: u64 = 60;
+pub const FAIRY_HALF_WIDTH: f32 = 0.25;
+pub const FAIRY_HEIGHT: f32 = 0.6;
+pub const FAIRY_WANDER_SPEED: f32 = 1.6;
+pub const FAIRY_CHASE_SPEED: f32 = 6.5;
+/// A fairy hovers `FAIRY_HOVER_HEIGHT` blocks over the ground, bobbing a little.
+pub const FAIRY_HOVER_HEIGHT: f32 = 1.6;
+pub const FAIRY_REACH: f32 = 0.8;
+pub const FAIRY_ATTACK_COOLDOWN: f32 = 1.4;
+pub const FAIRY_KNOCKBACK: f32 = 5.0;
+pub const FAIRY_GIVE_UP_DISTANCE: f32 = 80.0;
+pub const FAIRY_EDGE_SEARCH: f32 = 14.0;
+pub const FAIRY_PLANT_MIN: f32 = 12.0;
+pub const FAIRY_PLANT_MAX: f32 = 30.0;
+/// A fairy trades with the player (right click, holding ash): one ash for one Vial of Moonlight.
+pub const FAIRY_TRADE_REACH: f32 = 4.0;
+/// Drinking a Vial of Moonlight raises the most life the player can have by one for `MOONLIGHT_SECONDS`, up to `MOONLIGHT_MAX_BONUS` extra hearts
+/// in all. Each vial drunk starts every running timer over at `MOONLIGHT_SECONDS`.
+pub const MOONLIGHT_SECONDS: f32 = 60.0;
+pub const MOONLIGHT_MAX_BONUS: u32 = 10;
+
+// --- Mountain goats and ivory knives ----------------------------------------------------------------
+
+/// Mountain goats live on the islands of the Skylands (at most `MAX_GOAT`). They have `GOAT_HEALTH` life and leave the player alone until they
+/// are hit; then one charges (until the player dies or is `GOAT_GIVE_UP_DISTANCE` away), butting for `GOAT_DAMAGE` and throwing the player
+/// `GOAT_KNOCKBACK` blocks. It drops `GOAT_HORN_DROP` horn, and a horn makes `IVORY_KNIVES_PER_HORN` ivory throwing knives.
+pub const GOAT_HEALTH: i32 = 30;
+pub const MAX_GOAT: usize = 4;
+pub const SPAWN_WEIGHT_GOAT: u64 = 50;
+pub const GOAT_HALF_WIDTH: f32 = 0.45;
+pub const GOAT_HEIGHT: f32 = 1.1;
+pub const GOAT_WALK_SPEED: f32 = 1.3;
+pub const GOAT_RUN_SPEED: f32 = 6.2;
+pub const GOAT_DAMAGE: u32 = 1;
+pub const GOAT_ATTACK_COOLDOWN: f32 = 1.3;
+pub const GOAT_REACH: f32 = 0.6;
+pub const GOAT_KNOCKBACK: f32 = 9.0;
+pub const GOAT_GIVE_UP_DISTANCE: f32 = 60.0;
+pub const GOAT_HORN_DROP: u32 = 1;
+pub const IVORY_KNIVES_PER_HORN: u32 = 3;
+/// How the skylands' creatures are kept: within `SKY_WILDLIFE_RADIUS` blocks of the player, on islands, never on the player's own island's
+/// arrival stretch (the general store's ghost), and only by `SKY_WILDLIFE_MIN_DISTANCE` or more from the player.
+pub const SKY_WILDLIFE_MIN_DISTANCE: f32 = 12.0;
+pub const SKY_WILDLIFE_MAX_DISTANCE: f32 = 70.0;
+/// An ivory knife is thrown like an iron feather (`IVORY_KNIFE_THROW_COOLDOWN` apart, `IVORY_KNIFE_DAMAGE` to what it hits) but is never
+/// used up: it drops where it hits, or where it lands, and can be picked up again.
+pub const IVORY_KNIFE_DAMAGE: i32 = 12;
+pub const IVORY_KNIFE_SPEED: f32 = 30.0;
+pub const IVORY_KNIFE_THROW_COOLDOWN: f32 = 0.4;
 
 /// A Phoenix that has been killed rises again in its crater after this many seconds (the fire tornadoes return with it).
 pub const PHOENIX_RESPAWN_SECONDS: f32 = 60.0;
@@ -1422,18 +1516,22 @@ pub const SHOP_STEW_PRICE: u32 = 3;
 
 // --- Newts and the Unicorn ----------------------------------------------------------------------
 
-/// Newts live on the floor of the Horizen's mossy (overgrown, green) caves. They are harmless, have `NEWT_HEALTH` life, and drop an Eye of
-/// Newt `NEWT_EYE_CHANCE` percent of the time (one in five). Up to `MAX_NEWT` are about at once.
+/// Newts live on the floor of the Horizen's mossy (overgrown, green) caves. They are harmless, have `NEWT_HEALTH` life, and always drop
+/// `NEWT_EYE_DROP_MIN..=NEWT_EYE_DROP_MAX` Eyes of Newt. Up to `MAX_NEWT` are about at once.
 ///
 /// Newts are common: while the player is within `NEWT_CAVE_REACH` blocks of a mossy cave (past its walls), the cave is kept stocked with
 /// `NEWTS_PER_CAVE` of them, up to `NEWT_SPAWNS_PER_TICK` new ones on each wildlife spawn tick, placed anywhere on the cave's open floor
 /// (`horizen::is_mossy_floor`) but at least `NEWT_SPAWN_MIN_DISTANCE` blocks from the player, so one walking into a green cave finds
 /// a crowd of them within a few seconds.
 pub const NEWT_HEALTH: i32 = 4;
-pub const NEWT_HALF_WIDTH: f32 = 0.25;
-pub const NEWT_HEIGHT: f32 = 0.18;
+pub const NEWT_HALF_WIDTH: f32 = 0.5;
+pub const NEWT_HEIGHT: f32 = 0.36;
 pub const NEWT_WALK_SPEED: f32 = 0.8;
-pub const NEWT_EYE_CHANCE: u64 = 20;
+pub const NEWT_EYE_DROP_MIN: u32 = 1;
+pub const NEWT_EYE_DROP_MAX: u32 = 2;
+/// Life an Eye of Newt heals when eaten, and how much bigger than the first version a newt is drawn (its hit box is twice as big too).
+pub const NEWT_EYE_HEAL: u32 = 1;
+pub const NEWT_MODEL_SCALE: f32 = 2.0;
 pub const MAX_NEWT: usize = 24;
 pub const NEWTS_PER_CAVE: usize = 10;
 pub const NEWT_SPAWNS_PER_TICK: usize = 3;
@@ -1482,3 +1580,127 @@ pub const BEAR_BOSS_RAGE_SECONDS: f32 = 30.0;
 /// How much darker than a bear's the Great Bear's fur is, and how much bigger it is drawn.
 pub const BEAR_BOSS_FUR_SHADE: f32 = 0.55;
 pub const BEAR_BOSS_MODEL_SCALE: f32 = 1.7;
+
+// --- The crystal ball, the unicorn sword, crystals, mushrooms, crawfish and the dragon ----------------
+
+/// Stardust (what the Skylands' falling stars leave) is the moon dust that `CRYSTAL_BALL_STARDUST` of makes a **Crystal Ball**. A left click with it
+/// in hand turns day to night and night to day (behind the usual blackout); it does nothing in the Horizen, which is always day.
+pub const CRYSTAL_BALL_STARDUST: u32 = 10;
+
+/// The Unicorn drops `UNICORN_HORN_DROP` Unicorn Horn, which is crafted (with a leather cord) into a **Unicorn Sword**: it hits harder than
+/// Excalibur, with the same reach and swing, but does no extra damage to the Wild Hunt.
+pub const UNICORN_HORN_DROP: u32 = 1;
+pub const UNICORN_SWORD_DAMAGE: i32 = EXCALIBUR_DAMAGE + 8;
+pub const UNICORN_SWORD_COOLDOWN: f32 = EXCALIBUR_COOLDOWN;
+pub const UNICORN_SWORD_REACH: f32 = EXCALIBUR_REACH;
+
+/// Crystal caves are studded with ruby, sapphire and amethyst clusters. Broken by hand each drops `CRYSTAL_DROP_MIN..=CRYSTAL_DROP_MAX`
+/// crystals of its colour. A sling shoots a crystal (any colour, rubies first) before it uses a pebble, for `CRYSTAL_DAMAGE_FACTOR` times
+/// the damage.
+pub const CRYSTAL_DROP_MIN: u32 = 1;
+pub const CRYSTAL_DROP_MAX: u32 = 3;
+pub const CRYSTAL_DAMAGE_FACTOR: i32 = 4;
+
+/// A fifth kind of cave, the **mushroom cave** (`horizen::CaveKind::Mushroom`): this many percent of the Horizen's ordinary caves (taken from
+/// the plain ones, so the mossy, river and crystal caves stay where they were). Mushrooms stand on this many thousandths of its open floor,
+/// never near its middle. Eating one costs `MUSHROOM_DAMAGE` life and makes the player `MUSHROOM_SPEED_FACTOR` times as fast for
+/// `MUSHROOM_BOOST_SECONDS`.
+pub const HORIZEN_MUSHROOM_PERCENT: u64 = 14;
+pub const HORIZEN_MUSHROOM_PER_MILLE: u64 = 110;
+pub const HORIZEN_MUSHROOM_CLEAR_RADIUS: f32 = 3.0;
+pub const MUSHROOM_DAMAGE: u32 = 1;
+pub const MUSHROOM_SPEED_FACTOR: f32 = 2.0;
+pub const MUSHROOM_BOOST_SECONDS: f32 = 15.0;
+
+/// **Crawfish.** Small ones (`CRAWFISH_HEALTH`) live in the normal world's rivers, wander in the water and never attack. One in
+/// `CRAWFISH_FRAGMENT_PERCENT` percent leaves a Shell Fragment. **Big crawfish** (`BIG_CRAWFISH_HEALTH`) live in the Horizen's river caves,
+/// leave the player alone until hurt, then fight back (`BIG_CRAWFISH_DAMAGE` every `BIG_CRAWFISH_ATTACK_COOLDOWN`), and always drop
+/// `BIG_CRAWFISH_FRAGMENT_MIN..=MAX` fragments. Every `BIG_CRAWFISH_KILLS_PER_GIANT` big crawfish killed brings out the **Giant Crawfish**
+/// (`GIANT_CRAWFISH_HEALTH`), which always fights and drops `GIANT_CRAWFISH_FRAGMENT_MIN..=MAX` fragments. All of them keep to the water.
+/// `SHELL_ARMOR_FRAGMENTS` fragments make a Shell Armor, which takes `SHELL_ARMOR_REDUCTION` life off every blow (but never more than half).
+pub const CRAWFISH_HEALTH: i32 = 4;
+pub const CRAWFISH_HALF_WIDTH: f32 = 0.3;
+pub const CRAWFISH_HEIGHT: f32 = 0.3;
+pub const CRAWFISH_WALK_SPEED: f32 = 0.9;
+pub const CRAWFISH_FRAGMENT_PERCENT: u64 = 20;
+pub const MAX_CRAWFISH: usize = 10;
+pub const CRAWFISH_SPAWNS_PER_TICK: usize = 2;
+pub const BIG_CRAWFISH_HEALTH: i32 = 20;
+pub const BIG_CRAWFISH_HALF_WIDTH: f32 = 0.7;
+pub const BIG_CRAWFISH_HEIGHT: f32 = 0.8;
+pub const BIG_CRAWFISH_WALK_SPEED: f32 = 1.2;
+pub const BIG_CRAWFISH_RUN_SPEED: f32 = 3.4;
+pub const BIG_CRAWFISH_DAMAGE: u32 = 2;
+pub const BIG_CRAWFISH_ATTACK_COOLDOWN: f32 = 1.2;
+pub const BIG_CRAWFISH_REACH: f32 = 1.2;
+pub const BIG_CRAWFISH_FRAGMENT_MIN: u32 = 1;
+pub const BIG_CRAWFISH_FRAGMENT_MAX: u32 = 2;
+pub const BIG_CRAWFISH_GIVE_UP_DISTANCE: f32 = 30.0;
+pub const BIG_CRAWFISH_KILLS_PER_GIANT: u32 = 10;
+pub const BIG_CRAWFISH_PER_CAVE: usize = 3;
+pub const MAX_BIG_CRAWFISH: usize = 8;
+pub const BIG_CRAWFISH_SPAWNS_PER_TICK: usize = 2;
+pub const BIG_CRAWFISH_CAVE_REACH: f32 = 40.0;
+pub const BIG_CRAWFISH_SPAWN_MIN_DISTANCE: f32 = 6.0;
+pub const GIANT_CRAWFISH_HEALTH: i32 = 120;
+pub const GIANT_CRAWFISH_HALF_WIDTH: f32 = 1.4;
+pub const GIANT_CRAWFISH_HEIGHT: f32 = 1.8;
+pub const GIANT_CRAWFISH_WALK_SPEED: f32 = 1.6;
+pub const GIANT_CRAWFISH_RUN_SPEED: f32 = 4.2;
+pub const GIANT_CRAWFISH_DAMAGE: u32 = 3;
+pub const GIANT_CRAWFISH_ATTACK_COOLDOWN: f32 = 1.1;
+pub const GIANT_CRAWFISH_REACH: f32 = 1.6;
+pub const GIANT_CRAWFISH_FRAGMENT_MIN: u32 = 10;
+pub const GIANT_CRAWFISH_FRAGMENT_MAX: u32 = 20;
+pub const GIANT_CRAWFISH_SPAWN_DISTANCE: f32 = 14.0;
+/// How much bigger than a crawfish the big and the giant one are drawn.
+pub const BIG_CRAWFISH_MODEL_SCALE: f32 = 2.4;
+pub const GIANT_CRAWFISH_MODEL_SCALE: f32 = 5.0;
+pub const SHELL_ARMOR_FRAGMENTS: u32 = 50;
+pub const SHELL_ARMOR_REDUCTION: u32 = 1;
+
+/// **The Dragon**, the biggest boss in the game. After `DRAGON_SWITCHES` day/night switches (by stew or crystal ball, anywhere) one comes
+/// to the Skylands, `DRAGON_SPAWN_DISTANCE` blocks from the player and `DRAGON_SPAWN_HEIGHT` above them; killing it starts the count over.
+/// It is always in the air and never lands. It circles `DRAGON_HOVER_RADIUS` out and `DRAGON_HOVER_HEIGHT` up, and has two attacks:
+/// it **breathes fire** (a stream of `DRAGON_BREATH_FLAMES` flames over `DRAGON_BREATH_SECONDS`, each `DRAGON_FLAME_DAMAGE`, every
+/// `DRAGON_BREATH_INTERVAL`), and it **swoops** down to strike the player for `DRAGON_SWOOP_DAMAGE`, throwing them `DRAGON_SWOOP_KNOCKBACK`
+/// blocks. Below half health it is quicker. It drops `DRAGON_GOLD_DROP` gold.
+pub const DRAGON_HEALTH: i32 = 600;
+pub const DRAGON_HALF_WIDTH: f32 = 3.0;
+pub const DRAGON_HEIGHT: f32 = 3.0;
+/// Its hit box is wider than its collision box: the wings count.
+pub const DRAGON_HIT_HALF_WIDTH: f32 = 5.5;
+pub const DRAGON_HIT_HEIGHT: f32 = 5.0;
+pub const DRAGON_MODEL_SCALE: f32 = 6.0;
+pub const DRAGON_SWITCHES: u32 = 10;
+pub const DRAGON_SPAWN_DISTANCE: f32 = 60.0;
+pub const DRAGON_SPAWN_HEIGHT: f32 = 24.0;
+pub const DRAGON_HOVER_HEIGHT: f32 = 15.0;
+pub const DRAGON_HOVER_RADIUS: f32 = 26.0;
+pub const DRAGON_CIRCLE_SPEED: f32 = 9.0;
+pub const DRAGON_SWOOP_SPEED: f32 = 24.0;
+pub const DRAGON_SWOOP_DAMAGE: u32 = 5;
+pub const DRAGON_SWOOP_REACH: f32 = 3.0;
+pub const DRAGON_SWOOP_KNOCKBACK: f32 = 22.0;
+pub const DRAGON_SWOOP_INTERVAL: f32 = 9.0;
+pub const DRAGON_SWOOP_SECONDS: f32 = 3.5;
+pub const DRAGON_BREATH_INTERVAL: f32 = 6.0;
+pub const DRAGON_BREATH_SECONDS: f32 = 1.4;
+pub const DRAGON_BREATH_FLAMES: u32 = 10;
+pub const DRAGON_BREATH_RANGE: f32 = 55.0;
+pub const DRAGON_BREATH_MIN_RANGE: f32 = 8.0;
+pub const DRAGON_FLAME_DAMAGE: u32 = 1;
+pub const DRAGON_FLAME_SPEED: f32 = 30.0;
+pub const DRAGON_FLAME_RADIUS: f32 = 2.2;
+pub const DRAGON_FLAME_SPREAD: f32 = 0.10;
+pub const DRAGON_GOLD_DROP: u32 = 60;
+
+/// The vampire bat is drawn `VAMPIRE_BAT_MODEL_SCALE` times a bat's size (it was 3.4). Out of its dive it flies for the middle of a passage:
+/// at least `VAMPIRE_BAT_CEILING_MARGIN` blocks under the ceiling, and pushed at up to `VAMPIRE_BAT_CENTRE_SPEED` away from walls it sees
+/// within `VAMPIRE_BAT_CENTRE_LOOK` blocks.
+pub const VAMPIRE_BAT_MODEL_SCALE: f32 = 2.8;
+pub const VAMPIRE_BAT_CEILING_MARGIN: f32 = 1.2;
+pub const VAMPIRE_BAT_CENTRE_SPEED: f32 = 11.0;
+pub const VAMPIRE_BAT_CENTRE_LOOK: f32 = 8.0;
+/// A wall nearer than this (blocks) to a vampire bat stops its goal pulling it sideways into the rock.
+pub const VAMPIRE_BAT_WALL_NEAR: f32 = 2.5;

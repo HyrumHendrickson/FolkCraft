@@ -832,6 +832,113 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             rod(p(0.24, 0.58), p(0.42, 0.76), 3.6 * u, Color::new(0.34, 0.30, 0.28, 1.0));
             rod(p(0.32, 0.68), p(0.16, 0.84), 4.2 * u, Color::new(0.30, 0.18, 0.10, 1.0));
         }
+        ItemKind::Ruby | ItemKind::Sapphire | ItemKind::Amethyst => {
+            // A cut crystal: a pointed, faceted prism with a bright edge and a glint.
+            let (top, left, right, base_l, base_r) = (p(0.50, 0.14), p(0.28, 0.40), p(0.72, 0.40), p(0.34, 0.86), p(0.66, 0.86));
+            quad([left, right, base_r, base_l], darken(color, 0.78));
+            tri(top, left, right, lighten(color, 0.22));
+            tri(top, p(0.50, 0.40), left, color);
+            draw_line(top.x, top.y, base_r.x, base_r.y, 1.2, lighten(color, 0.45));
+            draw_line(left.x, left.y, right.x, right.y, 1.2, darken(color, 0.55));
+            let g = p(0.42, 0.34);
+            draw_line(g.x - 2.5 * u, g.y, g.x + 2.5 * u, g.y, 1.2, WHITE);
+            draw_line(g.x, g.y - 2.5 * u, g.x, g.y + 2.5 * u, 1.2, WHITE);
+        }
+        ItemKind::Mushroom => {
+            // A pale stem under a round orange cap with pale spots.
+            slab(cx - 4.0 * u, cy + 1.0 * u, 8.0 * u, 13.0 * u, Color::new(0.93, 0.89, 0.78, 1.0));
+            ball(cx, cy - 2.0 * u, 13.0 * u, color);
+            draw_rectangle(cx - 13.0 * u, cy - 1.0 * u, 26.0 * u, 3.0 * u, darken(color, 0.72));
+            for (dx, dy) in [(-6.0, -6.0), (2.0, -9.0), (7.0, -3.0)] {
+                draw_circle(cx + dx * u, cy + dy * u, 2.0 * u, Color::new(0.98, 0.90, 0.70, 1.0));
+            }
+        }
+        ItemKind::CrystalBall => {
+            // A glass sphere on a little wooden stand, with a swirl of light inside.
+            slab(cx - 9.0 * u, cy + 12.0 * u, 18.0 * u, 5.0 * u, Color::new(0.42, 0.28, 0.16, 1.0));
+            slab(cx - 6.0 * u, cy + 9.0 * u, 12.0 * u, 4.0 * u, Color::new(0.52, 0.36, 0.20, 1.0));
+            ball(cx, cy - 1.0 * u, 13.0 * u, color);
+            draw_circle(cx + 2.0 * u, cy + 1.0 * u, 7.5 * u, Color::new(0.50, 0.40, 0.90, 0.55));
+            draw_circle_lines(cx + 1.0 * u, cy, 4.5 * u, 1.4, Color::new(0.95, 0.95, 1.0, 0.8));
+            draw_circle(cx - 5.0 * u, cy - 6.0 * u, 2.6 * u, Color::new(1.0, 1.0, 1.0, 0.85));
+        }
+        ItemKind::UnicornHorn => {
+            // A long golden spiral cone, wide at the base and pointed at the tip.
+            let (tip, base) = (p(0.82, 0.12), p(0.30, 0.78));
+            let side = vec2(0.10 * r.w, 0.10 * r.h);
+            tri(base - side, base + side, tip, color);
+            tri(base, base + side, tip, darken(color, 0.82));
+            for t in [0.25_f32, 0.45, 0.65] {
+                let c = base + (tip - base) * t;
+                let w = 0.11 * r.w * (1.0 - t);
+                draw_line(c.x - w, c.y - w * 0.4, c.x + w, c.y + w * 0.4, 1.4, darken(color, 0.55));
+            }
+        }
+        ItemKind::UnicornSword => {
+            // A pale, shining blade with a golden crosspiece and a horn-shaped pommel.
+            let (tip, base) = (p(0.84, 0.10), p(0.34, 0.60));
+            rod(base, tip, 6.0 * u, color);
+            rod(base, tip, 1.6 * u, Color::new(0.70, 0.60, 0.95, 1.0));
+            let (g0, g1) = (p(0.20, 0.58), p(0.40, 0.78));
+            rod(g0, g1, 4.0 * u, ItemKind::UnicornHorn.color());
+            rod(p(0.30, 0.68), p(0.14, 0.86), 4.6 * u, Color::new(0.96, 0.60, 0.80, 1.0));
+            draw_circle(p(0.12, 0.88).x, p(0.12, 0.88).y, 3.4 * u, ItemKind::UnicornHorn.color());
+        }
+        ItemKind::ShellFragment => {
+            // A curved plate of orange-red shell with ridges.
+            quad([p(0.20, 0.62), p(0.40, 0.26), p(0.82, 0.38), p(0.74, 0.76)], color);
+            tri(p(0.40, 0.26), p(0.82, 0.38), p(0.58, 0.50), lighten(color, 0.18));
+            for t in [0.38_f32, 0.55, 0.72] {
+                let (a, b) = (p(0.20 + 0.54 * t, 0.62 + 0.14 * t), p(0.40 + 0.42 * t, 0.26 + 0.12 * t));
+                draw_line(a.x, a.y, b.x, b.y, 1.2, darken(color, 0.62));
+            }
+        }
+        ItemKind::ShellArmor => {
+            // A breastplate of overlapping shell plates with shoulder straps.
+            quad([p(0.24, 0.20), p(0.76, 0.20), p(0.68, 0.84), p(0.32, 0.84)], color);
+            for i in 0..4 {
+                let y = 0.30 + 0.14 * i as f32;
+                draw_line(p(0.28, y).x, p(0.28, y).y, p(0.72, y).x, p(0.72, y).y, 1.6, darken(color, 0.58));
+            }
+            tri(p(0.24, 0.20), p(0.40, 0.20), p(0.32, 0.34), lighten(color, 0.2));
+            rod(p(0.34, 0.20), p(0.36, 0.10), 3.0 * u, ItemKind::LeatherCord.color());
+            rod(p(0.66, 0.20), p(0.64, 0.10), 3.0 * u, ItemKind::LeatherCord.color());
+        }
+        ItemKind::Fig => {
+            // A plump purple-brown fig with a short stalk and a pale seam.
+            ball(cx, cy + 2.0 * u, 11.0 * u, color);
+            rod(p(0.50, 0.30), p(0.54, 0.16), 3.0 * u, Color::new(0.30, 0.45, 0.18, 1.0));
+            draw_line(cx, cy - 6.0 * u, cx, cy + 12.0 * u, 1.2, lighten(color, 0.35));
+            draw_circle(cx - 4.0 * u, cy - 2.0 * u, 2.2 * u, lighten(color, 0.30));
+        }
+        ItemKind::MoonlightVial => {
+            // A small glass vial with a cork and a pale blue glowing liquid.
+            slab(cx - 3.0 * u, cy - 14.0 * u, 6.0 * u, 5.0 * u, Color::new(0.52, 0.36, 0.20, 1.0));
+            slab(cx - 4.0 * u, cy - 9.0 * u, 8.0 * u, 5.0 * u, Color::new(0.84, 0.90, 0.96, 1.0));
+            ball(cx, cy + 4.0 * u, 10.0 * u, Color::new(0.84, 0.90, 0.96, 1.0));
+            ball(cx, cy + 5.0 * u, 8.0 * u, color);
+            draw_circle(cx - 3.0 * u, cy + 2.0 * u, 2.0 * u, Color::new(1.0, 1.0, 1.0, 1.0));
+        }
+        ItemKind::GoatHorn => {
+            // A curved, ridged horn narrowing to a point.
+            let pts = [p(0.34, 0.84), p(0.30, 0.60), p(0.40, 0.38), p(0.62, 0.20), p(0.80, 0.14)];
+            for (i, w) in [9.0_f32, 7.5, 6.0, 4.0].iter().enumerate() {
+                rod(pts[i], pts[i + 1], w * u, color);
+            }
+            for t in [0.62_f32, 0.46, 0.30] {
+                let a = p(0.26 + 0.14 * (1.0 - t), t + 0.1);
+                draw_line(a.x, a.y, a.x + 6.0 * u, a.y - 2.0 * u, 1.2, darken(color, 0.65));
+            }
+        }
+        ItemKind::IvoryKnife => {
+            // A slim ivory blade with a bound handle.
+            let (tip, base) = (p(0.84, 0.14), p(0.40, 0.58));
+            rod(base, tip, 6.0 * u, color);
+            rod(base, tip, 1.6 * u, lighten(color, 0.4));
+            let (h0, h1) = (p(0.40, 0.58), p(0.16, 0.82));
+            rod(h0, h1, 6.0 * u, Color::new(0.40, 0.26, 0.14, 1.0));
+            rod(p(0.34, 0.64), p(0.40, 0.70), 8.0 * u, ItemKind::LeatherCord.color());
+        }
         ItemKind::EyeOfNewt => {
             // A slimy yellow eye with a slit pupil.
             ball(cx, cy, 9.0 * u, color);

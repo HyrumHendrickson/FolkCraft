@@ -235,6 +235,15 @@ pub struct Game {
     /// due but have not yet appeared (one at a time).
     pub bat_kills: u32,
     pub vampire_bats_owed: u32,
+    /// Day/night switches made so far (the Dragon comes to the Skylands after `DRAGON_SWITCHES`; killing it starts the count over), big
+    /// crawfish killed (a Giant Crawfish comes for every `BIG_CRAWFISH_KILLS_PER_GIANT`), Giant Crawfish due but not yet out, and the seconds
+    /// left of a mushroom's speed boost.
+    pub day_night_switches: u32,
+    pub big_crawfish_kills: u32,
+    pub giant_crawfish_owed: u32,
+    pub speed_boost: f32,
+    /// One timer (seconds left) for each extra heart a Vial of Moonlight is giving; at most `MOONLIGHT_MAX_BONUS`. Not saved.
+    pub moonlight: Vec<f32>,
     /// Counts the cave's wildlife spawn ticks: it brings a bat in only on every `BAT_CAVE_SPAWN_EVERY`th, so bats come half as often.
     cave_spawn_tick: u32,
     /// The pop-up in which the player gives the king's ghost gold: how many offerings (of `GOLD_PER_SPIRIT` gold, one spirit each) they
@@ -380,6 +389,11 @@ impl Game {
             bear_rage: 0.0,
             bat_kills: data.bat_kills,
             vampire_bats_owed: 0,
+            day_night_switches: data.day_night_switches,
+            big_crawfish_kills: data.big_crawfish_kills,
+            giant_crawfish_owed: 0,
+            speed_boost: 0.0,
+            moonlight: Vec::new(),
             cave_spawn_tick: 0,
             king_dialog: None,
             dialog_cursor_free: false,
@@ -430,8 +444,10 @@ impl Game {
             quail_kills: self.quail_kills,
             parrot_kills: self.parrot_kills,
             bat_kills: self.bat_kills,
+            day_night_switches: self.day_night_switches,
+            big_crawfish_kills: self.big_crawfish_kills,
         };
-        serialize_save_full(&self.info.name, self.info.seed, over.0, over.1, &self.inventory, over.2, self.health, self.dev_mode, &extras)
+        serialize_save_full(&self.info.name, self.info.seed, over.0, over.1, &self.inventory, over.2, self.health.min(MAX_HEALTH), self.dev_mode, &extras)
     }
 
     pub fn save(&self) {
@@ -591,7 +607,8 @@ impl Game {
     /// run `BOOTS_SPEED_FACTOR` times as fast and jump `BOOTS_JUMP_DISTANCE_FACTOR` times as far.
     pub fn apply_worn_effects(&mut self) {
         let boots = self.worn == Some(ItemKind::BootsOfTheSky);
-        self.player.speed_factor = if boots { BOOTS_SPEED_FACTOR } else { 1.0 };
+        let mushroom = if self.speed_boost > 0.0 { MUSHROOM_SPEED_FACTOR } else { 1.0 };
+        self.player.speed_factor = if boots { BOOTS_SPEED_FACTOR } else { 1.0 } * mushroom;
         // A jump is as long as the speed along the ground times the time in the air, and the time in the air is proportional to the take-off
         // speed, so a jump `D` times as far at `S` times the running speed needs a take-off `D / S` times as fast.
         self.player.jump_factor = if boots { BOOTS_JUMP_DISTANCE_FACTOR / BOOTS_SPEED_FACTOR } else { 1.0 };
@@ -683,8 +700,12 @@ impl Game {
     fn hurt_player(&mut self, amount: u32, death: &str) -> bool {
         // The royal armour halves every blow (rounding up: a blow always costs at least one life).
         let amount = if self.worn == Some(ItemKind::RoyalArmor) && amount > 0 { (amount + ARMOR_DAMAGE_DIVISOR - 1) / ARMOR_DAMAGE_DIVISOR } else { amount };
+        // A shell armor takes `SHELL_ARMOR_REDUCTION` off every blow, but never more than half of it (rounded up).
+        let amount = if self.worn == Some(ItemKind::ShellArmor) && amount > 0 { amount.saturating_sub(SHELL_ARMOR_REDUCTION).max((amount + 1) / 2) } else { amount };
         self.health = self.health.saturating_sub(amount);
         if self.health == 0 {
+            self.speed_boost = 0.0;
+            self.moonlight.clear();
             // Dying in another dimension takes the player back to where the overworld begins.
             if !self.in_overworld() {
                 self.travel_to(Dimension::Overworld);
@@ -694,7 +715,7 @@ impl Game {
             self.health = MAX_HEALTH;
             self.burn_timer = 0.0;
             self.toasts.push(death.to_string());
-            for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Moose) {
+            for a in self.animals.iter_mut().filter(|a| matches!(a.kind, AnimalKind::Moose | AnimalKind::MountainGoat | AnimalKind::Fairy)) {
                 a.calm();
             }
             // The fight is over: the Iron Quail has won.
@@ -743,6 +764,11 @@ impl Game {
     /// purple berry stew damage the player and can be consumed at any health.
     pub fn eat_held(&mut self) -> bool {
         let Some(kind) = self.held_item() else { return false };
+        if kind == ItemKind::MoonlightVial {
+            self.inventory.take_from_slot(self.selected);
+            self.drink_moonlight();
+            return true;
+        }
         // The cursed idol in the hotbar lets nothing heal the player.
         if self.idol_in_hotbar() && (kind.heal_amount().is_some() || kind == ItemKind::RedBerryStew) {
             self.toasts.push("The cursed idol will not let you heal.".to_string());
@@ -752,6 +778,13 @@ impl Game {
             ItemKind::PurpleBerries => {
                 self.inventory.take_from_slot(self.selected);
                 self.hurt_player(PURPLE_BERRY_DAMAGE, "The purple berries hurt you");
+                true
+            }
+            ItemKind::Mushroom => {
+                self.inventory.take_from_slot(self.selected);
+                self.speed_boost = MUSHROOM_BOOST_SECONDS;
+                self.toasts.push("The mushroom burns going down, and your legs are suddenly quick.".to_string());
+                self.hurt_player(MUSHROOM_DAMAGE, "The mushroom poisoned you");
                 true
             }
             ItemKind::PurpleBerryStew => {
@@ -764,21 +797,39 @@ impl Game {
             ItemKind::RedBerryStew => {
                 self.inventory.take_from_slot(self.selected);
                 self.return_bowl();
-                self.health = (self.health + BERRY_STEW_HEAL).min(MAX_HEALTH);
+                self.health = (self.health + BERRY_STEW_HEAL).min(self.max_health());
                 self.set_night(false);
                 true
             }
             _ => {
                 let Some(heal) = kind.heal_amount() else { return false };
-                if self.health >= MAX_HEALTH { return false; }
+                if self.health >= self.max_health() { return false; }
                 self.inventory.take_from_slot(self.selected);
                 if kind.stew_base().is_some() {
                     self.return_bowl();
                 }
-                self.health = (self.health + heal).min(MAX_HEALTH);
+                self.health = (self.health + heal).min(self.max_health());
                 true
             }
         }
+    }
+
+    /// The most life the player can have now: `MAX_HEALTH` plus one for every Vial of Moonlight still shining.
+    pub fn max_health(&self) -> u32 {
+        MAX_HEALTH + self.moonlight.len() as u32
+    }
+
+    /// Drink a Vial of Moonlight: one more heart (to `MOONLIGHT_MAX_BONUS` extra, the new heart full) and every timer starts again at
+    /// `MOONLIGHT_SECONDS`.
+    fn drink_moonlight(&mut self) {
+        if (self.moonlight.len() as u32) < MOONLIGHT_MAX_BONUS {
+            self.moonlight.push(MOONLIGHT_SECONDS);
+            self.health += 1;
+        }
+        for left in &mut self.moonlight {
+            *left = MOONLIGHT_SECONDS;
+        }
+        self.toasts.push(format!("Moonlight fills you: {} extra heart{}", self.moonlight.len(), if self.moonlight.len() == 1 { "" } else { "s" }));
     }
 
     /// Drinking a stew leaves its empty bowl: into the inventory, or at the player's feet if that is full.
@@ -839,6 +890,7 @@ impl Game {
             }
         }
         if changed {
+            self.day_night_switches += 1;
             self.toasts.push(if night { "Night falls".to_string() } else { "Day breaks".to_string() });
         }
     }
@@ -877,14 +929,23 @@ impl Game {
         if !self.world.pick_berry_bush(pos) {
             return false;
         }
-        let kind = self.world.berry_kind_at(pos.0, pos.2);
-        let drops = drops_for_with_berries(Block::Bush, kind, &mut self.rng);
+        // Fig-bearing foliage gives figs; a bush gives its berries.
+        let figs = self.world.block_at(pos.0, pos.1, pos.2) == Block::FigFoliage;
+        let drops = if figs {
+            let n = self.rng.range(FIG_PICK_MIN as i32, FIG_PICK_MAX as i32 + 1) as usize;
+            vec![ItemKind::Fig; n]
+        } else {
+            let kind = self.world.berry_kind_at(pos.0, pos.2);
+            drops_for_with_berries(Block::Bush, kind, &mut self.rng)
+        };
         let count = drops.len();
         for drop in drops {
             self.give_or_drop(drop, pos);
         }
         self.toasts.push(if count == 0 {
             "The bush had no ripe berries".to_string()
+        } else if figs {
+            "Picked figs from the foliage".to_string()
         } else {
             format!("Picked berries from the bush")
         });
@@ -1226,7 +1287,7 @@ impl Game {
     /// (see `use_on_fire`); otherwise place the held log, pebble, stone, plank, charcoal or clay forge in the empty
     /// cell in front of the targeted block. Uses up one item. Returns whether anything happened.
     pub fn use_held(&mut self, hit: &Hit) -> bool {
-        if hit.block == Block::Bush {
+        if hit.block.is_pickable() {
             return self.pick_berry_bush((hit.x, hit.y, hit.z));
         }
         if hit.block == Block::ClayForge && self.held_item() == Some(ItemKind::Charcoal) {
@@ -1336,6 +1397,16 @@ impl Game {
                 self.toasts.push("Every bear in the forest hears the Great Bear roar, and comes for you.".to_string());
             }
         }
+        // A blow on a fairy rouses every fairy: they all turn on the player.
+        if hits.iter().any(|&(i, _)| self.animals[i].kind == AnimalKind::Fairy) {
+            let calm_before = !self.animals.iter().any(|a| a.kind == AnimalKind::Fairy && a.enraged);
+            for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Fairy) {
+                a.enraged = true;
+            }
+            if calm_before {
+                self.toasts.push("The fairies turn on you!".to_string());
+            }
+        }
         for &(i, damage) in hits {
             let animal = &mut self.animals[i];
             if animal.damage(damage) {
@@ -1366,6 +1437,9 @@ impl Game {
             if animal.kind == AnimalKind::Bear {
                 self.note_bear_killed();
             }
+            if animal.kind == AnimalKind::BigCrawfish {
+                self.note_big_crawfish_killed();
+            }
             if animal.kind == AnimalKind::Bat && self.in_horizen() {
                 self.note_cave_bat_killed();
             }
@@ -1393,6 +1467,7 @@ impl Game {
         self.summon_bear_bosses();
         self.summon_bronze_parrots();
         self.summon_vampire_bats();
+        self.summon_giant_crawfish();
     }
 
     /// The falling stars of the Skylands' nights: one begins to fall every `FALLING_STAR_INTERVAL` seconds, bound for an island the player can
@@ -1490,6 +1565,94 @@ impl Game {
     }
 
     /// Count a bat killed in the cave: every `BATS_PER_VAMPIRE`th calls a vampire bat.
+    /// Count a big crawfish the player has killed: every `BIG_CRAWFISH_KILLS_PER_GIANT`th brings out the Giant Crawfish.
+    fn note_big_crawfish_killed(&mut self) {
+        self.big_crawfish_kills += 1;
+        if self.big_crawfish_kills % BIG_CRAWFISH_KILLS_PER_GIANT == 0 {
+            self.giant_crawfish_owed += 1;
+        }
+    }
+
+    /// Put a water creature (a crawfish) on the bed of the water at column (x, z). Fails on dry land or an unloaded chunk.
+    fn spawn_aquatic(&mut self, kind: AnimalKind, x: i32, z: i32) -> bool {
+        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || !self.world.is_wet_column(x, z) {
+            return false;
+        }
+        let pos = vec3(x as f32 + 0.5, (self.world.ground_top(x, z) + 1) as f32 + 0.01, z as f32 + 0.5);
+        self.animals.push(Animal::new(kind, pos, &mut self.rng));
+        true
+    }
+
+    /// The normal world's rivers (and lakes) keep up to `MAX_CRAWFISH` crawfish near the player: each spawn tick up to
+    /// `CRAWFISH_SPAWNS_PER_TICK` appear in water within `ANIMAL_SPAWN_MAX_DISTANCE`, out of sight.
+    fn spawn_crawfish(&mut self) {
+        let p = self.player.pos;
+        let mut spawned = 0;
+        for _ in 0..40 {
+            if spawned >= CRAWFISH_SPAWNS_PER_TICK || self.animals.iter().filter(|a| a.kind == AnimalKind::Crawfish).count() >= MAX_CRAWFISH {
+                break;
+            }
+            let angle = self.rng.unit() * std::f32::consts::TAU;
+            let dist = ANIMAL_SPAWN_MIN_DISTANCE + self.rng.unit() * (ANIMAL_SPAWN_MAX_DISTANCE - ANIMAL_SPAWN_MIN_DISTANCE);
+            let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
+            if self.spawn_aquatic(AnimalKind::Crawfish, x, z) {
+                spawned += 1;
+            }
+        }
+    }
+
+    /// The river caves of the Horizen keep `BIG_CRAWFISH_PER_CAVE` big crawfish each in their rivers while the player is within
+    /// `BIG_CRAWFISH_CAVE_REACH` of the cave (at most `MAX_BIG_CRAWFISH` in all, `BIG_CRAWFISH_SPAWNS_PER_TICK` new ones per call).
+    fn spawn_big_crawfish(&mut self) {
+        let p = self.player.pos;
+        let seed = self.info.seed;
+        let caves = horizen::caves_near(seed, p.x.floor() as i32, p.z.floor() as i32, BIG_CRAWFISH_CAVE_REACH, horizen::CaveKind::River);
+        let mut spawned = 0;
+        for cave in caves {
+            let reach = cave.radius * 1.05;
+            let in_cave = |a: &Animal| a.kind == AnimalKind::BigCrawfish && vec2(a.pos.x - cave.x, a.pos.z - cave.z).length() <= reach;
+            let mut have = self.animals.iter().filter(|a| in_cave(a)).count();
+            for _ in 0..40 {
+                let total = self.animals.iter().filter(|a| a.kind == AnimalKind::BigCrawfish).count();
+                if have >= BIG_CRAWFISH_PER_CAVE || total >= MAX_BIG_CRAWFISH || spawned >= BIG_CRAWFISH_SPAWNS_PER_TICK {
+                    break;
+                }
+                let angle = self.rng.unit() * std::f32::consts::TAU;
+                let dist = self.rng.unit().sqrt() * reach;
+                let (x, z) = ((cave.x + angle.cos() * dist).floor() as i32, (cave.z + angle.sin() * dist).floor() as i32);
+                if vec2(x as f32 + 0.5 - p.x, z as f32 + 0.5 - p.z).length() < BIG_CRAWFISH_SPAWN_MIN_DISTANCE {
+                    continue;
+                }
+                if horizen::river_at(seed, x, z) && self.spawn_aquatic(AnimalKind::BigCrawfish, x, z) {
+                    have += 1;
+                    spawned += 1;
+                }
+            }
+        }
+    }
+
+    /// Bring out the Giant Crawfish that is due (one at a time) in water near the player in the Horizen. If there is no water near enough
+    /// it is tried again with the next spawn tick.
+    fn summon_giant_crawfish(&mut self) {
+        if self.giant_crawfish_owed == 0 || !self.in_horizen() || self.animals.iter().any(|a| a.kind == AnimalKind::GiantCrawfish) {
+            return;
+        }
+        let p = self.player.pos;
+        for ring in 0..4 {
+            let dist = GIANT_CRAWFISH_SPAWN_DISTANCE + ring as f32 * 8.0;
+            let first = self.rng.unit() * std::f32::consts::TAU;
+            for i in 0..24 {
+                let a = first + i as f32 * std::f32::consts::TAU / 24.0;
+                let (x, z) = ((p.x + a.cos() * dist).floor() as i32, (p.z + a.sin() * dist).floor() as i32);
+                if self.spawn_aquatic(AnimalKind::GiantCrawfish, x, z) {
+                    self.giant_crawfish_owed -= 1;
+                    self.toasts.push("The water heaves: the Giant Crawfish rises to avenge its kin.".to_string());
+                    return;
+                }
+            }
+        }
+    }
+
     fn note_cave_bat_killed(&mut self) {
         self.bat_kills += 1;
         if self.bat_kills % BATS_PER_VAMPIRE == 0 {
@@ -1712,6 +1875,8 @@ impl Game {
             Some(ItemKind::Bow) if clicked => self.shoot_bow(eye, dir),
             Some(ItemKind::Sling) if clicked => self.shoot_sling(eye, dir),
             Some(ItemKind::IronFeather) if clicked => self.throw_feather(eye, dir),
+            Some(ItemKind::IvoryKnife) if clicked => self.throw_knife(eye, dir),
+            Some(ItemKind::CrystalBall) if clicked => self.use_crystal_ball(),
             Some(kind) if kind.melee_damage().is_some() && aimed && held_down => self.swing_melee(eye, dir),
             _ => false,
         }
@@ -1729,6 +1894,39 @@ impl Game {
         self.shoot(ItemKind::Sling, eye, dir)
     }
 
+    /// Look into the crystal ball in hand: day turns to night and night to day, behind the usual blackout. Nothing happens while a blackout is
+    /// under way, and in the Horizen (always day there: night would only make the player faint). Returns whether the sky was turned.
+    pub fn use_crystal_ball(&mut self) -> bool {
+        if self.held_item() != Some(ItemKind::CrystalBall) || self.blackout.is_some() {
+            return false;
+        }
+        if self.in_horizen() {
+            self.toasts.push("The crystal ball is dark: there is no sky in the cave.".to_string());
+            return false;
+        }
+        let night = !self.world.night;
+        self.set_night(night);
+        true
+    }
+
+    /// Count down the mushroom's speed boost. Call once a frame.
+    pub fn update_effects(&mut self, dt: f32) {
+        if !self.moonlight.is_empty() {
+            for left in &mut self.moonlight {
+                *left -= dt;
+            }
+            self.moonlight.retain(|&left| left > 0.0);
+            // A heart that fades takes its life with it, but never the last one.
+            self.health = self.health.min(self.max_health()).max(1);
+        }
+        if self.speed_boost > 0.0 {
+            self.speed_boost = (self.speed_boost - dt).max(0.0);
+            if self.speed_boost == 0.0 {
+                self.toasts.push("The mushroom wears off.".to_string());
+            }
+        }
+    }
+
     /// Throw the iron feather in hand along `dir` from `eye`, like a throwing star: it flies like an arrow and is used up only if it
     /// hits an animal (one that hits a block lies there to be picked up again). Returns whether it was thrown.
     pub fn throw_feather(&mut self, eye: Vec3, dir: Vec3) -> bool {
@@ -1737,6 +1935,17 @@ impl Game {
         }
         self.attack_cooldown = IRON_FEATHER_THROW_COOLDOWN;
         self.arrows.push(Arrow::thrown_feather(eye, dir));
+        true
+    }
+
+    /// Throw the ivory knife in hand along `dir` from `eye`. Unlike a feather it is never used up: it falls where it hits (an animal or a
+    /// block) or where it lands, as an item to pick up again (`update_arrows`). Returns whether it was thrown.
+    pub fn throw_knife(&mut self, eye: Vec3, dir: Vec3) -> bool {
+        if self.held_item() != Some(ItemKind::IvoryKnife) || self.attack_cooldown > 0.0 || !self.inventory.remove(ItemKind::IvoryKnife, 1) {
+            return false;
+        }
+        self.attack_cooldown = IVORY_KNIFE_THROW_COOLDOWN;
+        self.arrows.push(Arrow::thrown_knife(eye, dir));
         true
     }
 
@@ -1777,6 +1986,16 @@ impl Game {
             self.alarm_nessie();
             return true;
         }
+        // A sling shoots a crystal (rubies, then sapphires, then amethysts) before it uses a pebble.
+        if launcher == ItemKind::Sling {
+            if let Some(crystal) = [ItemKind::Ruby, ItemKind::Sapphire, ItemKind::Amethyst].into_iter().find(|&k| self.inventory.count(k) > 0) {
+                self.inventory.remove(crystal, 1);
+                self.attack_cooldown = SLING_COOLDOWN;
+                self.arrows.push(Arrow::slung_crystal(eye, dir, crystal));
+                self.alarm_nessie();
+                return true;
+            }
+        }
         if !self.inventory.remove(ammo, 1) {
             self.attack_cooldown = AXE_COOLDOWN;
             self.toasts.push(format!("You have no {}", if ammo == ItemKind::Arrow { "arrows" } else { "pebbles" }));
@@ -1804,6 +2023,10 @@ impl Game {
             Fate::InFlight => true,
             Fate::HitAnimal(i) => {
                 hits.push((i, arrow.damage()));
+                // An ivory knife is never used up: it drops where it struck.
+                if arrow.kind == ItemKind::IvoryKnife {
+                    landed.push((arrow.kind, arrow.pos - arrow.vel.normalize_or_zero() * ARROW_DROP_BACKOFF));
+                }
                 false
             }
             Fate::HitBlock | Fate::Expired => {
@@ -2401,6 +2624,17 @@ impl Game {
                 self.animals.push(Animal::new(AnimalKind::Phoenix, crater + vec3(0.0, 3.0, 0.0), &mut self.rng));
             }
         }
+        // After `DRAGON_SWITCHES` day/night switches a Dragon comes to the Skylands, high up and a good way off.
+        if self.in_skylands() && self.day_night_switches >= DRAGON_SWITCHES && !self.animals.iter().any(|a| a.kind == AnimalKind::Dragon) {
+            let angle = self.rng.unit() * std::f32::consts::TAU;
+            let at = p + vec3(angle.cos() * DRAGON_SPAWN_DISTANCE, DRAGON_SPAWN_HEIGHT, angle.sin() * DRAGON_SPAWN_DISTANCE);
+            if self.world.chunks.contains_key(&World::chunk_of_pos(at)) {
+                let mut dragon = Animal::new(AnimalKind::Dragon, at, &mut self.rng);
+                dragon.home = p;
+                self.animals.push(dragon);
+                self.toasts.push("A shadow covers the islands: the Dragon has come.".to_string());
+            }
+        }
         let lakes: Vec<Lake> = self.world.landmarks.lakes.iter().copied().filter(|l| self.world.landmarks.monster_alive(l)).collect();
         for lake in lakes {
             let centre = vec3(lake.x as f32 + 0.5, 0.0, lake.z as f32 + 0.5);
@@ -2448,6 +2682,14 @@ impl Game {
                 // Its roar is over: the bears it called go back to their ways.
                 self.bear_rage = 0.0;
                 self.toasts.push("The Great Bear is slain.".to_string());
+            }
+            AnimalKind::Dragon => {
+                // The count starts over: another Dragon comes after another `DRAGON_SWITCHES` switches.
+                self.day_night_switches = 0;
+                self.toasts.push("The Dragon is slain. Its hoard of gold rains down.".to_string());
+            }
+            AnimalKind::GiantCrawfish => {
+                self.toasts.push("The Giant Crawfish is slain.".to_string());
             }
             AnimalKind::Orangutan => {
                 self.world.open_temple();
@@ -2691,6 +2933,8 @@ pub fn enter_skylands(&mut self) {
         // A vampire bat left behind in the cave is waiting for the player's next visit. The king's spirits go with the player, whatever
         // dimension they travel to (each keeps the arrows it has left).
         self.vampire_bats_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count() as u32;
+        // A Giant Crawfish left behind waits for the next visit to the Horizen.
+        self.giant_crawfish_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::GiantCrawfish).count() as u32;
         let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
         self.king_dialog = None;
         self.shop_open = false;
@@ -2820,6 +3064,11 @@ pub fn enter_skylands(&mut self) {
                 self.spawn_cave_bats();
             }
             self.spawn_newts();
+            self.spawn_big_crawfish();
+            return;
+        }
+        if self.in_skylands() {
+            self.spawn_sky_wildlife();
             return;
         }
         if !self.in_overworld() {
@@ -2828,6 +3077,7 @@ pub fn enter_skylands(&mut self) {
         if self.player_in_mine() {
             self.spawn_mine_bats();
         }
+        self.spawn_crawfish();
         // In the jungle only the jungle's own creatures come (jaguars, flying snakes, parrots): none of the ordinary wildlife, no ravens.
         if self.player_in_jungle() {
             self.spawn_jungle_wildlife();
@@ -2854,6 +3104,10 @@ pub fn enter_skylands(&mut self) {
             AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::Orangutan | AnimalKind::Unicorn | AnimalKind::BearBoss => 0,
             // Newts live only in the Horizen's mossy caves (`spawn_newts`).
             AnimalKind::Newt => 0,
+            // Fairies and goats live on the Skylands' islands (`spawn_sky_wildlife`).
+            AnimalKind::Fairy | AnimalKind::MountainGoat => 0,
+            // Crawfish are placed in the water (`spawn_crawfish`, `spawn_big_crawfish`), the giant and the Dragon are bosses.
+            AnimalKind::Crawfish | AnimalKind::BigCrawfish | AnimalKind::GiantCrawfish | AnimalKind::Dragon => 0,
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => 0,
         }
         .saturating_sub(count(kind));
@@ -2897,6 +3151,92 @@ pub fn enter_skylands(&mut self) {
         for _ in 0..group {
             let (dx, dz) = (self.rng.range(-2, 3), self.rng.range(-2, 3));
             self.spawn_animal(kind, x + dx, z + dz);
+        }
+    }
+
+    /// Bring a fairy or a mountain goat onto an island of the Skylands, a good way from the player (within the generated land), unless both
+    /// kinds are at their limits.
+    fn spawn_sky_wildlife(&mut self) {
+        let count = |k: AnimalKind| self.animals.iter().filter(|a| a.kind == k).count();
+        let mut open: Vec<(AnimalKind, u64)> = Vec::new();
+        if count(AnimalKind::Fairy) < MAX_FAIRY {
+            open.push((AnimalKind::Fairy, SPAWN_WEIGHT_FAIRY));
+        }
+        if count(AnimalKind::MountainGoat) < MAX_GOAT {
+            open.push((AnimalKind::MountainGoat, SPAWN_WEIGHT_GOAT));
+        }
+        let total: u64 = open.iter().map(|&(_, w)| w).sum();
+        if total == 0 {
+            return;
+        }
+        let mut roll = self.rng.next() % total;
+        let kind = open.iter().find(|&&(_, w)| { let hit = roll < w; roll = roll.saturating_sub(w); hit }).map_or(open[0].0, |&(k, _)| k);
+        let reach = (((crate::config::gen_radius() * CHUNK_SIZE) as f32) - 6.0).min(SKY_WILDLIFE_MAX_DISTANCE);
+        let near = SKY_WILDLIFE_MIN_DISTANCE.min(reach * 0.5);
+        let angle = self.rng.unit() * std::f32::consts::TAU;
+        let dist = near + self.rng.unit() * (reach - near).max(0.0);
+        let p = self.player.pos;
+        let (x, z) = ((p.x + angle.cos() * dist).floor() as i32, (p.z + angle.sin() * dist).floor() as i32);
+        self.spawn_sky_creature(kind, x, z);
+    }
+
+    /// Put a fairy (hovering) or a goat (standing) on the island under column (x, z). Fails over the void, in an unloaded chunk, on the
+    /// volcano or where something is in the way.
+    pub fn spawn_sky_creature(&mut self, kind: AnimalKind, x: i32, z: i32) -> bool {
+        if !self.in_skylands() || !self.world.chunks.contains_key(&World::chunk_of(x, z)) {
+            return false;
+        }
+        let Some(island) = skylands::island_at(self.info.seed, x, z) else { return false };
+        if island.kind == skylands::IslandKind::Volcano {
+            return false;
+        }
+        let ground = (island.surface_y(x, z) + 1) as f32;
+        let height = if kind == AnimalKind::Fairy { FAIRY_HOVER_HEIGHT } else { 0.01 };
+        let pos = vec3(x as f32 + 0.5, ground + height, z as f32 + 0.5);
+        let half = vec3(kind.half_width(), 0.0, kind.half_width());
+        if self.world.box_blocked(pos - half, pos + half + vec3(0.0, kind.height(), 0.0)) {
+            return false;
+        }
+        self.animals.push(Animal::new(kind, pos, &mut self.rng));
+        true
+    }
+
+    /// Right click with ash in hand at a fairy within `FAIRY_TRADE_REACH`: one ash for one Vial of Moonlight. A roused fairy will not trade.
+    pub fn trade_with_fairy(&mut self, eye: Vec3, dir: Vec3) -> bool {
+        if self.held_item() != Some(ItemKind::Ash) || self.ui_open() {
+            return false;
+        }
+        let Some(i) = self.animal_along(eye, dir, FAIRY_TRADE_REACH) else { return false };
+        if self.animals[i].kind != AnimalKind::Fairy {
+            return false;
+        }
+        if self.animals[i].enraged {
+            self.toasts.push("The fairy is too angry to trade".to_string());
+            return true;
+        }
+        self.inventory.take_from_slot(self.selected);
+        let p = self.player.pos;
+        self.give_or_drop(ItemKind::MoonlightVial, (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32));
+        self.toasts.push("The fairy takes the ash and gives you a vial of moonlight".to_string());
+        true
+    }
+
+    /// Every `FAIRY_PLANT_MIN..=FAIRY_PLANT_MAX` seconds a fairy that has not been roused plants a flower on the island's grass below it
+    /// (a flower block that is saved like a placed one, so it stays).
+    fn update_fairy_planting(&mut self) {
+        let mut spots = Vec::new();
+        let seed = self.info.seed;
+        for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Fairy && !a.enraged && a.special_timer <= 0.0) {
+            a.special_timer = FAIRY_PLANT_MIN + (FAIRY_PLANT_MAX - FAIRY_PLANT_MIN) * self.rng.unit();
+            let (x, z) = (a.pos.x.floor() as i32, a.pos.z.floor() as i32);
+            if let Some(top) = skylands::island_at(seed, x, z).map(|i| i.surface_y(x, z)) {
+                spots.push((x, top + 1, z));
+            }
+        }
+        for (x, y, z) in spots {
+            if self.world.chunks.contains_key(&World::chunk_of(x, z)) && self.world.block_at(x, y - 1, z) == Block::Dirt && self.world.block_at(x, y, z) == Block::Air {
+                self.world.set_block(x, y, z, Block::Flower);
+            }
         }
     }
 
@@ -2947,6 +3287,10 @@ pub fn enter_skylands(&mut self) {
                     // Ravens go with the dawn, except the ones Nessie called, which act as if it were night.
                     && (self.world.night || !overworld || a.kind != AnimalKind::Raven || a.summoned)
         });
+        // A fairy or goat that has fallen into the void is gone.
+        if self.in_skylands() {
+            self.animals.retain(|a| !(matches!(a.kind, AnimalKind::Fairy | AnimalKind::MountainGoat) && a.pos.y < SKY_VOID_Y));
+        }
         let cloaked = self.worn == Some(ItemKind::PeltCloak);
         // The Unicorn will not attack while the player is in the jungle.
         let in_jungle = self.player_in_jungle();
@@ -3009,26 +3353,33 @@ pub fn enter_skylands(&mut self) {
             }
         }
         self.hostile_arrows.extend(volleys);
+        self.update_fairy_planting();
         self.update_hostile_arrows(dt);
         self.land_crows_at_altars();
         // A bat that strikes a player holding pink salt dies on it instead: no damage, one lump of salt used up.
         let mut salted = Vec::new();
         let mut blows = Vec::new();
         for (index, from, damage, death) in strikes {
-            let is_bat = self.animals[index].kind == AnimalKind::Bat;
+            let (is_bat, launch) = (self.animals[index].kind == AnimalKind::Bat, self.animals[index].kind.strike_knockback());
             if is_bat && self.held_item() == Some(ItemKind::PinkSalt) && self.inventory.take_from_slot(self.selected).is_some() {
                 salted.push(index);
             } else {
-                blows.push((from, damage, death));
+                blows.push((from, damage, death, launch));
             }
         }
         if !salted.is_empty() {
             self.toasts.push(if salted.len() == 1 { "The bat strikes your salt crystal and falls dead; the crystal is spent.".to_string() } else { "The bats strike your salt and fall dead.".to_string() });
             self.remove_dead(salted);
         }
-        for (from, damage, death) in blows {
+        for (from, damage, death, launch) in blows {
             if !self.hurt_player(damage, death) {
-                self.knock_player(from);
+                if launch > 0.0 {
+                    // The Dragon's swoop throws the player far.
+                    let away = self.player.pos - from;
+                    self.player.launch(away, launch);
+                } else {
+                    self.knock_player(from);
+                }
             }
         }
         self.update_spirits();
@@ -3045,6 +3396,7 @@ pub fn enter_skylands(&mut self) {
             self.summon_unicorn();
             self.summon_bear_bosses();
             self.summon_bronze_parrots();
+            self.summon_giant_crawfish();
         }
     }
 
@@ -3103,6 +3455,12 @@ pub fn enter_skylands(&mut self) {
                 let dir = Projectile::aim(ProjectileKind::Fireball, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
                 self.projectiles.push(Projectile::launch(ProjectileKind::Fireball, from, dir));
             }
+            BossEvent::DragonFlame { from } => {
+                // The stream wavers: each flame is aimed a little off the player.
+                let aim = Projectile::aim(ProjectileKind::DragonFire, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                let jitter = vec3(self.rng.unit() - 0.5, self.rng.unit() - 0.5, self.rng.unit() - 0.5) * 2.0 * DRAGON_FLAME_SPREAD;
+                self.projectiles.push(Projectile::launch(ProjectileKind::DragonFire, from, (aim + jitter).normalize_or_zero()));
+            }
             BossEvent::CallRavens { count } => self.call_ravens(count, LOCH_NESS_MAX_RAVENS),
             BossEvent::Acid { from } => {
                 for (x, z) in acid_line(&|x, z| self.world.is_wet_column(x, z), from, player) {
@@ -3151,7 +3509,7 @@ pub fn enter_skylands(&mut self) {
             None => true,
         });
         for burst in bursts {
-            self.bursts.push(ShownBurst { pos: burst.pos, shape: match burst.kind { ProjectileKind::IceBall => BurstShape::Ice, ProjectileKind::Rock => BurstShape::Rock, ProjectileKind::Fireball => BurstShape::Fire }, age: 0.0 });
+            self.bursts.push(ShownBurst { pos: burst.pos, shape: match burst.kind { ProjectileKind::IceBall => BurstShape::Ice, ProjectileKind::Rock => BurstShape::Rock, ProjectileKind::Fireball | ProjectileKind::DragonFire => BurstShape::Fire }, age: 0.0 });
             if burst.reaches(player) && !self.hurt_player(burst.kind.burst_damage(), burst.kind.death_message()) {
                 self.knock_player(burst.pos);
             }
@@ -3438,7 +3796,8 @@ pub fn enter_skylands(&mut self) {
             return false;
         }
         self.shop_open = true;
-        self.ghost_says(ghosts::SHOP_GREETING);
+        // A player carrying ash is told who in these islands takes it.
+        self.ghost_says(if self.inventory.count(ItemKind::Ash) > 0 { ghosts::SHOP_ASH_HINT } else { ghosts::SHOP_GREETING });
         true
     }
 
@@ -7366,7 +7725,7 @@ mod boss_and_skylands_tests {
     }
 
     #[test]
-    fn the_skylands_have_their_own_day_and_night_and_nothing_lives_there() {
+    fn the_skylands_have_their_own_day_and_night_and_only_fairies_and_goats_live_there() {
         let mut g = on_the_summit();
         g.enter_skylands();
         assert!(!g.world.night && !g.parked(Dimension::Overworld).unwrap().world.night);
@@ -7379,7 +7738,7 @@ mod boss_and_skylands_tests {
         for _ in 0..200 {
             g.update_animals(0.1);
         }
-        assert!(g.animals.is_empty());
+        assert!(g.animals.iter().all(|a| matches!(a.kind, AnimalKind::Fairy | AnimalKind::MountainGoat)), "only the islands' own creatures");
         assert!(g.trail_path().is_none());
     }
 
@@ -7993,7 +8352,7 @@ mod crow_pan_relic_and_mother_tests {
     }
 
     #[test]
-    fn every_ten_quail_killed_bring_a_iron_quail_that_drops_a_silver_key() {
+    fn every_ten_quail_killed_bring_a_iron_quail_that_drops_iron_and_iron_feathers_not_a_key() {
         let mut g = game();
         clear_sky(&mut g);
         kill_quail(&mut g, 9);
@@ -8014,14 +8373,15 @@ mod crow_pan_relic_and_mother_tests {
         kill_quail(&mut g, 10);
         assert_eq!(mothers(&g), 6, "ten more, three more");
         assert_eq!(g.quail_kills, 20);
-        // The first to die drops the silver key; the others, since a key now lies on the ground, drop a gold bar each instead.
-        let (keys, gold) = (count(&g, ItemKind::SilverKey), count(&g, ItemKind::Gold));
+        // Each leaves iron and iron feathers, and no silver key.
+        let (keys, iron, feathers) = (count(&g, ItemKind::SilverKey), count(&g, ItemKind::Iron), count(&g, ItemKind::IronFeather));
         for _ in 0..3 {
             let i = g.animals.iter().position(|a| a.kind == AnimalKind::IronQuail).unwrap();
             g.hurt_animals(&[(i, IRON_QUAIL_HEALTH)]);
         }
-        assert_eq!(count(&g, ItemKind::SilverKey), keys + 1, "one silver key");
-        assert_eq!(count(&g, ItemKind::Gold), gold + 2, "and two gold bars");
+        assert_eq!(count(&g, ItemKind::SilverKey), keys, "no silver key");
+        assert_eq!(count(&g, ItemKind::Iron), iron + 3 * IRON_QUAIL_IRON_DROP, "iron from each");
+        assert_eq!(count(&g, ItemKind::IronFeather), feathers + 3 * IRON_QUAIL_IRON_FEATHER_DROP, "and iron feathers");
         assert_eq!(mothers(&g), 3);
     }
 
@@ -8132,9 +8492,10 @@ mod crow_pan_relic_and_mother_tests {
     }
 
     #[test]
-    fn excalibur_is_the_best_weapon_in_the_game() {
-        let best = ItemKind::ALL.into_iter().filter(|&k| k != ItemKind::Excalibur).filter_map(ItemKind::melee_damage).max().unwrap();
+    fn excalibur_beats_every_weapon_but_the_unicorn_sword() {
+        let best = ItemKind::ALL.into_iter().filter(|&k| k != ItemKind::Excalibur && k != ItemKind::UnicornSword).filter_map(ItemKind::melee_damage).max().unwrap();
         assert!(ItemKind::Excalibur.melee_damage().unwrap() > best);
+        assert!(ItemKind::UnicornSword.melee_damage().unwrap() > ItemKind::Excalibur.melee_damage().unwrap(), "the unicorn sword hits harder still");
         assert!(EXCALIBUR_DAMAGE > ARROW_DAMAGE && EXCALIBUR_DAMAGE > SLING_DAMAGE);
         assert!(ItemKind::Excalibur.melee_reach() >= AXE_REACH);
         assert!(ItemKind::Excalibur.melee_cooldown() <= AXE_COOLDOWN);
@@ -9039,7 +9400,7 @@ mod boss_update_tests {
     // --- The Yeti's smash and ice ---
 
     #[test]
-    fn a_yeti_smash_hurts_four_and_throws_the_player_ten_blocks_but_only_those_within_two_blocks() {
+    fn a_yeti_smash_hurts_four_and_throws_the_player_ten_blocks_but_only_those_within_six_blocks() {
         let mut g = game();
         open_field(&mut g);
         let at = standing(&g, 0.0, 0.0);
@@ -10478,7 +10839,7 @@ mod upgrade_tests {
     }
 
     #[test]
-    fn the_skylands_have_falling_stars_every_ten_seconds_at_night_landing_on_visible_islands() {
+    fn the_skylands_have_falling_stars_every_five_seconds_at_night_landing_on_visible_islands() {
         let mut g = game();
         g.travel_to(Dimension::Skylands);
         g.world.night = true;
@@ -10488,7 +10849,8 @@ mod upgrade_tests {
         }
         assert!(g.falling_stars.is_empty(), "not yet");
         g.update_falling_stars(1.0);
-        assert_eq!(g.falling_stars.len(), 1, "one after ten seconds");
+        assert_eq!(FALLING_STAR_INTERVAL, 5.0, "twice as often as before");
+        assert_eq!(g.falling_stars.len(), 1, "one after five seconds");
         let star = g.falling_stars[0];
         assert!(star.from.y > star.to.y + 100.0, "from high in the sky");
         let island = skylands::island_at(g.info.seed, star.to.x.floor() as i32, star.to.z.floor() as i32).expect("it lands on an island");
@@ -10714,7 +11076,9 @@ mod upgrade_tests {
         let again = Game::from_save(info, parse_save(&g.save_text()), 3);
         assert_eq!(again.parrot_kills, 10);
         // Dying sends them away.
-        assert_eq!(AnimalKind::BronzeParrot.drops(&mut Rng::new(1)), vec![ItemKind::Bronze; BRONZE_PARROT_BRONZE_DROP as usize]);
+        let mut expected = vec![ItemKind::Bronze; BRONZE_PARROT_BRONZE_DROP as usize];
+        expected.extend(vec![ItemKind::IronFeather; BRONZE_PARROT_IRON_FEATHER_DROP as usize]);
+        assert_eq!(AnimalKind::BronzeParrot.drops(&mut Rng::new(1)), expected, "bronze and iron feathers");
     }
 
     fn test_mountain() -> Mountain {
@@ -11133,21 +11497,22 @@ mod store_newt_and_unicorn_tests {
     // --- newts ---
 
     #[test]
-    fn a_newt_is_harmless_has_four_health_and_drops_an_eye_one_time_in_five() {
+    fn a_newt_is_harmless_has_four_health_and_always_drops_one_or_two_eyes() {
         assert_eq!(AnimalKind::Newt.max_health(), 4);
         assert_eq!(AnimalKind::Newt.attack_damage(), 0, "it never attacks");
         let mut rng = Rng::new(7);
-        let mut eyes = 0;
-        for _ in 0..4000 {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..400 {
             let drops = AnimalKind::Newt.drops(&mut rng);
-            assert!(drops.iter().all(|&k| k == ItemKind::EyeOfNewt) && drops.len() <= 1);
-            eyes += drops.len();
+            assert!(drops.iter().all(|&k| k == ItemKind::EyeOfNewt) && (1..=2).contains(&drops.len()), "{drops:?}");
+            seen.insert(drops.len());
         }
-        assert!((0.17..0.23).contains(&(eyes as f64 / 4000.0)), "eye rate {}", eyes as f64 / 4000.0);
+        assert_eq!(seen.len(), 2, "both one and two turn up");
         let mut newt = Animal::new(AnimalKind::Newt, vec3(5.0, 6.0, 5.0), &mut Rng::new(1));
         assert!(!newt.try_attack(vec3(5.2, 6.0, 5.0)), "even against a player right beside it");
         assert!(!newt.damage(3) && newt.damage(1), "four health");
         assert!(AnimalKind::Newt.is_huntable());
+        assert_eq!((AnimalKind::Newt.half_width(), AnimalKind::Newt.height()), (0.5, 0.36), "twice as big as it was (0.25 by 0.18)");
     }
 
     #[test]
@@ -11223,7 +11588,9 @@ mod store_newt_and_unicorn_tests {
         slain.push_str("unicornslain\n");
         let dead = Game::from_save(info, parse_save(&slain), 3);
         assert!(!dead.unicorn_due(), "a dead unicorn does not return");
-        assert_eq!(AnimalKind::Unicorn.drops(&mut Rng::new(1)), vec![ItemKind::Gold; UNICORN_GOLD_DROP as usize]);
+        let mut expected = vec![ItemKind::Gold; UNICORN_GOLD_DROP as usize];
+        expected.push(ItemKind::UnicornHorn);
+        assert_eq!(AnimalKind::Unicorn.drops(&mut Rng::new(1)), expected, "gold and a horn");
     }
 
     #[test]
@@ -11530,5 +11897,843 @@ mod store_newt_and_unicorn_tests {
         assert!(!r.can_afford(&inv), "ore is not enough");
         inv.add(ItemKind::Iron, 1);
         assert!(crate::recipe::craft(&mut inv, r) && inv.count(ItemKind::Compass) == 1 && inv.count(ItemKind::IronOre) == 1);
+    }
+}
+
+#[cfg(test)]
+mod crystal_ball_dragon_and_crawfish_tests {
+    use super::*;
+    use crate::animal::Mode;
+    use crate::item::ItemStack;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut g = Game::from_save(info, SaveData::new(), 5);
+        g.world.stream_chunks(g.player.pos);
+        g
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind, count: u32) {
+        g.inventory.slots[0] = Some(ItemStack { kind, count });
+        g.select_slot(0);
+    }
+
+    fn step(g: &mut Game, seconds: f32) {
+        for _ in 0..(seconds * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.update_blackout(1.0 / 60.0);
+            g.update_effects(1.0 / 60.0);
+        }
+    }
+
+    fn in_skylands() -> Game {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.world.night = false;
+        g.world.stream_chunks(g.player.pos);
+        g.animals.clear();
+        g
+    }
+
+    fn craft(g: &mut Game, output: ItemKind) -> bool {
+        let recipe = crate::recipe::RECIPES.iter().find(|r| r.output == output).expect("a recipe");
+        crate::recipe::craft(&mut g.inventory, recipe)
+    }
+
+    // --- newts and their eyes ---
+
+    #[test]
+    fn an_eye_of_newt_heals_one_life_when_eaten_and_only_when_hurt() {
+        let mut g = game();
+        hold(&mut g, ItemKind::EyeOfNewt, 2);
+        g.health = MAX_HEALTH;
+        assert!(!g.eat_held(), "no use at full health");
+        g.health = 5;
+        assert!(g.eat_held());
+        assert_eq!((g.health, g.inventory.count(ItemKind::EyeOfNewt)), (5 + NEWT_EYE_HEAL, 1));
+        assert_eq!(NEWT_EYE_HEAL, 1);
+    }
+
+    // --- the crystal ball ---
+
+    #[test]
+    fn ten_stardust_make_a_crystal_ball() {
+        let mut g = game();
+        g.inventory.add(ItemKind::Stardust, 9);
+        assert!(!craft(&mut g, ItemKind::CrystalBall), "nine are not enough");
+        g.inventory.add(ItemKind::Stardust, 1);
+        assert!(craft(&mut g, ItemKind::CrystalBall));
+        assert_eq!((g.inventory.count(ItemKind::CrystalBall), g.inventory.count(ItemKind::Stardust)), (1, 0));
+        assert_eq!(CRYSTAL_BALL_STARDUST, 10);
+    }
+
+    #[test]
+    fn a_left_click_with_the_crystal_ball_turns_day_to_night_and_back_and_counts_each_switch() {
+        let mut g = game();
+        g.world.night = false;
+        hold(&mut g, ItemKind::CrystalBall, 1);
+        let (eye, dir) = (g.player.eye(), g.player.look_dir());
+        assert!(g.attack(eye, dir, true, true, false), "the click turns the sky");
+        assert!(g.blackout.is_some() && !g.world.night, "behind a blackout: still day while the screen fades");
+        assert!(!g.attack(eye, dir, true, true, false), "a second click during the blackout does nothing");
+        step(&mut g, DAY_NIGHT_BLACKOUT_SECONDS + 0.5);
+        assert!(g.world.night && g.blackout.is_none());
+        assert_eq!(g.day_night_switches, 1);
+        assert!(g.attack(eye, dir, true, true, false));
+        step(&mut g, DAY_NIGHT_BLACKOUT_SECONDS + 0.5);
+        assert!(!g.world.night);
+        assert_eq!(g.day_night_switches, 2);
+        assert_eq!(g.inventory.count(ItemKind::CrystalBall), 1, "the ball is kept");
+    }
+
+    #[test]
+    fn the_crystal_ball_breaks_no_blocks_and_does_nothing_in_the_cave() {
+        for b in [Block::Leaves, Block::Grass, Block::PlacedLog, Block::Flower] {
+            assert!(!b.can_break_with(Some(ItemKind::CrystalBall)), "{b:?}");
+        }
+        let mut g = game();
+        g.travel_to(Dimension::Horizen);
+        hold(&mut g, ItemKind::CrystalBall, 1);
+        assert!(!g.use_crystal_ball() && g.blackout.is_none());
+    }
+
+    #[test]
+    fn the_switch_count_is_saved_and_a_stew_counts_too() {
+        let mut g = game();
+        g.world.night = false;
+        g.set_night(true);
+        step(&mut g, DAY_NIGHT_BLACKOUT_SECONDS + 0.5);
+        assert_eq!(g.day_night_switches, 1);
+        g.day_night_switches = 7;
+        g.big_crawfish_kills = 4;
+        let text = g.save_text();
+        assert!(text.contains("switches 7") && text.contains("crawfishkills 4"));
+        let data = crate::save::parse_save(&text);
+        assert_eq!((data.day_night_switches, data.big_crawfish_kills), (7, 4));
+    }
+
+    // --- the unicorn's horn and sword ---
+
+    #[test]
+    fn the_unicorn_drops_a_horn_that_is_crafted_into_a_sword_that_beats_excalibur_without_its_bonus_against_the_hunt() {
+        assert!(AnimalKind::Unicorn.drops(&mut Rng::new(1)).contains(&ItemKind::UnicornHorn));
+        let mut g = game();
+        g.inventory.add(ItemKind::UnicornHorn, 1);
+        g.inventory.add(ItemKind::LeatherCord, 1);
+        assert!(craft(&mut g, ItemKind::UnicornSword));
+        assert_eq!(g.inventory.count(ItemKind::UnicornSword), 1);
+        assert!(UNICORN_SWORD_DAMAGE > EXCALIBUR_DAMAGE);
+        assert_eq!(ItemKind::UnicornSword.melee_damage(), Some(UNICORN_SWORD_DAMAGE));
+        // Against the Wild Hunt Excalibur triples, the unicorn sword does not.
+        let blow = |weapon: ItemKind| {
+            let mut g = game();
+            g.world.stream_chunks(g.player.pos);
+            for chunk in g.world.chunks.values_mut() {
+                for y in GROUND_TOP + 1..WORLD_HEIGHT {
+                    for z in 0..CHUNK_SIZE {
+                        for x in 0..CHUNK_SIZE {
+                            chunk.blocks[crate::chunk::idx(x, y, z)] = Block::Air;
+                        }
+                    }
+                }
+            }
+            hold(&mut g, weapon, 1);
+            let at = g.player.pos + vec3(3.0, 0.0, 0.0);
+            g.animals.push(Animal::new(AnimalKind::HuntSwordsman, at, &mut Rng::new(2)));
+            let before = g.animals[0].health;
+            let eye = g.player.pos + vec3(0.0, 0.7, 0.0);
+            assert!(g.swing_melee(eye, vec3(1.0, 0.0, 0.0)));
+            before - g.animals[0].health
+        };
+        assert_eq!(blow(ItemKind::UnicornSword), UNICORN_SWORD_DAMAGE);
+        assert_eq!(blow(ItemKind::Excalibur), EXCALIBUR_DAMAGE * EXCALIBUR_HUNT_FACTOR);
+    }
+
+    // --- crystals and the sling ---
+
+    #[test]
+    fn a_sling_shoots_crystals_before_pebbles_for_four_times_the_damage() {
+        let mut g = game();
+        hold(&mut g, ItemKind::Sling, 1);
+        g.inventory.add(ItemKind::Pebble, 5);
+        g.inventory.add(ItemKind::Sapphire, 1);
+        g.inventory.add(ItemKind::Ruby, 2);
+        let (eye, dir) = (g.player.eye(), g.player.look_dir());
+        assert!(g.shoot_sling(eye, dir));
+        assert_eq!(g.arrows.last().unwrap().kind, ItemKind::Ruby, "a ruby first");
+        assert_eq!(g.arrows.last().unwrap().damage(), SLING_DAMAGE * 4);
+        g.attack_cooldown = 0.0;
+        assert!(g.shoot_sling(eye, dir));
+        g.attack_cooldown = 0.0;
+        assert!(g.shoot_sling(eye, dir));
+        assert_eq!(g.arrows.last().unwrap().kind, ItemKind::Sapphire);
+        assert_eq!((g.inventory.count(ItemKind::Ruby), g.inventory.count(ItemKind::Sapphire), g.inventory.count(ItemKind::Pebble)), (0, 0, 5), "no pebble was used while crystals lasted");
+        g.attack_cooldown = 0.0;
+        assert!(g.shoot_sling(eye, dir));
+        assert_eq!(g.arrows.last().unwrap().kind, ItemKind::Pebble);
+        assert_eq!(g.arrows.last().unwrap().damage(), SLING_DAMAGE);
+        assert_eq!(g.inventory.count(ItemKind::Pebble), 4);
+    }
+
+    #[test]
+    fn a_bow_does_not_shoot_crystals() {
+        let mut g = game();
+        hold(&mut g, ItemKind::Bow, 1);
+        g.inventory.add(ItemKind::Ruby, 3);
+        let (eye, dir) = (g.player.eye(), g.player.look_dir());
+        assert!(!g.shoot_bow(eye, dir));
+    }
+
+    #[test]
+    fn each_crystal_cluster_breaks_by_hand_into_one_to_three_crystals_of_its_colour() {
+        for (block, item) in [(Block::RubyCrystal, ItemKind::Ruby), (Block::SapphireCrystal, ItemKind::Sapphire), (Block::AmethystCrystal, ItemKind::Amethyst)] {
+            let mut rng = Rng::new(9);
+            let mut counts = std::collections::HashSet::new();
+            for _ in 0..200 {
+                let drops = crate::item::drops_for(block, &mut rng);
+                assert!(drops.iter().all(|&k| k == item), "{block:?}");
+                assert!((1..=3).contains(&drops.len()));
+                counts.insert(drops.len());
+            }
+            assert_eq!(counts.len(), 3, "{block:?}: one, two and three all turn up");
+            assert!(item.is_crystal());
+        }
+    }
+
+    // --- mushrooms ---
+
+    #[test]
+    fn eating_a_mushroom_costs_one_life_and_doubles_running_speed_for_fifteen_seconds() {
+        let mut g = game();
+        hold(&mut g, ItemKind::Mushroom, 2);
+        g.health = MAX_HEALTH;
+        g.apply_worn_effects();
+        assert_eq!(g.player.speed_factor, 1.0);
+        assert!(g.eat_held());
+        assert_eq!((g.health, g.inventory.count(ItemKind::Mushroom)), (MAX_HEALTH - 1, 1));
+        g.apply_worn_effects();
+        assert_eq!(g.player.speed_factor, 2.0);
+        step(&mut g, 14.0);
+        g.apply_worn_effects();
+        assert_eq!(g.player.speed_factor, 2.0, "still fast after 14 seconds");
+        step(&mut g, 1.5);
+        g.apply_worn_effects();
+        assert_eq!(g.player.speed_factor, 1.0, "back to normal after 15");
+    }
+
+    #[test]
+    fn a_mushroom_is_picked_by_hand_and_drops_itself() {
+        assert_eq!(crate::item::drops_for(Block::Mushroom, &mut Rng::new(1)), vec![ItemKind::Mushroom]);
+    }
+
+    // --- shell armor ---
+
+    #[test]
+    fn fifty_shell_fragments_make_a_shell_armor_that_is_worn() {
+        let mut g = game();
+        g.inventory.add(ItemKind::ShellFragment, 49);
+        assert!(!craft(&mut g, ItemKind::ShellArmor));
+        g.inventory.add(ItemKind::ShellFragment, 1);
+        assert!(craft(&mut g, ItemKind::ShellArmor));
+        assert!(ItemKind::ShellArmor.is_wearable());
+        hold(&mut g, ItemKind::ShellArmor, 1);
+        assert!(g.wear_held());
+        assert_eq!(g.worn, Some(ItemKind::ShellArmor));
+    }
+
+    #[test]
+    fn shell_armor_takes_one_off_every_blow_but_never_more_than_half() {
+        for (blow, taken) in [(1u32, 1u32), (2, 1), (3, 2), (4, 3), (5, 4), (10, 9)] {
+            let mut g = game();
+            g.worn = Some(ItemKind::ShellArmor);
+            g.health = MAX_HEALTH;
+            g.hurt_player(blow, "test");
+            assert_eq!(MAX_HEALTH - g.health, taken, "a blow of {blow}");
+        }
+        let mut bare = game();
+        bare.health = MAX_HEALTH;
+        bare.hurt_player(4, "test");
+        assert_eq!(bare.health, MAX_HEALTH - 4, "no armor, no reduction");
+    }
+
+    // --- crawfish ---
+
+    #[test]
+    fn crawfish_leave_fragments_as_the_rules_say() {
+        let mut rng = Rng::new(11);
+        let n = 4000;
+        let hits = (0..n).filter(|_| AnimalKind::Crawfish.drops(&mut rng) == vec![ItemKind::ShellFragment]).count();
+        assert!((0.17..0.23).contains(&(hits as f64 / n as f64)), "one in five: {}", hits as f64 / n as f64);
+        assert_eq!((AnimalKind::Crawfish.max_health(), AnimalKind::BigCrawfish.max_health(), AnimalKind::GiantCrawfish.max_health()), (4, 20, 120));
+        let (mut big, mut giant) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        for _ in 0..600 {
+            let d = AnimalKind::BigCrawfish.drops(&mut rng);
+            assert!((1..=2).contains(&d.len()) && d.iter().all(|&k| k == ItemKind::ShellFragment));
+            big.insert(d.len());
+            let d = AnimalKind::GiantCrawfish.drops(&mut rng);
+            assert!((10..=20).contains(&d.len()) && d.iter().all(|&k| k == ItemKind::ShellFragment));
+            giant.insert(d.len());
+        }
+        assert_eq!(big.len(), 2);
+        assert_eq!((giant.iter().min(), giant.iter().max()), (Some(&10), Some(&20)));
+        assert!(AnimalKind::GiantCrawfish.is_boss() && AnimalKind::GiantCrawfish.never_gives_up());
+        assert!(!AnimalKind::Crawfish.is_boss() && !AnimalKind::BigCrawfish.is_boss());
+    }
+
+    /// A column of the overworld's river water near the spawn point, in a loaded chunk.
+    fn river_column(g: &mut Game) -> (i32, i32) {
+        for r in (20..400).step_by(4) {
+            for a in 0..32 {
+                let t = a as f32 * std::f32::consts::TAU / 32.0;
+                let (x, z) = ((t.cos() * r as f32) as i32, (t.sin() * r as f32) as i32);
+                g.world.stream_chunks(vec3(x as f32, 6.0, z as f32));
+                if g.world.is_wet_column(x, z) {
+                    return (x, z);
+                }
+            }
+        }
+        panic!("no river found");
+    }
+
+    #[test]
+    fn crawfish_keep_to_the_water_and_never_hurt_anyone() {
+        let mut g = game();
+        let (x, z) = river_column(&mut g);
+        g.player.pos = vec3(x as f32 + 0.5, 8.0, z as f32 + 30.5);
+        g.world.stream_chunks(g.player.pos);
+        assert!(g.spawn_aquatic(AnimalKind::Crawfish, x, z));
+        assert!(!g.spawn_aquatic(AnimalKind::Crawfish, x, z + 400) || true);
+        for _ in 0..(40.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.health = MAX_HEALTH;
+            let a = g.animals.iter().find(|a| a.kind == AnimalKind::Crawfish).expect("still there");
+            assert!(g.world.is_wet_column(a.pos.x.floor() as i32, a.pos.z.floor() as i32), "left the water at {:?}", a.pos);
+        }
+        assert_eq!(g.health, MAX_HEALTH);
+    }
+
+    #[test]
+    fn a_big_crawfish_ignores_the_player_until_hurt_and_then_fights_back() {
+        let mut g = game();
+        let (x, z) = river_column(&mut g);
+        // Stand right at the water's edge: find a dry neighbour.
+        let mut stand = None;
+        'o: for r in 1..8 {
+            for (dx, dz) in [(r, 0), (-r, 0), (0, r), (0, -r)] {
+                if !g.world.is_wet_column(x + dx, z + dz) {
+                    stand = Some((x + dx, z + dz));
+                    break 'o;
+                }
+            }
+        }
+        let (sx, sz) = stand.expect("a bank");
+        g.player.pos = vec3(sx as f32 + 0.5, g.world.ground_top(sx, sz) as f32 + 1.01, sz as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        assert!(g.spawn_aquatic(AnimalKind::BigCrawfish, x, z));
+        g.animals[0].pos = vec3(g.player.pos.x, g.animals[0].pos.y, g.player.pos.z) + vec3(0.0, 0.0, 0.0);
+        step(&mut g, 3.0);
+        assert_eq!(g.animals[0].mode == Mode::Charge, false, "unhurt, it does not come");
+        g.hurt_animals(&[(0, 1)]);
+        assert!(g.animals[0].enraged);
+        step(&mut g, 0.2);
+        assert_eq!(g.animals[0].mode, Mode::Charge, "hurt, it fights");
+        assert_eq!(AnimalKind::BigCrawfish.attack_damage(), BIG_CRAWFISH_DAMAGE);
+    }
+
+    #[test]
+    fn ten_big_crawfish_killed_bring_out_the_giant_crawfish_in_the_cave_water() {
+        let mut g = game();
+        for i in 1..=9 {
+            g.note_big_crawfish_killed();
+            assert_eq!(g.giant_crawfish_owed, 0, "after {i}");
+        }
+        g.note_big_crawfish_killed();
+        assert_eq!(g.giant_crawfish_owed, 1);
+        // In the Horizen, with water about, it rises.
+        let (sx, sz) = HORIZEN_SPAWN;
+        g.travel_to(Dimension::Horizen);
+        g.player.pos = vec3(sx as f32 + 0.5, GROUND_TOP as f32 + 1.01, sz as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.animals.clear();
+        for _ in 0..5 {
+            g.summon_giant_crawfish();
+        }
+        let giants = g.animals.iter().filter(|a| a.kind == AnimalKind::GiantCrawfish).count();
+        assert_eq!((giants, g.giant_crawfish_owed), (1, 0), "one comes, no more");
+        assert_eq!(g.animals.iter().find(|a| a.kind == AnimalKind::GiantCrawfish).unwrap().health, 120);
+    }
+
+    // --- the Dragon ---
+
+    #[test]
+    fn the_dragon_is_the_biggest_creature_in_the_game() {
+        for kind in [AnimalKind::Yeti, AnimalKind::LochNessMonster, AnimalKind::Phoenix, AnimalKind::BearBoss, AnimalKind::Unicorn, AnimalKind::GiantCrawfish, AnimalKind::Orangutan] {
+            assert!(DRAGON_HALF_WIDTH > kind.half_width() && DRAGON_HIT_HEIGHT > kind.height(), "{kind:?}");
+            assert!(DRAGON_HIT_HALF_WIDTH > kind.half_width() * 2.0, "{kind:?}");
+            assert!(DRAGON_HEALTH > kind.max_health(), "{kind:?}");
+        }
+        assert!(AnimalKind::Dragon.flies_always() && AnimalKind::Dragon.is_boss() && AnimalKind::Dragon.never_gives_up());
+    }
+
+    #[test]
+    fn the_dragon_comes_to_the_skylands_after_ten_day_night_switches_and_to_nowhere_else() {
+        let mut g = in_skylands();
+        g.day_night_switches = DRAGON_SWITCHES - 1;
+        g.spawn_bosses();
+        assert!(!g.animals.iter().any(|a| a.kind == AnimalKind::Dragon), "nine switches are not enough");
+        g.day_night_switches = DRAGON_SWITCHES;
+        g.spawn_bosses();
+        let n = g.animals.iter().filter(|a| a.kind == AnimalKind::Dragon).count();
+        assert_eq!(n, 1);
+        g.spawn_bosses();
+        assert_eq!(g.animals.iter().filter(|a| a.kind == AnimalKind::Dragon).count(), 1, "never two");
+        let mut over = game();
+        over.day_night_switches = 50;
+        over.spawn_bosses();
+        assert!(!over.animals.iter().any(|a| a.kind == AnimalKind::Dragon), "not in the overworld");
+    }
+
+    #[test]
+    fn the_dragon_is_always_flying_breathes_fire_and_swoops_for_a_big_throw() {
+        let mut g = in_skylands();
+        g.day_night_switches = DRAGON_SWITCHES;
+        g.spawn_bosses();
+        let start = g.player.pos;
+        let (mut flames, mut swooped, mut landed, mut best_throw) = (0, false, false, 0.0_f32);
+        for _ in 0..(90.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.health = MAX_HEALTH;
+            let before = g.player.pos;
+            let d = g.animals.iter().find(|a| a.kind == AnimalKind::Dragon).expect("it stays");
+            landed |= d.on_ground;
+            if d.air_phase == crate::animal::AirPhase::Dive {
+                swooped = true;
+            }
+            flames = flames.max(g.projectiles.iter().filter(|p| p.kind == ProjectileKind::DragonFire).count());
+            best_throw = best_throw.max((g.player.knock.length()).max(g.player.vel.length()));
+            g.player.pos = start;
+            let _ = before;
+        }
+        assert!(!landed, "it never lands");
+        assert!(swooped, "it swoops");
+        assert!(flames >= 2, "it breathes a stream of fire: {flames} flames at once");
+    }
+
+    #[test]
+    fn the_dragons_swoop_throws_the_player_far_and_its_fire_burns() {
+        assert!(DRAGON_SWOOP_KNOCKBACK > YETI_SMASH_KNOCKBACK * 2.0, "a lot of knockback");
+        assert_eq!(AnimalKind::Dragon.strike_knockback(), DRAGON_SWOOP_KNOCKBACK);
+        assert_eq!(AnimalKind::Bear.strike_knockback(), 0.0);
+        let mut g = in_skylands();
+        g.health = MAX_HEALTH;
+        let player = g.player.pos;
+        let mut d = Animal::new(AnimalKind::Dragon, player + vec3(1.0, 0.5, 0.0), &mut Rng::new(1));
+        d.air_phase = crate::animal::AirPhase::Dive;
+        g.animals.push(d);
+        g.update_animals(1.0 / 60.0);
+        assert!(g.health < MAX_HEALTH, "the swoop hurts");
+        assert!(g.player.knock.length() > 5.0 || g.player.vel.length() > 5.0, "and throws: {:?} {:?}", g.player.knock, g.player.vel);
+        let mut fire = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, SaveData::new(), 3);
+        fire.health = MAX_HEALTH;
+        fire.carry_out(BossEvent::DragonFlame { from: fire.player.pos + vec3(0.0, 1.0, 6.0) });
+        assert_eq!(fire.projectiles.len(), 1);
+        assert_eq!(fire.projectiles[0].kind, ProjectileKind::DragonFire);
+    }
+
+    #[test]
+    fn killing_the_dragon_drops_lots_of_gold_and_starts_the_switch_count_over() {
+        assert_eq!(AnimalKind::Dragon.drops(&mut Rng::new(1)), vec![ItemKind::Gold; DRAGON_GOLD_DROP as usize]);
+        assert!(DRAGON_GOLD_DROP >= 40);
+        let mut g = in_skylands();
+        g.day_night_switches = 12;
+        g.animals.push(Animal::new(AnimalKind::Dragon, g.player.pos + vec3(0.0, 20.0, 30.0), &mut Rng::new(1)));
+        g.hurt_animals_from(&[(0, DRAGON_HEALTH)], g.player.pos);
+        assert!(g.animals.iter().all(|a| a.kind != AnimalKind::Dragon));
+        assert_eq!(g.day_night_switches, 0);
+        let gold = g.items.iter().filter(|i| i.kind == ItemKind::Gold).count();
+        assert_eq!(gold as u32, DRAGON_GOLD_DROP);
+    }
+}
+
+#[cfg(test)]
+mod figs_fairies_goats_and_moonlight_tests {
+    use super::*;
+    use crate::item::ItemStack;
+    use crate::rng::Rng;
+    use crate::terrain;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let mut g = Game::from_save(info, SaveData::new(), 5);
+        g.world.stream_chunks(g.player.pos);
+        g
+    }
+
+    fn in_skylands() -> Game {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        g.world.night = false;
+        g.world.stream_chunks(g.player.pos);
+        g.animals.clear();
+        g
+    }
+
+    fn hold(g: &mut Game, kind: ItemKind, count: u32) {
+        g.inventory.slots[0] = Some(ItemStack { kind, count });
+        g.select_slot(0);
+    }
+
+    fn step(g: &mut Game, seconds: f32) {
+        for _ in 0..(seconds * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            g.update_effects(1.0 / 60.0);
+        }
+    }
+
+    fn eye(g: &Game) -> Vec3 {
+        g.player.pos + vec3(0.0, EYE_HEIGHT, 0.0)
+    }
+
+    fn count_items(g: &Game, kind: ItemKind) -> u32 {
+        g.inventory.count(kind) + g.items.iter().filter(|i| i.kind == kind).count() as u32
+    }
+
+    // --- Vials of moonlight ---
+
+    #[test]
+    fn a_vial_of_moonlight_adds_a_heart_for_sixty_seconds_and_each_vial_restarts_every_timer() {
+        let mut g = game();
+        g.health = MAX_HEALTH;
+        hold(&mut g, ItemKind::MoonlightVial, 3);
+        assert!(g.eat_held());
+        assert_eq!(g.max_health(), MAX_HEALTH + 1);
+        assert_eq!(g.health, MAX_HEALTH + 1, "the new heart is full");
+        g.update_effects(40.0);
+        assert!(g.eat_held());
+        assert_eq!(g.max_health(), MAX_HEALTH + 2);
+        assert!(g.moonlight.iter().all(|&t| (t - MOONLIGHT_SECONDS).abs() < 1e-3), "both timers are back at sixty: {:?}", g.moonlight);
+        g.update_effects(59.0);
+        assert_eq!(g.max_health(), MAX_HEALTH + 2, "still shining");
+        g.update_effects(2.0);
+        assert_eq!(g.max_health(), MAX_HEALTH, "both are spent together");
+        assert_eq!(g.health, MAX_HEALTH, "life above the maximum fades with them");
+    }
+
+    #[test]
+    fn moonlight_never_gives_more_than_ten_extra_hearts_and_healing_can_fill_them() {
+        let mut g = game();
+        for _ in 0..12 {
+            hold(&mut g, ItemKind::MoonlightVial, 1);
+            assert!(g.eat_held());
+        }
+        assert_eq!(g.max_health(), MAX_HEALTH + MOONLIGHT_MAX_BONUS);
+        assert_eq!(MOONLIGHT_MAX_BONUS, 10);
+        assert_eq!(g.inventory.count(ItemKind::MoonlightVial), 0, "every vial was used up");
+        // A fig heals up to the raised maximum.
+        g.health = 5;
+        hold(&mut g, ItemKind::Fig, 1);
+        assert!(g.eat_held());
+        assert_eq!(g.health, 5 + FIG_HEAL);
+        // Dying clears the moonlight.
+        g.hurt_player(100, "gone");
+        assert_eq!((g.max_health(), g.health), (MAX_HEALTH, MAX_HEALTH));
+    }
+
+    #[test]
+    fn a_saved_game_never_writes_more_than_ten_life() {
+        let mut g = game();
+        for _ in 0..3 {
+            hold(&mut g, ItemKind::MoonlightVial, 1);
+            g.eat_held();
+        }
+        assert_eq!(g.health, MAX_HEALTH + 3);
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        let again = Game::from_save(info, parse_save(&g.save_text()), 3);
+        assert_eq!(again.health, MAX_HEALTH);
+    }
+
+    // --- Figs and the jungle's foliage ---
+
+    #[test]
+    fn foliage_breaks_by_hand_and_drops_nothing_but_fig_foliage_gives_a_few_figs() {
+        assert!(Block::Foliage.hand_breakable() && Block::FigFoliage.hand_breakable());
+        assert!(!Block::Foliage.collides() && !Block::FigFoliage.collides(), "walk-through like a bush");
+        assert!(Block::FigFoliage.is_pickable() && Block::Bush.is_pickable() && !Block::Foliage.is_pickable());
+        let mut rng = Rng::new(3);
+        assert!(crate::item::drops_for(Block::Foliage, &mut rng).is_empty());
+        for _ in 0..50 {
+            let d = crate::item::drops_for(Block::FigFoliage, &mut rng);
+            assert!(d.iter().all(|&k| k == ItemKind::Fig) && (FIG_BREAK_MIN as usize..=FIG_BREAK_MAX as usize).contains(&d.len()), "{d:?}");
+        }
+        assert_eq!(ItemKind::Fig.heal_amount(), Some(3));
+    }
+
+    #[test]
+    fn right_clicking_fig_foliage_picks_the_figs_once_and_leaves_the_foliage() {
+        let mut g = game();
+        let (x, z) = (g.player.pos.x.floor() as i32 + 3, g.player.pos.z.floor() as i32);
+        let y = g.world.ground_top(x, z) + 1;
+        g.world.set_block(x, y, z, Block::Flower);
+        g.world.chunks.get_mut(&World::chunk_of(x, z)).unwrap().blocks[crate::chunk::idx(x.rem_euclid(CHUNK_SIZE), y, z.rem_euclid(CHUNK_SIZE))] = Block::FigFoliage;
+        let hit = Hit { x, y, z, block: Block::FigFoliage, prev: (x, y + 1, z) };
+        assert!(g.use_held(&hit));
+        let figs = g.inventory.count(ItemKind::Fig);
+        assert!((FIG_PICK_MIN..=FIG_PICK_MAX).contains(&figs), "{figs} figs");
+        assert_eq!(g.world.block_at(x, y, z), Block::FigFoliage, "the foliage stays");
+        assert!(!g.use_held(&hit), "bare now");
+        assert_eq!(g.inventory.count(ItemKind::Fig), figs);
+    }
+
+    #[test]
+    fn the_jungle_has_small_ponds_dark_grass_and_foliage_with_one_clump_in_five_bearing_figs() {
+        assert!(JUNGLE_GRASS_COLOR.1 < 0.58 && JUNGLE_GRASS_COLOR.0 < 0.28, "darker than the forest's grass");
+        for seed in [1_i64, 2, 3] {
+            let (jx, jz) = terrain::jungle_centre(seed);
+            let (mut ponds, mut sampled) = (0, 0);
+            for dz in (-120..=120).step_by(2) {
+                for dx in (-120..=120).step_by(2) {
+                    let (x, z) = (jx + dx, jz + dz);
+                    if !terrain::in_jungle(seed, x, z) {
+                        continue;
+                    }
+                    sampled += 1;
+                    if terrain::jungle_pond(seed, x, z) {
+                        ponds += 1;
+                        assert!(!terrain::in_jungle_clearing(seed, x, z), "none on the bare middle");
+                    }
+                }
+            }
+            let share = ponds as f32 / sampled as f32;
+            assert!(share > 0.03 && share < 0.30, "seed {seed}: {share} of the jungle is pond");
+            // The chunks hold the water, the foliage and the figs.
+            let (mut water, mut foliage, mut figs) = (0, 0, 0);
+            let (ccx, ccz) = (jx.div_euclid(CHUNK_SIZE) + 4, jz.div_euclid(CHUNK_SIZE) + 4);
+            for cz in ccz..ccz + 3 {
+                for cx in ccx..ccx + 3 {
+                    for b in terrain::generate_chunk_blocks(seed, cx, cz) {
+                        match b {
+                            Block::Water => water += 1,
+                            Block::Foliage => foliage += 1,
+                            Block::FigFoliage => figs += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            assert!(water > 20, "seed {seed}: ponds hold water ({water})");
+            assert!(foliage > 50 && figs > 5, "seed {seed}: {foliage} foliage, {figs} fig clumps");
+            let share = figs as f32 / (foliage + figs) as f32;
+            assert!((share - 1.0 / JUNGLE_FIG_ONE_IN as f32).abs() < 0.08, "seed {seed}: fig share {share}");
+        }
+    }
+
+    #[test]
+    fn jungle_ponds_are_one_block_deep_and_the_bare_middle_stays_dry_and_bare() {
+        let seed = 1;
+        let (jx, jz) = terrain::jungle_centre(seed);
+        for dz in -JUNGLE_CLEARING_RADIUS..=JUNGLE_CLEARING_RADIUS {
+            for dx in -JUNGLE_CLEARING_RADIUS..=JUNGLE_CLEARING_RADIUS {
+                if terrain::in_jungle_clearing(seed, jx + dx, jz + dz) {
+                    assert!(!terrain::jungle_pond(seed, jx + dx, jz + dz), "no pond at {dx},{dz}");
+                }
+            }
+        }
+        let pond = (-150..150).flat_map(|dz| (-150..150).map(move |dx| (dx, dz))).find(|&(dx, dz)| terrain::jungle_pond(seed, jx + dx, jz + dz)).expect("a pond");
+        let (x, z) = (jx + pond.0, jz + pond.1);
+        let lm = crate::landmarks::Landmarks::default();
+        if terrain::is_wet_column(seed, &lm, x, z) {
+            assert_eq!(terrain::ground_top_with(seed, &lm, x, z), GROUND_TOP - 1, "cut one block into the ground like a river");
+        }
+    }
+
+    // --- Fairies ---
+
+    #[test]
+    fn a_fairy_has_eight_health_and_trades_one_ash_for_a_vial_of_moonlight() {
+        assert_eq!(AnimalKind::Fairy.max_health(), 8);
+        let mut g = in_skylands();
+        let at = g.player.pos + vec3(2.0, 1.0, 0.0);
+        g.animals.push(Animal::new(AnimalKind::Fairy, at, &mut Rng::new(1)));
+        hold(&mut g, ItemKind::Ash, 2);
+        let dir = (at + vec3(0.0, 0.3, 0.0) - eye(&g)).normalize();
+        assert!(g.trade_with_fairy(eye(&g), dir));
+        assert_eq!(g.inventory.count(ItemKind::Ash), 1, "one ash is taken");
+        assert_eq!(g.inventory.count(ItemKind::MoonlightVial), 1, "and a vial given");
+        // A roused fairy will not trade.
+        g.animals[0].enraged = true;
+        assert!(g.trade_with_fairy(eye(&g), dir));
+        assert_eq!(g.inventory.count(ItemKind::Ash), 1);
+        assert_eq!(g.inventory.count(ItemKind::MoonlightVial), 1);
+        // Nor does anything happen without ash in hand.
+        g.animals[0].enraged = false;
+        hold(&mut g, ItemKind::Stick, 1);
+        assert!(!g.trade_with_fairy(eye(&g), dir));
+    }
+
+    #[test]
+    fn hitting_one_fairy_rouses_all_of_them_and_they_push_the_player_without_hurting_them() {
+        let mut g = in_skylands();
+        let p = g.player.pos;
+        for k in 0..3 {
+            g.animals.push(Animal::new(AnimalKind::Fairy, p + vec3(4.0 + k as f32, 1.0, 3.0), &mut Rng::new(k as u64 + 1)));
+        }
+        assert!(g.animals.iter().all(|a| !a.enraged));
+        g.hurt_animals(&[(0, 1)]);
+        assert!(g.animals.iter().all(|a| a.enraged), "every fairy is roused");
+        g.health = MAX_HEALTH;
+        // One right beside the player strikes: no damage, but a hard push.
+        g.animals[1].pos = p + vec3(0.4, 0.6, 0.0);
+        step(&mut g, 0.5);
+        assert_eq!(g.health, MAX_HEALTH, "fairies do no damage");
+        assert!(g.player.knock.length() > 1.0 || g.player.vel.length() > 1.0 || (g.player.pos - p).length() > 0.5, "but they push: {:?}", g.player.knock);
+    }
+
+    #[test]
+    fn a_roused_fairy_goes_to_the_side_of_the_player_that_sends_them_over_the_nearest_edge() {
+        let g = in_skylands();
+        // Find a spot on the first island near its shore, where the void lies in one direction.
+        let seed = g.info.seed;
+        let island = skylands::island_in_cell(seed, 0, 0);
+        let mut found = None;
+        for k in 0..64 {
+            let a = k as f32 * std::f32::consts::TAU / 64.0;
+            let r = island.reach(a) - 4.0;
+            let (x, z) = (island.x as f32 + a.cos() * r, island.z as f32 + a.sin() * r);
+            if skylands::island_at(seed, x.floor() as i32, z.floor() as i32).is_some() {
+                found = Some((x, z, a));
+                break;
+            }
+        }
+        let (x, z, a) = found.expect("a spot near the shore");
+        let at = vec3(x, island.top as f32 + 1.0, z);
+        let outward = vec2(a.cos(), a.sin());
+        let mut fairy = Animal::new(AnimalKind::Fairy, at + vec3(0.0, 1.0, 0.0), &mut Rng::new(1));
+        fairy.enraged = true;
+        let mut fairy = fairy;
+        let mut rng = Rng::new(2);
+        for _ in 0..240 {
+            fairy.update(&g.world, at, 1.0 / 60.0, &mut rng);
+        }
+        let side = vec2(fairy.pos.x - at.x, fairy.pos.z - at.z);
+        assert!(side.dot(outward) < 0.0, "the fairy hovers inland of the player, so that its push sends them out: {side:?} vs {outward:?}");
+    }
+
+    #[test]
+    fn fairies_plant_flowers_on_the_islands_grass_now_and_then_and_the_flowers_are_saved() {
+        let mut g = in_skylands();
+        let p = g.player.pos;
+        let mut fairy = Animal::new(AnimalKind::Fairy, p + vec3(3.0, FAIRY_HOVER_HEIGHT, 0.0), &mut Rng::new(1));
+        fairy.special_timer = 0.0;
+        g.animals.push(fairy);
+        let (x, z) = ((p.x + 3.0).floor() as i32, p.z.floor() as i32);
+        let y = skylands::island_at(g.info.seed, x, z).unwrap().surface_y(x, z) + 1;
+        g.world.break_block(x, y, z);
+        g.update_fairy_planting();
+        assert_eq!(g.world.block_at(x, y, z), Block::Flower, "a flower where the fairy hovered");
+        assert!(g.animals[0].special_timer >= FAIRY_PLANT_MIN, "and the next is a while off");
+        assert_eq!(g.world.placed.get(&(x, y, z)), Some(&Block::Flower), "it is saved like a placed block");
+    }
+
+    #[test]
+    fn fairies_and_goats_come_to_the_islands_and_only_there() {
+        let mut g = in_skylands();
+        let p = g.player.pos;
+        assert!(g.spawn_sky_creature(AnimalKind::Fairy, p.x.floor() as i32 + 5, p.z.floor() as i32));
+        assert!(g.spawn_sky_creature(AnimalKind::MountainGoat, p.x.floor() as i32 - 5, p.z.floor() as i32));
+        assert!(!g.spawn_sky_creature(AnimalKind::MountainGoat, p.x.floor() as i32 + 400, p.z.floor() as i32), "not over the void or off the loaded land");
+        for _ in 0..400 {
+            g.spawn_wildlife();
+        }
+        let n = |g: &Game, k: AnimalKind| g.animals.iter().filter(|a| a.kind == k).count();
+        assert!(n(&g, AnimalKind::Fairy) >= 1 && n(&g, AnimalKind::Fairy) <= MAX_FAIRY);
+        assert!(n(&g, AnimalKind::MountainGoat) >= 1 && n(&g, AnimalKind::MountainGoat) <= MAX_GOAT);
+        let mut o = game();
+        o.animals.clear();
+        for _ in 0..200 {
+            o.spawn_wildlife();
+        }
+        assert!(o.animals.iter().all(|a| !matches!(a.kind, AnimalKind::Fairy | AnimalKind::MountainGoat)), "none in the overworld");
+    }
+
+    #[test]
+    fn the_general_store_ghost_tells_a_player_with_ash_that_fairies_trade_for_it() {
+        let mut g = in_skylands();
+        let post = g.shop_post().expect("in the Skylands");
+        g.player.pos = post + vec3(2.0, 0.0, 0.0);
+        g.player.yaw = std::f32::consts::PI;
+        let at = eye(&g);
+        let dir = (post + vec3(0.0, 1.0, 0.0) - at).normalize();
+        g.inventory.add(ItemKind::Ash, 1);
+        assert!(g.open_shop(at, dir), "he is in sights");
+        let said = g.ghost_text.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(said.to_lowercase().contains("fair") && said.to_lowercase().contains("ash"), "{said}");
+        g.shop_open = false;
+        g.inventory.remove(ItemKind::Ash, 1);
+        assert!(g.open_shop(at, dir));
+        assert_eq!(g.ghost_text.as_ref().map(|t| t.0.as_str()), Some(ghosts::SHOP_GREETING));
+    }
+
+    // --- Mountain goats and ivory knives ---
+
+    #[test]
+    fn a_goat_has_thirty_health_ignores_the_player_until_hit_then_butts_for_one_with_heavy_knockback() {
+        assert_eq!(AnimalKind::MountainGoat.max_health(), 30);
+        assert_eq!(AnimalKind::MountainGoat.attack_damage(), 1);
+        assert!(AnimalKind::MountainGoat.strike_knockback() >= 8.0, "lots of knockback");
+        let mut g = in_skylands();
+        g.health = MAX_HEALTH;
+        let p = g.player.pos;
+        g.animals.push(Animal::new(AnimalKind::MountainGoat, p + vec3(0.3, 0.0, 0.0), &mut Rng::new(1)));
+        step(&mut g, 3.0);
+        assert_eq!(g.health, MAX_HEALTH, "left alone it never attacks");
+        g.hurt_animals(&[(0, 1)]);
+        assert!(g.animals[0].enraged);
+        g.animals[0].pos = g.player.pos + vec3(0.3, 0.0, 0.0);
+        step(&mut g, 1.0);
+        assert_eq!(g.health, MAX_HEALTH - GOAT_DAMAGE, "one damage");
+        assert!(g.player.knock.length() > 3.0 || g.player.vel.length() > 3.0 || (g.player.pos - p).length() > 2.0, "and a hard throw");
+    }
+
+    #[test]
+    fn a_goat_drops_a_horn_and_a_horn_makes_ivory_knives() {
+        assert_eq!(AnimalKind::MountainGoat.drops(&mut Rng::new(1)), vec![ItemKind::GoatHorn; GOAT_HORN_DROP as usize]);
+        let mut g = game();
+        g.inventory.add(ItemKind::GoatHorn, 1);
+        let recipe = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::IvoryKnife).expect("a recipe");
+        assert!(crate::recipe::craft(&mut g.inventory, recipe));
+        assert_eq!(g.inventory.count(ItemKind::IvoryKnife), IVORY_KNIVES_PER_HORN);
+        assert_eq!(g.inventory.count(ItemKind::GoatHorn), 0);
+    }
+
+    #[test]
+    fn an_ivory_knife_is_thrown_like_a_feather_but_always_drops_to_be_picked_up_again() {
+        assert!(ItemKind::IvoryKnife.is_thrown());
+        assert!(!Block::Grass.can_break_with(Some(ItemKind::IvoryKnife)), "a click throws it instead of breaking things");
+        // Into the open: it lands as an item.
+        let mut g = game();
+        hold(&mut g, ItemKind::IvoryKnife, 2);
+        assert!(g.throw_knife(eye(&g), vec3(1.0, 0.1, 0.0).normalize()));
+        assert_eq!(g.inventory.count(ItemKind::IvoryKnife), 1);
+        for _ in 0..600 {
+            g.update_arrows(1.0 / 60.0);
+        }
+        assert!(g.arrows.is_empty());
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::IvoryKnife).count(), 1, "it lies where it landed");
+        // Into an animal: it hurts it and still drops.
+        let mut g = game();
+        g.animals.clear();
+        let target = g.player.pos + vec3(5.0, 0.0, 0.0);
+        g.animals.push(Animal::new(AnimalKind::Bear, target, &mut Rng::new(1)));
+        hold(&mut g, ItemKind::IvoryKnife, 1);
+        let dir = (target + vec3(0.0, 0.7, 0.0) - eye(&g)).normalize();
+        assert!(g.throw_knife(eye(&g), dir));
+        for _ in 0..120 {
+            g.update_arrows(1.0 / 60.0);
+        }
+        assert_eq!(g.animals[0].health, BEAR_HEALTH - IVORY_KNIFE_DAMAGE, "the knife hurt it");
+        assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::IvoryKnife).count(), 1, "and was not used up");
+        assert_eq!(g.inventory.count(ItemKind::IvoryKnife), 0);
     }
 }

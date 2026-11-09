@@ -400,7 +400,7 @@ fn metal_bird_features(parts: &mut Vec<Piece>, a: &Animal, time: f32, bronze: bo
     }
 }
 
-/// A newt: a small, low, long-tailed amphibian, dark olive above and orange beneath, that sways its body as it creeps along.
+/// A newt: a low, long-tailed amphibian (drawn `NEWT_MODEL_SCALE` times its first size), dark olive above and orange beneath, that sways its body as it creeps along.
 fn newt_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
     // A bright olive-yellow back with an orange stripe down it: the moss floor is green, so a dark green newt cannot be seen on it.
     let back = col(0.62, 0.66, 0.14);
@@ -433,7 +433,199 @@ fn newt_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
         parts.push(block((x + step, 0.032, 0.085 * side), (0.032, 0.014, 0.022), back));
         parts.push(block((x + step + 0.02, 0.014, 0.10 * side), (0.03, 0.01, 0.02), dark));
     }
+    scaled(parts, NEWT_MODEL_SCALE)
+}
+
+/// A fairy: a tiny pale figure in a petal dress with a head of bright hair and four wings that beat fast, with a soft glow about it.
+fn fairy_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let skin = col(0.98, 0.86, 0.78);
+    let dress = if a.enraged { col(0.90, 0.35, 0.55) } else { col(0.62, 0.82, 1.0) };
+    let hair = col(0.98, 0.78, 0.30);
+    let dark = col(0.12, 0.08, 0.10);
+    let beat = (time * 24.0 + a.phase * 3.0).sin();
+    let bob = (time * 3.0 + a.phase).sin() * 0.02;
+    let mut parts = vec![
+        block((0.0, 0.18 + bob, 0.0), (0.07, 0.05, 0.07), dress),
+        block((0.0, 0.28 + bob, 0.0), (0.05, 0.07, 0.045), dress),
+        block((0.0, 0.46 + bob, 0.0), (0.06, 0.06, 0.06), skin),
+        block((-0.02, 0.50 + bob, 0.0), (0.065, 0.045, 0.065), hair),
+        block((0.0, 0.10 + bob, 0.0), (0.03, 0.04, 0.03), skin),
+    ];
+    eyes(&mut parts, (0.05, 0.47 + bob, 0.0), 0.055, 0.012, night, dark);
+    // Arms out at the sides.
+    for side in [-1.0, 1.0] {
+        parts.push(block((0.0, 0.30 + bob, 0.085 * side), (0.018, 0.04, 0.018), skin));
+    }
+    // Two wings a side, translucent, beating up and down.
+    let wing = Color::new(0.85, 0.95, 1.0, 0.55);
+    for side in [-1.0f32, 1.0] {
+        let flap = beat * 0.7 * side;
+        parts.push(tilted((-0.03, 0.40 + bob + 0.05 * beat.abs(), 0.14 * side), (0.025, 0.12, 0.08), wing, flap));
+        parts.push(tilted((-0.03, 0.30 + bob + 0.03 * beat.abs(), 0.11 * side), (0.02, 0.07, 0.05), wing, flap * 0.8));
+    }
+    // A faint glow, brighter at night.
+    parts.push(block((0.0, 0.32 + bob, 0.0), (0.22, 0.26, 0.22), Color::new(0.80, 0.92, 1.0, if night { 0.22 } else { 0.08 })));
     parts
+}
+
+/// A mountain goat: a white, shaggy body on short sure legs, a beard, a pair of curved ridged horns and cloven hooves. It lowers its head
+/// when it charges.
+fn goat_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
+    let fur = col(0.93, 0.92, 0.88);
+    let shade = col(0.80, 0.78, 0.72);
+    let horn = col(0.42, 0.36, 0.28);
+    let hoof = col(0.14, 0.12, 0.10);
+    let nose = col(0.30, 0.26, 0.24);
+    let moving = is_moving(a);
+    let charging: f32 = if a.enraged { 1.0 } else { 0.0 };
+    let breath = (time * 1.8 + a.phase).sin() * 0.012;
+    let rock = (a.phase * 2.0).sin() * 0.03 * moving;
+    let lower = 0.35 * charging + 0.4 * graze(a, time);
+    let mut parts = vec![
+        tilted((0.0, 0.66 + breath, 0.0), (0.46, 0.24 + breath, 0.22), fur, rock),
+        tilted((0.05, 0.60, 0.0), (0.38, 0.16, 0.23), shade, rock),
+        tilted((-0.46, 0.70, 0.0), (0.10, 0.18, 0.15), fur, rock),
+        block((-0.58, 0.82, 0.0), (0.04, 0.07, 0.03), fur),
+    ];
+    // Neck, head with a beard, muzzle and ears.
+    parts.push(tilted((0.50, 0.90 - lower * 0.3, 0.0), (0.12, 0.22, 0.12), fur, -0.7 - lower));
+    let head = (0.72 + lower * 0.05, 1.00 - lower * 0.45, 0.0);
+    parts.push(tilted(head, (0.16, 0.12, 0.11), fur, -0.35 - lower * 0.5));
+    parts.push(tilted((head.0 + 0.17, head.1 - 0.07, 0.0), (0.09, 0.07, 0.07), nose, -0.35 - lower * 0.5));
+    parts.push(block((head.0 + 0.10, head.1 - 0.26, 0.0), (0.025, 0.10, 0.025), shade));
+    eyes(&mut parts, (head.0 + 0.03, head.1 + 0.03, 0.0), 0.11, 0.022, night, col(0.08, 0.06, 0.04));
+    for side in [-1.0f32, 1.0] {
+        parts.push(tilted((head.0 - 0.10, head.1 + 0.08, 0.14 * side), (0.04, 0.02, 0.07), fur, 0.0));
+        // The horn sweeps up and back in three stages.
+        parts.push(tilted((head.0 - 0.06, head.1 + 0.16, 0.07 * side), (0.03, 0.09, 0.03), horn, 0.2));
+        parts.push(tilted((head.0 - 0.14, head.1 + 0.30, 0.08 * side), (0.025, 0.08, 0.025), horn, 0.6));
+        parts.push(tilted((head.0 - 0.24, head.1 + 0.38, 0.08 * side), (0.02, 0.05, 0.02), horn, 1.0));
+    }
+    for (i, &(lx, lz)) in [(0.34, 0.14), (0.34, -0.14), (-0.34, 0.14), (-0.34, -0.14)].iter().enumerate() {
+        let swing = (a.phase * 2.0 + if i == 0 || i == 3 { 0.0 } else { std::f32::consts::PI }).sin() * (0.35 + 0.1 * charging) * moving;
+        leg(&mut parts, (lx, 0.46, lz), 0.24, 0.22, 0.045, swing, shade, hoof);
+    }
+    parts
+}
+
+/// A crawfish: a segmented body with a fan tail, two big claws, feelers, stalked eyes and walking legs. The three kinds share the model; `k`
+/// is how much bigger than the small one it is drawn and `shell` its colour.
+fn crawfish_model(a: &Animal, night: bool, k: f32, shell: Color) -> Vec<Piece> {
+    let belly = col(shell.r * 1.2 + 0.1, shell.g * 1.3 + 0.1, shell.b * 1.3 + 0.08);
+    let dark = col(shell.r * 0.45, shell.g * 0.4, shell.b * 0.4);
+    let moving = is_moving(a);
+    let scuttle = (a.phase * 7.0).sin() * moving;
+    let mut parts = Vec::new();
+    // Head-and-chest shield, then the jointed abdomen and the fan of the tail.
+    parts.push(block((0.08, 0.10, 0.0), (0.16, 0.07, 0.10), shell));
+    parts.push(block((0.08, 0.04, 0.0), (0.14, 0.02, 0.08), belly));
+    parts.push(block((0.27, 0.095, 0.0), (0.05, 0.05, 0.05), shell));
+    for i in 0..4 {
+        let x = -0.14 - 0.085 * i as f32;
+        parts.push(block((x, 0.085 - 0.004 * i as f32, 0.0), (0.045, 0.055 - 0.006 * i as f32, 0.085 - 0.012 * i as f32), if i % 2 == 0 { shell } else { dark }));
+    }
+    for side in [-1.0f32, 1.0] {
+        parts.push(tilted((-0.52, 0.06, 0.05 * side), (0.05, 0.012, 0.035), shell, 0.0));
+    }
+    parts.push(block((-0.54, 0.055, 0.0), (0.05, 0.012, 0.03), shell));
+    // Stalked eyes and long feelers.
+    eyes(&mut parts, (0.30, 0.15, 0.0), 0.035, 0.016, night, col(0.03, 0.03, 0.03));
+    for side in [-1.0f32, 1.0] {
+        parts.push(block((0.40, 0.12, 0.03 * side + 0.02 * side * scuttle), (0.13, 0.006, 0.006), dark));
+    }
+    // Two big claws held out in front, snapping a little as it moves.
+    for side in [-1.0f32, 1.0] {
+        let snap = (a.phase * 5.0 + side).sin() * 0.02 * moving;
+        parts.push(block((0.30, 0.08, 0.14 * side), (0.12, 0.025, 0.025), shell));
+        parts.push(block((0.46, 0.08, 0.17 * side), (0.07, 0.03, 0.045 + snap), shell));
+        parts.push(block((0.52, 0.08, 0.16 * side - 0.03 * side), (0.05, 0.02, 0.02), dark));
+    }
+    // Eight walking legs stepping in diagonal pairs.
+    for (n, x) in [0.14f32, 0.06, -0.02, -0.10].into_iter().enumerate() {
+        for side in [-1.0f32, 1.0] {
+            let step = (a.phase * 7.0 + n as f32 * 1.3 + if side > 0.0 { 0.0 } else { std::f32::consts::PI }).sin() * 0.03 * moving;
+            parts.push(block((x + step, 0.035, 0.13 * side), (0.012, 0.012, 0.07), dark));
+        }
+    }
+    scaled(parts, k)
+}
+
+/// A small river crawfish: red-brown.
+fn crawfish_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
+    crawfish_model(a, night, 1.0, col(0.62, 0.20, 0.12))
+}
+
+/// A big cave crawfish: `BIG_CRAWFISH_MODEL_SCALE` times as big, a brighter orange-red.
+fn big_crawfish_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
+    crawfish_model(a, night, BIG_CRAWFISH_MODEL_SCALE, col(0.80, 0.26, 0.10))
+}
+
+/// The Giant Crawfish: `GIANT_CRAWFISH_MODEL_SCALE` times a small one, a deep crimson.
+fn giant_crawfish_parts(a: &Animal, _time: f32, night: bool) -> Vec<Piece> {
+    crawfish_model(a, night, GIANT_CRAWFISH_MODEL_SCALE, col(0.58, 0.07, 0.07))
+}
+
+/// The Dragon: a long green-black body with a pale belly, a neck and horned head whose jaw drops while it breathes fire, a tail that
+/// sways, and two huge wings that beat. Built about one block long and drawn `DRAGON_MODEL_SCALE` times that, the biggest creature in the game.
+fn dragon_parts(a: &Animal, time: f32, _night: bool) -> Vec<Piece> {
+    let scale = col(0.14, 0.34, 0.20);
+    let dark = col(0.07, 0.17, 0.12);
+    let belly = col(0.84, 0.72, 0.40);
+    let horn = col(0.92, 0.88, 0.74);
+    let membrane = col(0.50, 0.12, 0.14);
+    let bone = col(0.10, 0.22, 0.15);
+    let flap = (time * 2.6 + a.phase * 0.02).sin();
+    let breathing = a.action == BossAction::Breathe;
+    let sway = (time * 1.8).sin();
+    let mut parts = vec![
+        block((0.0, 0.34, 0.0), (0.40, 0.17, 0.18), scale),
+        block((0.0, 0.22, 0.0), (0.37, 0.06, 0.14), belly),
+        block((0.05, 0.52, 0.0), (0.22, 0.03, 0.04), dark),
+    ];
+    // A ridge of spines down the back.
+    for i in 0..6 {
+        parts.push(block((0.30 - 0.12 * i as f32, 0.54, 0.0), (0.025, 0.04, 0.02), horn));
+    }
+    // Neck and head: rising in front of the body, the head level, a lower jaw that drops when it breathes.
+    parts.push(tilted((0.48, 0.44, 0.0), (0.17, 0.10, 0.11), scale, -0.45));
+    parts.push(tilted((0.64, 0.58, 0.0), (0.15, 0.09, 0.10), scale, -0.30));
+    let head = (0.84, 0.64, 0.0);
+    parts.push(block(head, (0.17, 0.09, 0.12), scale));
+    parts.push(block((head.0 + 0.19, head.1 - 0.015, 0.0), (0.13, 0.06, 0.085), dark));
+    let drop = if breathing { 0.11 } else { 0.0 };
+    parts.push(tilted((head.0 + 0.14, head.1 - 0.085 - drop, 0.0), (0.15, 0.025, 0.08), belly, if breathing { 0.35 } else { 0.0 }));
+    if breathing {
+        parts.push(block((head.0 + 0.20, head.1 - 0.05, 0.0), (0.08, 0.03, 0.05), col(1.0, 0.55, 0.10)));
+    }
+    for side in [-1.0f32, 1.0] {
+        parts.push(tilted((head.0 - 0.10, head.1 + 0.14, 0.08 * side), (0.12, 0.022, 0.022), horn, 0.5));
+        parts.push(block((head.0 + 0.02, head.1 + 0.10, 0.10 * side), (0.05, 0.02, 0.02), dark));
+    }
+    eyes(&mut parts, (head.0 + 0.06, head.1 + 0.05, 0.0), 0.12, 0.03, true, col(1.0, 0.82, 0.10));
+    // Tail: segments shrinking backwards and swinging from side to side.
+    for i in 0..7 {
+        let t = i as f32;
+        let x = -0.46 - 0.17 * t;
+        let z = sway * 0.06 * t * (1.0 + 0.12 * t);
+        parts.push(block((x, 0.32 - 0.02 * t, z), (0.10, 0.12 - 0.014 * t, 0.12 - 0.014 * t), if i % 2 == 0 { scale } else { dark }));
+    }
+    parts.push(block((-1.72, 0.18, sway * 0.5), (0.05, 0.05, 0.05), horn));
+    // Four short legs tucked under it.
+    for (x, side) in [(0.22f32, 1.0f32), (0.22, -1.0), (-0.22, 1.0), (-0.22, -1.0)] {
+        parts.push(block((x, 0.12, 0.17 * side), (0.05, 0.09, 0.05), dark));
+        parts.push(block((x + 0.04, 0.025, 0.17 * side), (0.08, 0.025, 0.045), horn));
+    }
+    // Two wings: an arm out from the shoulder with panels of membrane that beat up and down together.
+    for side in [-1.0f32, 1.0] {
+        parts.push(tilted((0.14, 0.50 + 0.12 * flap, 0.30 * side), (0.035, 0.025, 0.30), bone, 0.3 * flap * side));
+        for i in 0..4 {
+            let t = i as f32;
+            let reach = 0.30 + 0.30 * t;
+            parts.push(tilted((0.10 - 0.07 * t, 0.50 + (0.12 + 0.07 * t) * flap, reach * side), (0.17 - 0.02 * t, 0.012, 0.15), membrane, 0.35 * flap * side));
+            parts.push(tilted((0.16 - 0.07 * t, 0.50 + (0.12 + 0.07 * t) * flap, reach * side), (0.015, 0.014, 0.15), bone, 0.35 * flap * side));
+        }
+    }
+    scaled(parts, DRAGON_MODEL_SCALE)
 }
 
 /// The Unicorn: a tall white horse with a golden spiralled horn, a mane and tail in three pastel colours, and golden hooves. It
@@ -778,9 +970,9 @@ fn bat_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
     parts
 }
 
-/// A vampire bat: a bat five times the size, with crimson wings, a blood-red gleam in its eyes by day and night, and two white fangs.
+/// A vampire bat: a bat `VAMPIRE_BAT_MODEL_SCALE` times the size, with crimson wings, a blood-red gleam in its eyes by day and night, and two white fangs.
 fn vampire_bat_parts(a: &Animal, time: f32, night: bool) -> Vec<Piece> {
-    const K: f32 = 3.4;
+    const K: f32 = VAMPIRE_BAT_MODEL_SCALE;
     let mut parts = scaled(bat_parts(a, time, night), K);
     for ((_, _, c), _) in parts.iter_mut() {
         // The membrane of the small bat becomes a deep crimson, and its fur a purple-black.
@@ -1164,8 +1356,14 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::Jaguar => jaguar_parts(a, time, night),
             AnimalKind::FlyingSnake => flying_snake_parts(a, time, night),
             AnimalKind::Newt => newt_parts(a, time, night),
+            AnimalKind::Fairy => fairy_parts(a, time, night),
+            AnimalKind::MountainGoat => goat_parts(a, time, night),
             AnimalKind::Unicorn => unicorn_parts(a, time, night),
             AnimalKind::BearBoss => bear_boss_parts(a, time, night),
+            AnimalKind::Crawfish => crawfish_parts(a, time, night),
+            AnimalKind::BigCrawfish => big_crawfish_parts(a, time, night),
+            AnimalKind::GiantCrawfish => giant_crawfish_parts(a, time, night),
+            AnimalKind::Dragon => dragon_parts(a, time, night),
             // Drawn by `draw_ghosts`, see-through.
             AnimalKind::SpiritArcher => continue,
             _ => continue,
@@ -1310,7 +1508,7 @@ mod tests {
         let newt = models(&creature(AnimalKind::Newt), 0.0, false);
         let reach = newt.iter().map(|((off, half, _), _)| (off.0.abs() + half.0).max(off.2.abs() + half.2)).fold(0.0_f32, f32::max);
         let top = newt.iter().map(|((off, half, _), _)| off.1 + half.1).fold(0.0_f32, f32::max);
-        assert!(reach < 0.6 && top < 0.25, "a newt is tiny: {reach} long, {top} high");
+        assert!(reach < 1.2 && top < 0.5, "a newt is small: {reach} long, {top} high");
         assert!(newt.iter().any(|((_, _, c), _)| c.r > 0.9 && c.g < 0.6 && c.b < 0.2), "orange beneath");
         let unicorn = models(&creature(AnimalKind::Unicorn), 0.0, false);
         let top = unicorn.iter().map(|((off, half, _), _)| off.1 + half.1).fold(0.0_f32, f32::max);
@@ -1390,8 +1588,14 @@ mod tests {
             AnimalKind::Jaguar => jaguar_parts(a, time, night),
             AnimalKind::FlyingSnake => flying_snake_parts(a, time, night),
             AnimalKind::Newt => newt_parts(a, time, night),
+            AnimalKind::Fairy => fairy_parts(a, time, night),
+            AnimalKind::MountainGoat => goat_parts(a, time, night),
             AnimalKind::Unicorn => unicorn_parts(a, time, night),
             AnimalKind::BearBoss => bear_boss_parts(a, time, night),
+            AnimalKind::Crawfish => crawfish_parts(a, time, night),
+            AnimalKind::BigCrawfish => big_crawfish_parts(a, time, night),
+            AnimalKind::GiantCrawfish => giant_crawfish_parts(a, time, night),
+            AnimalKind::Dragon => dragon_parts(a, time, night),
             AnimalKind::SpiritArcher => spirit_parts(a, time),
             kind if kind.is_wild_hunt() => hunt_parts(a, time),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => hunt_parts(a, time),

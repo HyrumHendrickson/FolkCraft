@@ -452,7 +452,7 @@ impl World {
 
     /// Harvest a bush once, leaving the bush itself in place.
     pub fn pick_berry_bush(&mut self, pos: Pos) -> bool {
-        if self.block_at(pos.0, pos.1, pos.2) != Block::Bush || !self.berry_picked.insert(pos) {
+        if !self.block_at(pos.0, pos.1, pos.2).is_pickable() || !self.berry_picked.insert(pos) {
             return false;
         }
         let key = Self::chunk_of(pos.0, pos.2);

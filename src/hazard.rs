@@ -19,6 +19,8 @@ pub enum ProjectileKind {
     Fireball,
     /// A rock hurled by the Orangutan: it arcs under gravity.
     Rock,
+    /// One flame of the Dragon's breath: it flies straight and fast and bursts small.
+    DragonFire,
 }
 
 impl ProjectileKind {
@@ -28,13 +30,14 @@ impl ProjectileKind {
             ProjectileKind::IceBall => ICE_BALL_SPEED,
             ProjectileKind::Fireball => FIREBALL_SPEED,
             ProjectileKind::Rock => ROCK_SPEED,
+            ProjectileKind::DragonFire => DRAGON_FLAME_SPEED,
         }
     }
 
     pub fn gravity(self) -> f32 {
         match self {
             ProjectileKind::IceBall => ICE_BALL_GRAVITY,
-            ProjectileKind::Fireball => 0.0,
+            ProjectileKind::Fireball | ProjectileKind::DragonFire => 0.0,
             ProjectileKind::Rock => ROCK_GRAVITY,
         }
     }
@@ -45,6 +48,7 @@ impl ProjectileKind {
             ProjectileKind::IceBall => ICE_BURST_RADIUS,
             ProjectileKind::Fireball => FIREBALL_RADIUS,
             ProjectileKind::Rock => ROCK_BURST_RADIUS,
+            ProjectileKind::DragonFire => DRAGON_FLAME_RADIUS,
         }
     }
 
@@ -53,6 +57,7 @@ impl ProjectileKind {
             ProjectileKind::IceBall => ICE_BURST_DAMAGE,
             ProjectileKind::Fireball => FIREBALL_DAMAGE,
             ProjectileKind::Rock => ROCK_BURST_DAMAGE,
+            ProjectileKind::DragonFire => DRAGON_FLAME_DAMAGE,
         }
     }
 
@@ -62,6 +67,7 @@ impl ProjectileKind {
             ProjectileKind::IceBall => "The Yeti's ice shattered you",
             ProjectileKind::Fireball => "A fireball burned you to death",
             ProjectileKind::Rock => "The Orangutan's rock crushed you",
+            ProjectileKind::DragonFire => "The Dragon's fire burned you to death",
         }
     }
 }
