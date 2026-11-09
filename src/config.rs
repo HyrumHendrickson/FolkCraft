@@ -541,7 +541,7 @@ pub const HOLLY_ROD_REACH: f32 = 64.0;
 /// Every creature within this many blocks of a lightning strike is hurt: `LIGHTNING_DAMAGE` at the centre, falling
 /// to half of it at the edge. Even a moose or a bear feels it (it is enough to kill a deer, a rabbit or a quail).
 pub const LIGHTNING_RADIUS: f32 = 5.0;
-pub const LIGHTNING_DAMAGE: i32 = 30;
+pub const LIGHTNING_DAMAGE: i32 = 60;
 /// How wide (blocks) the main trunk of a bolt is drawn, and how bright the whole screen flashes at the strike.
 pub const LIGHTNING_BOLT_WIDTH: f32 = 0.34;
 /// A bolt is drawn from at least this far above where it lands, even if the clouds are lower than that.
@@ -592,8 +592,8 @@ pub const BOWLS_PER_LOG: u32 = 5;
 pub const AXE_DAMAGE: i32 = 6;
 pub const COPPER_AXE_DAMAGE: i32 = 8;
 pub const BRONZE_AXE_DAMAGE: i32 = 10;
-pub const IRON_AXE_DAMAGE: i32 = 12;
-pub const MALLET_DAMAGE: i32 = 6;
+pub const IRON_AXE_DAMAGE: i32 = 14;
+pub const MALLET_DAMAGE: i32 = 12;
 pub const ARROW_DAMAGE: i32 = 8;
 pub const SLING_DAMAGE: i32 = 4;
 pub const SLING_COOLDOWN: f32 = 0.8;
@@ -799,7 +799,7 @@ pub const TIN_PAN_RABBIT_FOOT_GOLD_CHANCE: u64 = 20;
 pub const GOLD_BOULDER_GOLD_DROP: u32 = 6;
 pub const BREAK_SECONDS_GOLD_BOULDER: f32 = 2.0;
 /// Excalibur: the best weapon in the game.
-pub const EXCALIBUR_DAMAGE: i32 = 24;
+pub const EXCALIBUR_DAMAGE: i32 = 18;
 pub const EXCALIBUR_COOLDOWN: f32 = 0.35;
 pub const EXCALIBUR_REACH: f32 = 4.5;
 
@@ -1495,7 +1495,7 @@ pub const HORIZEN_CRYSTAL_CLEAR_RADIUS: f32 = 3.5;
 // --- The general store, the sword, tornado-free spawn island ------------------------------------
 
 /// A sword hits two harder than an iron axe.
-pub const SWORD_DAMAGE: i32 = IRON_AXE_DAMAGE + 2;
+pub const SWORD_DAMAGE: i32 = 16;
 /// The general store's ghost stands on the Skylands' first island, this many blocks (east, south) of where the player arrives.
 pub const SHOP_OFFSET: (i32, i32) = (5, 2);
 /// How close (blocks) the player must be, looking at him, to trade; and how close for the pipes to be heard.
@@ -1584,7 +1584,7 @@ pub const CRYSTAL_BALL_STARDUST: u32 = 10;
 /// The Unicorn drops `UNICORN_HORN_DROP` Unicorn Horn, which is crafted (with a leather cord) into a **Unicorn Sword**: it hits harder than
 /// Excalibur, with the same reach and swing, but does no extra damage to the Wild Hunt.
 pub const UNICORN_HORN_DROP: u32 = 1;
-pub const UNICORN_SWORD_DAMAGE: i32 = EXCALIBUR_DAMAGE + 8;
+pub const UNICORN_SWORD_DAMAGE: i32 = 22;
 pub const UNICORN_SWORD_COOLDOWN: f32 = EXCALIBUR_COOLDOWN;
 pub const UNICORN_SWORD_REACH: f32 = EXCALIBUR_REACH;
 
