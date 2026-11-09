@@ -594,7 +594,7 @@ pub const COPPER_AXE_DAMAGE: i32 = 8;
 pub const BRONZE_AXE_DAMAGE: i32 = 10;
 pub const IRON_AXE_DAMAGE: i32 = 14;
 pub const MALLET_DAMAGE: i32 = 12;
-pub const ARROW_DAMAGE: i32 = 8;
+pub const ARROW_DAMAGE: i32 = 12;
 pub const SLING_DAMAGE: i32 = 4;
 pub const SLING_COOLDOWN: f32 = 0.8;
 pub const SLING_SPEED: f32 = 26.0;
@@ -923,13 +923,13 @@ pub const BAT_CAVE_MIN_AIR: i32 = 5;
 ///   `HUNT_GHOST_BEARS` bears and the first `HUNT_GHOST_CROWS` crows each split in two when killed: `HUNT_SPLIT_INTO` more of the same kind
 ///   come (and those do not split again).
 /// Excalibur does `EXCALIBUR_HUNT_FACTOR` times its damage to all of them. Beating them all wins the game (the game goes on).
-pub const HUNT_SWORDSMAN_HEALTH: i32 = 200;
-pub const HUNT_ARCHER_HEALTH: i32 = 120;
-pub const HUNT_LANCER_HEALTH: i32 = 140;
+pub const HUNT_SWORDSMAN_HEALTH: i32 = 240;
+pub const HUNT_ARCHER_HEALTH: i32 = 140;
+pub const HUNT_LANCER_HEALTH: i32 = 180;
 pub const HUNT_BEAR_HEALTH: i32 = 60;
 pub const HUNT_CROW_HEALTH: i32 = 10;
-pub const HUNT_GHOST_BEARS: usize = 2;
-pub const HUNT_GHOST_CROWS: usize = 4;
+pub const HUNT_GHOST_BEARS: usize = 4;
+pub const HUNT_GHOST_CROWS: usize = 2;
 pub const HUNT_SPLIT_INTO: usize = 2;
 pub const HUNT_HALF_WIDTH: f32 = 0.4;
 pub const HUNT_HEIGHT: f32 = 1.9;
@@ -1584,7 +1584,7 @@ pub const CRYSTAL_BALL_STARDUST: u32 = 10;
 /// The Unicorn drops `UNICORN_HORN_DROP` Unicorn Horn, which is crafted (with a leather cord) into a **Unicorn Sword**: it hits harder than
 /// Excalibur, with the same reach and swing, but does no extra damage to the Wild Hunt.
 pub const UNICORN_HORN_DROP: u32 = 1;
-pub const UNICORN_SWORD_DAMAGE: i32 = 22;
+pub const UNICORN_SWORD_DAMAGE: i32 = 18;
 pub const UNICORN_SWORD_COOLDOWN: f32 = EXCALIBUR_COOLDOWN;
 pub const UNICORN_SWORD_REACH: f32 = EXCALIBUR_REACH;
 
