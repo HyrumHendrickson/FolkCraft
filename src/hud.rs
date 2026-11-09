@@ -774,6 +774,19 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
             draw_line(pts[0].x + 2.0 * u, pts[0].y + 2.0 * u, pts[2].x + 1.0 * u, pts[2].y, 1.2, WHITE);
             ball(p(0.70, 0.60).x, p(0.70, 0.60).y, 1.8 * u, Color::new(0.50, 0.85, 0.22, 1.0));
         }
+        ItemKind::PoisonIvy => {
+            // A red stem with three glossy, pointed leaves.
+            let (root, top) = (p(0.50, 0.88), p(0.50, 0.38));
+            rod(root, top, 2.6 * u, Color::new(0.55, 0.16, 0.14, 1.0));
+            for tip in [p(0.22, 0.30), p(0.78, 0.30), p(0.50, 0.10)] {
+                let dir = (tip - top).normalize();
+                let perp = vec2(-dir.y, dir.x);
+                let mid = top + (tip - top) * 0.55;
+                tri(top, mid + perp * 6.5 * u, tip, color);
+                tri(top, mid - perp * 6.5 * u, tip, darken(color, 0.84));
+                draw_line(top.x, top.y, tip.x, tip.y, 1.0, darken(color, 0.6));
+            }
+        }
         ItemKind::PoisonArrow => {
             // An arrow with a green, fang-shaped head and a drip of poison.
             let (tail, tip) = (p(0.20, 0.80), p(0.76, 0.24));
@@ -973,8 +986,6 @@ pub fn draw_item_icon(kind: ItemKind, r: Rect) {
 /// What the compass needle points at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompassTarget {
-    /// North, until the world's mountain is out.
-    North,
     /// The world's mountain.
     Mountain,
     /// Where the player arrived, in the Horizen and the Skylands.
@@ -985,16 +996,15 @@ impl CompassTarget {
     /// The letter drawn at the needle's tip.
     fn letter(self) -> &'static str {
         match self {
-            CompassTarget::North => "N",
             CompassTarget::Mountain => "M",
             CompassTarget::Spawn => "S",
         }
     }
 }
 
-/// The compass in hand: a dial in the top right whose red needle points north (the way to a mountain) until the world's mountain is out, and at the mountain after and
-/// whose tail points south, turning as the player turns, with the blocks walked north so far below it.
-pub fn draw_compass(yaw: f32, bearing: f32, progress: f32, target: CompassTarget) {
+/// The compass in hand: a dial in the top right whose red needle points at the world's mountain (or, in the other dimensions, at where
+/// the player arrived) and whose tail points the other way, turning as the player turns.
+pub fn draw_compass(yaw: f32, bearing: f32, target: CompassTarget) {
     let (w, radius) = (screen_width(), 46.0);
     let (cx, cy) = (w - radius - 24.0, radius + 56.0);
     draw_circle(cx, cy, radius + 4.0, Color::new(0.0, 0.0, 0.0, 0.6));
@@ -1007,7 +1017,6 @@ pub fn draw_compass(yaw: f32, bearing: f32, progress: f32, target: CompassTarget
     let line = match target {
         CompassTarget::Mountain => "Points to the mountain".to_string(),
         CompassTarget::Spawn => "Points to where you arrived".to_string(),
-        CompassTarget::North => format!("North {:.0}/{} blocks", progress.min((COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32), COMPASS_TREK_CHUNKS * CHUNK_SIZE),
     };
     draw_text(&line, cx - radius - 12.0, cy + radius + 26.0, 20.0, WHITE);
 }

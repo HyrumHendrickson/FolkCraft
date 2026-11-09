@@ -79,6 +79,9 @@ pub enum AnimalKind {
     HuntSwordsman,
     /// ...one shoots arrows from afar...
     HuntArcher,
+    /// A hostile spirit archer that holds a room of the king's dungeon in the Horizen (`kingcastle.rs`): the Wild Hunt's archer in the
+    /// pale blue of the king's spirits. It keeps its distance, side-steps and shoots. Not part of the Hunt (no boss bar, no victory).
+    SpiritGuard,
     /// ...two ride ghostly horses, charge with a lance, gallop away, rest and charge again...
     HuntLancer,
     /// ...and ghostly bears and crows come with them.
@@ -122,6 +125,7 @@ impl AnimalKind {
             AnimalKind::Bat => BAT_HEALTH,
             AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_HEALTH,
             AnimalKind::HuntArcher => HUNT_ARCHER_HEALTH,
+            AnimalKind::SpiritGuard => SPIRIT_GUARD_HEALTH,
             AnimalKind::HuntLancer => HUNT_LANCER_HEALTH,
             AnimalKind::HuntBear => HUNT_BEAR_HEALTH,
             AnimalKind::HuntCrow => HUNT_CROW_HEALTH,
@@ -162,6 +166,12 @@ impl AnimalKind {
     /// Whether this creature lives in the water and keeps to wet columns (the crawfish).
     pub fn is_aquatic(self) -> bool {
         matches!(self, AnimalKind::Crawfish | AnimalKind::BigCrawfish | AnimalKind::GiantCrawfish)
+    }
+
+    /// Whether this water creature comes out of the water to chase the player while it is attacking (the big and the giant crawfish). The
+    /// small crawfish never attacks, so it never leaves the water; and none of them wanders on land, only fights there.
+    pub fn can_leave_water(self) -> bool {
+        matches!(self, AnimalKind::BigCrawfish | AnimalKind::GiantCrawfish)
     }
 
     /// Whether this is a bat-like flier: it hovers about the player's body, weaving, and bites.
@@ -248,7 +258,7 @@ impl AnimalKind {
             AnimalKind::Crow => 0.2,
             AnimalKind::IronQuail | AnimalKind::BronzeParrot => 1.0,
             AnimalKind::Bat => BAT_HALF_WIDTH,
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher => HUNT_HALF_WIDTH,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::SpiritGuard => HUNT_HALF_WIDTH,
             AnimalKind::HuntLancer => HUNT_LANCER_HALF_WIDTH,
             AnimalKind::HuntBear => 0.55,
             AnimalKind::HuntCrow => 0.2,
@@ -285,7 +295,7 @@ impl AnimalKind {
             AnimalKind::Crow => 0.45,
             AnimalKind::IronQuail | AnimalKind::BronzeParrot => 2.2,
             AnimalKind::Bat => BAT_HEIGHT,
-            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher => HUNT_HEIGHT,
+            AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::SpiritGuard => HUNT_HEIGHT,
             AnimalKind::HuntLancer => HUNT_LANCER_HEIGHT,
             AnimalKind::HuntBear => 1.4,
             AnimalKind::HuntCrow => 0.45,
@@ -323,7 +333,7 @@ impl AnimalKind {
             AnimalKind::BronzeParrot => BRONZE_PARROT_RUN_SPEED,
             AnimalKind::Bat => BAT_WANDER_SPEED,
             AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_SPEED,
-            AnimalKind::HuntArcher => HUNT_ARCHER_STRAFE_SPEED,
+            AnimalKind::HuntArcher | AnimalKind::SpiritGuard => HUNT_ARCHER_STRAFE_SPEED,
             AnimalKind::HuntLancer => HUNT_LANCER_CHARGE_SPEED,
             AnimalKind::HuntBear => HUNT_BEAR_SPEED,
             AnimalKind::HuntCrow => HUNT_CROW_SPEED,
@@ -362,7 +372,7 @@ impl AnimalKind {
             AnimalKind::Crawfish | AnimalKind::BigCrawfish | AnimalKind::GiantCrawfish => (1.5, 4.0),
             AnimalKind::Jaguar => (2.0, 5.0),
             AnimalKind::Dragon => (1.0, 1.0),
-            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => (1.0, 1.0),
+            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::SpiritGuard | AnimalKind::FlyingSnake => (1.0, 1.0),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
         }
     }
@@ -385,7 +395,7 @@ impl AnimalKind {
             AnimalKind::Crawfish | AnimalKind::BigCrawfish | AnimalKind::GiantCrawfish => (1.0, 3.0),
             AnimalKind::Jaguar => (2.0, 4.0),
             AnimalKind::Dragon => (1.0, 1.0),
-            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::FlyingSnake => (1.0, 1.0),
+            AnimalKind::Raven | AnimalKind::Phoenix | AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::SpiritGuard | AnimalKind::FlyingSnake => (1.0, 1.0),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => (1.0, 1.0),
         }
     }
@@ -405,7 +415,7 @@ impl AnimalKind {
         match self {
             AnimalKind::Rabbit => RABBIT_RUN_SPEED,
             AnimalKind::WillOWhisp => WILL_O_WHISP_FLEE_SPEED,
-            AnimalKind::HuntArcher => HUNT_ARCHER_SPEED,
+            AnimalKind::HuntArcher | AnimalKind::SpiritGuard => HUNT_ARCHER_SPEED,
             _ => DEER_RUN_SPEED,
         }
     }
@@ -562,7 +572,7 @@ impl AnimalKind {
             }
             AnimalKind::FlyingSnake => add(ItemKind::SnakeFang, rng.range(SNAKE_FANG_DROP_MIN as i32, SNAKE_FANG_DROP_MAX as i32 + 1) as u32),
             // Bats and the ghostly creatures of the Wild Hunt leave nothing behind.
-            AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => {}
+            AnimalKind::Bat | AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::SpiritGuard | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => {}
         }
         out
     }
@@ -692,7 +702,8 @@ pub struct Animal {
     /// Where a boss appeared: it never strays further than its leash from here.
     pub home: Vec3,
     /// A crow: blocks flown west so far with the player following (see `Game::update_crows`).
-    pub west_followed: f32,
+    /// The altar (x, z) a crow that has taken off is flying to, if there is one.
+    pub altar_goal: Option<(f32, f32)>,
     /// A quail or crow called by the pipes: where it is flying to, to land.
     pub lure_target: Option<Vec3>,
     /// Seconds a bird that has come to the pipes still stands quite still.
@@ -862,7 +873,7 @@ impl Animal {
             bonded: false,
             orbit: 0.0,
             home: pos,
-            west_followed: 0.0,
+            altar_goal: None,
             lure_target: None,
             calm: 0.0,
             hunting: false,
@@ -908,6 +919,7 @@ impl Animal {
         match kind {
             // The archer takes a moment to nock its first arrow.
             AnimalKind::HuntArcher => a.shoot_timer = HUNT_ARCHER_INTERVAL / 2.0,
+            AnimalKind::SpiritGuard => a.shoot_timer = SPIRIT_GUARD_INTERVAL / 2.0,
             // An Iron Quail shoots its first feather a moment after it comes, and each starts at a different point of its cycle.
             AnimalKind::IronQuail | AnimalKind::BronzeParrot => {
                 a.shoot_timer = IRON_QUAIL_FEATHER_INTERVAL * (0.3 + 0.7 * rng.unit());
@@ -1100,6 +1112,25 @@ impl Animal {
         range.0 + rng.unit() * (range.1 - range.0)
     }
 
+    /// The heading from a water creature on dry land to the nearest water within `CRAWFISH_SHORE_SEARCH` blocks (sixteen directions are
+    /// tried, nearest first), or `None` if there is none in reach.
+    fn heading_to_water(&self, world: &World) -> Option<f32> {
+        let mut best: Option<(i32, f32)> = None;
+        for k in 0..16 {
+            let h = k as f32 * std::f32::consts::TAU / 16.0;
+            for d in 1..=CRAWFISH_SHORE_SEARCH as i32 {
+                let (x, z) = ((self.pos.x + h.cos() * d as f32).floor() as i32, (self.pos.z + h.sin() * d as f32).floor() as i32);
+                if world.is_wet_column(x, z) {
+                    if best.map_or(true, |(bd, _)| d < bd) {
+                        best = Some((d, h));
+                    }
+                    break;
+                }
+            }
+        }
+        best.map(|(_, h)| h)
+    }
+
     /// Stand still for a while.
     fn rest(&mut self, rng: &mut Rng) {
         self.mode = Mode::Idle;
@@ -1111,39 +1142,15 @@ impl Animal {
     pub fn call_to(&mut self, target: Vec3) {
         if matches!(self.kind, AnimalKind::Quail | AnimalKind::Crow | AnimalKind::Parrot) {
             self.lure_target = Some(target);
-            self.west_followed = 0.0;
+            self.altar_goal = None;
             self.calm = 0.0;
             self.alarm = 0.0;
         }
     }
 
-    /// Whether a crow taking off here could fly west: nothing solid in the way for `CROW_WEST_LOOKAHEAD` blocks at flying height.
-    fn can_fly_west(&self, world: &World) -> bool {
-        let (half, h) = (self.kind.half_width(), self.kind.height());
-        let y = self.pos.y + QUAIL_FLY_HEIGHT;
-        (1..=CROW_WEST_LOOKAHEAD).all(|i| {
-            let x = self.pos.x - i as f32;
-            !world.box_blocked(vec3(x - half, y, self.pos.z - half), vec3(x + half, y + h, self.pos.z + half))
-        })
-    }
-
     /// Whether the animal is off the ground (drawn with its wings beating, for the Iron Quail).
     pub fn is_airborne(&self) -> bool {
         !self.on_ground
-    }
-
-    /// Whether a crow is coming down to land (the last part of a flight).
-    pub fn is_landing(&self) -> bool {
-        self.mode == Mode::Fly && self.timer <= QUAIL_DESCENT_TIME
-    }
-
-    /// Set the animal down at `pos` and let it rest there (a crow at an altar).
-    pub fn land_at(&mut self, pos: Vec3, rng: &mut Rng) {
-        self.pos = pos;
-        self.vel = Vec3::ZERO;
-        self.on_ground = true;
-        self.west_followed = 0.0;
-        self.rest(rng);
     }
 
     /// Whether a boss is below half health (the Yeti then runs and strikes faster).
@@ -1268,7 +1275,7 @@ impl Animal {
     pub fn ready_to_shoot(&self, player: Vec3) -> bool {
         let gap = (self.pos - player).length();
         match self.kind {
-            AnimalKind::HuntArcher => self.shoot_timer <= 0.0 && gap <= HUNT_ARCHER_RANGE,
+            AnimalKind::HuntArcher | AnimalKind::SpiritGuard => self.shoot_timer <= 0.0 && gap <= HUNT_ARCHER_RANGE,
             AnimalKind::IronQuail | AnimalKind::BronzeParrot => self.shoot_timer <= 0.0 && (IRON_QUAIL_FEATHER_MIN_RANGE..=IRON_QUAIL_FEATHER_MAX_RANGE).contains(&gap),
             _ => false,
         }
@@ -1279,6 +1286,7 @@ impl Animal {
     pub fn shot_fired(&mut self, slowdown: f32) {
         self.shoot_timer = match self.kind {
             AnimalKind::IronQuail | AnimalKind::BronzeParrot => IRON_QUAIL_FEATHER_INTERVAL,
+            AnimalKind::SpiritGuard => SPIRIT_GUARD_INTERVAL * slowdown,
             _ => HUNT_ARCHER_INTERVAL * slowdown,
         };
     }
@@ -1373,9 +1381,21 @@ impl Animal {
                     self.mode = Mode::Fly;
                     self.timer = Self::random_time((QUAIL_FLIGHT_MIN, QUAIL_FLIGHT_MAX), rng);
                     self.launch_y = self.pos.y;
-                    // A crow always flies west, if it can; otherwise it flies away like a quail.
-                    self.heading = if self.kind == AnimalKind::Crow && self.can_fly_west(world) { std::f32::consts::PI } else { away };
+                    // A crow flies to the nearest ancient altar, if there is one in reach; otherwise it flies away like a quail.
+                    self.heading = away;
+                    self.altar_goal = None;
+                    if self.kind == AnimalKind::Crow && world.dimension == crate::horizen::Dimension::Overworld {
+                        let nearest = crate::terrain::nearest_altar(world.seed, &world.landmarks, self.pos.x.floor() as i32, self.pos.z.floor() as i32, CROW_ALTAR_SEEK_DISTANCE);
+                        self.altar_goal = nearest.map(|(x, z)| (x as f32 + 0.5, z as f32 + 0.5));
+                    }
                     dropped = Some(ItemKind::Feather);
+                }
+                if let (Some((ax, az)), true, None) = (self.altar_goal, self.mode == Mode::Fly, self.lure_target) {
+                    // On its way to the altar the crow steers for it, and starts to come down when it is there.
+                    self.heading = (az - self.pos.z).atan2(ax - self.pos.x);
+                    if vec2(ax - self.pos.x, az - self.pos.z).length() < CROW_ALTAR_LANDING_GAP && self.timer > QUAIL_DESCENT_TIME {
+                        self.timer = QUAIL_DESCENT_TIME;
+                    }
                 }
                 if let Some(t) = self.lure_target {
                     let gap = vec2(t.x - self.pos.x, t.z - self.pos.z).length();
@@ -1397,6 +1417,7 @@ impl Animal {
                 }
                 let landing = self.timer <= QUAIL_DESCENT_TIME;
                 if self.mode == Mode::Fly && (self.timer <= 0.0 || (landing && self.on_ground)) {
+                    self.altar_goal = None;
                     self.rest(rng);
                     if self.calm > 0.0 {
                         self.timer = self.calm;
@@ -1513,16 +1534,18 @@ impl Animal {
                     self.heading = towards + detour;
                 }
             }
-            AnimalKind::HuntArcher => {
+            AnimalKind::HuntArcher | AnimalKind::SpiritGuard => {
                 self.hunt_timer -= dt;
                 if self.hunt_timer <= 0.0 {
                     self.strafe = -self.strafe;
                     self.hunt_timer = 2.5;
                 }
-                if flat_gap < HUNT_ARCHER_MIN_RANGE {
+                // A guard fights in the rooms of the dungeon, so it keeps a much shorter distance than the Hunt's archers do.
+                let (min_range, max_range) = if self.kind == AnimalKind::SpiritGuard { (SPIRIT_GUARD_MIN_RANGE, SPIRIT_GUARD_MAX_RANGE) } else { (HUNT_ARCHER_MIN_RANGE, HUNT_ARCHER_MAX_RANGE) };
+                if flat_gap < min_range {
                     self.mode = Mode::Flee;
                     self.heading = away + detour;
-                } else if flat_gap > HUNT_ARCHER_MAX_RANGE {
+                } else if flat_gap > max_range {
                     self.mode = Mode::Charge;
                     self.heading = towards + detour;
                 } else {
@@ -1820,7 +1843,7 @@ impl Animal {
             Mode::Charge if self.kind == AnimalKind::HuntCrow => HUNT_CROW_SPEED,
             Mode::Charge if self.kind == AnimalKind::HuntBear => HUNT_BEAR_SPEED,
             Mode::Charge if self.kind == AnimalKind::HuntSwordsman => HUNT_SWORDSMAN_SPEED,
-            Mode::Charge if self.kind == AnimalKind::HuntArcher => HUNT_ARCHER_SPEED,
+            Mode::Charge if matches!(self.kind, AnimalKind::HuntArcher | AnimalKind::SpiritGuard) => HUNT_ARCHER_SPEED,
             Mode::Charge if self.kind == AnimalKind::HuntLancer => match self.hunt_phase {
                 HuntPhase::Dash => HUNT_LANCER_CHARGE_SPEED,
                 HuntPhase::Retreat => HUNT_LANCER_RETREAT_SPEED,
@@ -1873,10 +1896,17 @@ impl Animal {
                     self.heading = wanted;
                 }
             }
-        } else if self.kind.is_aquatic() {
-            // A crawfish keeps to the water: when the way ahead is dry it turns to the nearest wet way, or stands still.
+        } else if self.kind.is_aquatic() && !(self.kind.can_leave_water() && self.mode == Mode::Charge) {
+            // A crawfish keeps to the water: when the way ahead is dry it turns to the nearest wet way, or stands still. (A big or giant one
+            // that is attacking is not held to the water: it falls through to the boss steering below and follows the player ashore.)
             self.knock = Vec3::ZERO;
-            if speed > 0.0 {
+            if !world.is_wet_column(self.pos.x.floor() as i32, self.pos.z.floor() as i32) {
+                // Left on dry land (it has stopped attacking): make for the nearest water.
+                if let Some(h) = self.heading_to_water(world) {
+                    self.heading = h;
+                    speed = self.kind.walk_speed();
+                }
+            } else if speed > 0.0 {
                 let reach = speed * dt + self.kind.half_width() + 0.3;
                 let ok = |h: f32| world.is_wet_column((self.pos.x + h.cos() * reach).floor() as i32, (self.pos.z + h.sin() * reach).floor() as i32);
                 if !ok(self.heading) {
@@ -3252,4 +3282,66 @@ mod tests {
         assert!(VAMPIRE_BAT_MODEL_SCALE < 3.4 && VAMPIRE_BAT_MODEL_SCALE > 2.0, "slightly smaller, not tiny");
         assert!(VAMPIRE_BAT_HALF_WIDTH < 0.7);
     }
+    /// A place on a river bank in the world of seed 1: (x, z) of a wet column (with two more wet columns to its west, so a wide crawfish fits
+    /// in the water) with at least 14 dry, level columns to its east.
+    fn shore(world: &mut World) -> (i32, i32) {
+        for z in -300..300 {
+            for x in -300..300 {
+                if (0..=2).all(|d| world.is_wet_column(x - d, z)) && !world.is_wet_column(x + 1, z) && (1..=14).all(|d| !world.is_wet_column(x + d, z) && (world.ground_top(x + d, z) - world.ground_top(x + 1, z)).abs() <= 1) {
+                    for cx in (x - 16).div_euclid(CHUNK_SIZE)..=(x + 20).div_euclid(CHUNK_SIZE) {
+                        world.ensure_chunk(cx, z.div_euclid(CHUNK_SIZE));
+                        world.ensure_chunk(cx, z.div_euclid(CHUNK_SIZE) + 1);
+                        world.ensure_chunk(cx, z.div_euclid(CHUNK_SIZE) - 1);
+                    }
+                    return (x, z);
+                }
+            }
+        }
+        panic!("no river bank found");
+    }
+
+    #[test]
+    fn a_big_crawfish_that_is_attacking_follows_the_player_ashore_and_goes_back_to_the_water_when_it_stops() {
+        let mut world = World::new(1, HashSet::new());
+        let (x, z) = shore(&mut world);
+        let wet_here = |a: &Animal, w: &World| w.is_wet_column(a.pos.x.floor() as i32, a.pos.z.floor() as i32);
+        let mut rng = Rng::new(4);
+        let mut crawfish = Animal::new(AnimalKind::BigCrawfish, vec3(x as f32 - 0.5, world.ground_top(x - 1, z) as f32 + 1.01, z as f32 + 0.5), &mut rng);
+        assert!(wet_here(&crawfish, &world));
+        // Unhurt it ignores the player and stays in the water however near the dry land they stand.
+        let player = vec3(x as f32 + 9.5, world.ground_top(x + 9, z) as f32 + 1.0, z as f32 + 0.5);
+        for _ in 0..600 {
+            crawfish.update(&world, player, 1.0 / 60.0, &mut rng);
+            assert!(wet_here(&crawfish, &world), "an unhurt crawfish stays in the water: {:?}", crawfish.pos);
+        }
+        // Hurt, it is attacking: it comes out of the water after the player.
+        crawfish.damage(1);
+        let mut ashore = false;
+        for _ in 0..(10.0 * 60.0) as i32 {
+            crawfish.update(&world, player, 1.0 / 60.0, &mut rng);
+            ashore |= !wet_here(&crawfish, &world);
+        }
+        assert!(ashore, "it left the water to chase");
+        assert!((crawfish.pos - player).length() < 3.0, "and reached the player: {:?}", crawfish.pos);
+        // The player gets far away: it gives up, and walks back to the water.
+        let far = vec3(x as f32 + 9.5 + BIG_CRAWFISH_GIVE_UP_DISTANCE + 20.0, player.y, z as f32 + 0.5);
+        let mut home = false;
+        for _ in 0..(40.0 * 60.0) as i32 {
+            crawfish.update(&world, far, 1.0 / 60.0, &mut rng);
+            if wet_here(&crawfish, &world) {
+                home = true;
+                break;
+            }
+        }
+        assert!(home, "it went back to the water: {:?}", crawfish.pos);
+        // The small crawfish never attacks and never leaves it.
+        assert!(AnimalKind::BigCrawfish.can_leave_water() && AnimalKind::GiantCrawfish.can_leave_water() && !AnimalKind::Crawfish.can_leave_water());
+        let mut small = Animal::new(AnimalKind::Crawfish, vec3(x as f32 - 0.5, world.ground_top(x - 1, z) as f32 + 1.01, z as f32 + 0.5), &mut rng);
+        for _ in 0..1200 {
+            small.damage(0);
+            small.update(&world, player, 1.0 / 60.0, &mut rng);
+            assert!(wet_here(&small, &world));
+        }
+    }
+
 }

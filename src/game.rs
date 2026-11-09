@@ -17,8 +17,10 @@ use crate::horizen::{self, Dimension};
 use crate::tower::Tower;
 use crate::skylands;
 use crate::stars::{self, FallingStar};
-use crate::{ghosts, stonehenge};
-use crate::landmarks::{compass_bearing, GrandCastle, Graveyard, Lake, Landmarks, Mountain, Rainbow, RainbowState, TrekEvent, Treks, Well};
+use crate::{ghosts, kingcastle, stonehenge};
+use crate::landmarks::{compass_bearing, Lake, Landmarks, Rainbow, RainbowState};
+#[cfg(test)]
+use crate::landmarks::{GrandCastle, Graveyard, Mountain, Well};
 use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
@@ -170,6 +172,8 @@ pub struct Game {
     pub health: u32,
     /// Seconds spent touching fire since the last burn tick.
     pub burn_timer: f32,
+    /// Seconds spent touching poison ivy since the last sting.
+    pub ivy_timer: f32,
     /// Wildlife living around the player. Animals and will-o-whisps are not saved: new ones wander in.
     pub animals: Vec<Animal>,
     /// Arrows in flight.
@@ -179,8 +183,6 @@ pub struct Game {
     /// Seconds since the last attempt to bring a new animal into the world.
     pub spawn_timer: f32,
     pub autosave_timer: f32,
-    /// Progress of the walk through a river and the walk behind a compass, which bring in lakes and mountains.
-    pub treks: Treks,
     /// Frames of mouse movement to ignore after the cursor is re-captured.
     pub skip_look_frames: u8,
     /// The blackout in progress between day and night, if any.
@@ -197,6 +199,9 @@ pub struct Game {
     pub cyclone_timer: f32,
     /// The white screen of the Skylands, if one is up.
     pub whiteout: Option<Whiteout>,
+    /// Where the fall now under way out of the Skylands will set the player down in the normal world (chosen when they go over the edge,
+    /// so that the picture behind the white screen is the place they land).
+    pub fall_landing: Option<Vec3>,
     /// The fire tornadoes currently active in the Skylands (daytime only): one appears every `SKY_TORNADO_INTERVAL` seconds and
     /// lasts `SKY_TORNADO_LIFETIME`, so there are sometimes two.
     pub tornadoes: Vec<FireTornado>,
@@ -249,6 +254,8 @@ pub struct Game {
     /// The pop-up in which the player gives the king's ghost gold: how many offerings (of `GOLD_PER_SPIRIT` gold, one spirit each) they
     /// have chosen so far. `None` while it is closed.
     pub king_dialog: Option<u32>,
+    /// The room of the king's dungeon whose guards are out (they are there while the player is in that room; see `update_king_dungeon`).
+    pub guard_room: Option<usize>,
     /// Whether the mouse cursor is free because that pop-up is open (set by `play::sync_dialog_cursor`).
     pub dialog_cursor_free: bool,
     /// Arrows the Wild Hunt's archer has shot, in flight (they hurt the player and nothing else, and are used up on landing).
@@ -331,9 +338,10 @@ impl Game {
                     .with_cooking(h.cooking)
                     .with_glow(h.glow)
                     .with_pots(h.pots)
-                    .with_night(h.night)
-                    .with_landmarks(h.landmarks);
+                    .with_camps_built(h.camps_built)
+                    .with_night(h.night);
                 w.dimension = dimension;
+                let w = w.with_landmarks(h.landmarks);
                 Away { world: w, items: h.items, player: h.player }
             })
         };
@@ -355,12 +363,12 @@ impl Game {
             mining: None,
             health,
             burn_timer: 0.0,
+            ivy_timer: 0.0,
             animals: Vec::new(),
             arrows: Vec::new(),
             attack_cooldown: 0.0,
             spawn_timer: 0.0,
             autosave_timer: 0.0,
-            treks: Treks::new(),
             skip_look_frames: 0,
             blackout: None,
             worn,
@@ -368,6 +376,7 @@ impl Game {
             shelf,
             cyclone_timer: 0.0,
             whiteout: None,
+            fall_landing: None,
             tornadoes: Vec::new(),
             tornado_timer: 0.0,
             crater_tornado: None,
@@ -396,6 +405,7 @@ impl Game {
             moonlight: Vec::new(),
             cave_spawn_tick: 0,
             king_dialog: None,
+            guard_room: None,
             dialog_cursor_free: false,
             hostile_arrows: Vec::new(),
             victory: None,
@@ -689,6 +699,48 @@ impl Game {
         })
     }
 
+    /// Whether the player's body is touching a plant of poison ivy: any cell the body reaches into (within `POISON_IVY_TOUCH_MARGIN`)
+    /// whose ivy overlaps it (the plant's own box, `Block::bounds`, not the whole cell).
+    pub fn touching_ivy(&self) -> bool {
+        let (p, m) = (self.player.pos, POISON_IVY_TOUCH_MARGIN);
+        let (x0, x1) = ((p.x - PLAYER_HALF_WIDTH - m).floor() as i32, (p.x + PLAYER_HALF_WIDTH + m).floor() as i32);
+        let (y0, y1) = ((p.y - m).floor() as i32, (p.y + PLAYER_HEIGHT + m).floor() as i32);
+        let (z0, z1) = ((p.z - PLAYER_HALF_WIDTH - m).floor() as i32, (p.z + PLAYER_HALF_WIDTH + m).floor() as i32);
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                (z0..=z1).any(|z| {
+                    if self.world.block_at(x, y, z) != Block::PoisonIvy {
+                        return false;
+                    }
+                    let Some((lo, hi)) = Block::PoisonIvy.bounds() else { return false };
+                    let c = vec3(x as f32, y as f32, z as f32);
+                    p.x + PLAYER_HALF_WIDTH + m > c.x + lo[0]
+                        && p.x - PLAYER_HALF_WIDTH - m < c.x + hi[0]
+                        && p.y + PLAYER_HEIGHT + m > c.y + lo[1]
+                        && p.y - m < c.y + hi[1]
+                        && p.z + PLAYER_HALF_WIDTH + m > c.z + lo[2]
+                        && p.z - PLAYER_HALF_WIDTH - m < c.z + hi[2]
+                })
+            })
+        })
+    }
+
+    /// Poison ivy stings the player `POISON_IVY_DAMAGE` life for every `POISON_IVY_INTERVAL` seconds they stay in it; the count starts
+    /// over when contact ends. There is no knockback.
+    fn update_ivy(&mut self, dt: f32) {
+        if !self.touching_ivy() {
+            self.ivy_timer = 0.0;
+            return;
+        }
+        self.ivy_timer += dt;
+        while self.ivy_timer >= POISON_IVY_INTERVAL {
+            self.ivy_timer -= POISON_IVY_INTERVAL;
+            if self.hurt_player(POISON_IVY_DAMAGE, "The poison ivy got you") {
+                break;
+            }
+        }
+    }
+
     /// Whether the player's body is touching (or within `FIRE_TOUCH_MARGIN` of) a burning log, embers or forge.
     #[cfg(test)]
     pub fn touching_fire(&self) -> bool {
@@ -714,6 +766,7 @@ impl Game {
             self.player = Player::new();
             self.health = MAX_HEALTH;
             self.burn_timer = 0.0;
+            self.ivy_timer = 0.0;
             self.toasts.push(death.to_string());
             for a in self.animals.iter_mut().filter(|a| matches!(a.kind, AnimalKind::Moose | AnimalKind::MountainGoat | AnimalKind::Fairy)) {
                 a.calm();
@@ -747,6 +800,7 @@ impl Game {
 
     /// Burn the player for `FIRE_DAMAGE` each full `FIRE_DAMAGE_INTERVAL` spent touching fire, and throw them out of it.
     pub fn update_health(&mut self, dt: f32) {
+        self.update_ivy(dt);
         let Some(fire) = self.touched_fire() else {
             self.burn_timer = 0.0;
             return;
@@ -901,6 +955,10 @@ impl Game {
         self.travel_to(Dimension::Overworld);
         self.blackout = blackout;
         self.whiteout = None;
+        if self.worn == Some(ItemKind::AncientCrown) && self.crown_arrival_now() {
+            self.toasts.push("Night falls in the cave. You black out, and wake in the ruined castle.".to_string());
+            return;
+        }
         // They wake in the ring of Stonehenge, five chunks from where the world began.
         let (ax, az) = stonehenge::arrival(self.info.seed);
         let (x, z) = (ax.floor() as i32, az.floor() as i32);
@@ -2053,114 +2111,22 @@ impl Game {
         (0..3).any(|down| self.world.block_at(p.x.floor() as i32, feet - down, p.z.floor() as i32).is_wet())
     }
 
-    /// Advance the treks and the rainbow. Walking `LAKE_TREK_CHUNKS` chunks through a river without leaving the
-    /// water brings a lake into the world ahead of the player; following a held compass north for
-    /// `COMPASS_TREK_CHUNKS` chunks brings a mountain; holding a peep stone shows the rainbow (once).
-    /// Call once a frame, after the player has moved.
+    /// Advance what the player's finds set going: the rainbow (the one thing that is not there until it is first looked for), the
+    /// graveyard's ghost and the well. Every other landmark has a set place from the start (`Landmarks::fixed`); the peep stone, the
+    /// compass and the bone totem only lead to them. Call once a frame, after the player has moved.
     pub fn update_landmarks(&mut self) {
-        // The other dimensions have one silver tower each (and no other landmarks); the totem does nothing in the Horizen, and
-        // in the Skylands it only points the way to the tower (`trail_path`).
-        if self.in_horizen() {
-            self.try_show_horizen_tower();
-            self.update_cave_visits();
+        if !self.in_overworld() {
             return;
-        }
-        if self.in_skylands() {
-            self.update_sky_tower();
-            return;
-        }
-        self.treks.mountain_found = self.world.landmarks.mountain().is_some();
-        let p = self.player.pos;
-        let compass = self.held_item() == Some(ItemKind::Compass);
-        let wading = self.player_in_water();
-        if let Some(event) = self.treks.step((p.x, p.z), wading, compass) {
-            self.bring_in(event);
         }
         self.try_show_rainbow();
-        self.try_show_grand_castle();
-        self.try_show_ruined_castle();
         self.update_graveyard_ghost();
-        self.try_show_well_or_graveyard();
         self.update_dimension();
-    }
-
-    /// Make the lake or mountain that a finished trek leads to, and say so.
-    fn bring_in(&mut self, event: TrekEvent) {
-        let phase = self.rng.range(0, 63);
-        match event {
-            TrekEvent::Lake { at, dir } => {
-                // Further out along the same line if something already stands where the lake would.
-                let marks = &self.world.landmarks;
-                let site = (0..SITE_PUSH_STEPS).map(|i| {
-                    let mut lake = Lake::ahead(at, dir, phase);
-                    let push = (i * SITE_PUSH_BLOCKS) as f32;
-                    lake.x += (dir.0 * push).round() as i32;
-                    lake.z += (dir.1 * push).round() as i32;
-                    lake
-                }).find(|l| marks.has_room_for_lake(l));
-                if let Some(lake) = site {
-                    self.world.add_lake(lake);
-                    self.toasts.push("The river opens out ahead into a great lake.".to_string());
-                }
-            }
-            TrekEvent::Mountain { .. } if self.world.landmarks.mountain().is_some() => {}
-            TrekEvent::Mountain { at, dir } => {
-                let marks = &self.world.landmarks;
-                let site = (0..SITE_PUSH_STEPS).map(|i| {
-                    let mut mountain = Mountain::ahead(at, dir, phase);
-                    let push = (i * SITE_PUSH_BLOCKS) as f32;
-                    mountain.x += (dir.0 * push).round() as i32;
-                    mountain.z += (dir.1 * push).round() as i32;
-                    mountain
-                }).find(|m| marks.has_room_for_mountain(m));
-                if let Some(mountain) = site {
-                    self.world.add_mountain(mountain);
-                    self.toasts.push("The compass has led you north: a great mountain rises ahead. Its needle will point to it from now on.".to_string());
-                }
-            }
-        }
     }
 
     /// Whether the pile of gold can lie in the column (x, z): dry, bare ground with nothing standing on it. The chunk
     /// need not be loaded (the rainbow lies beyond the generated land).
     fn gold_fits_at(&self, x: i32, z: i32) -> bool {
         self.world.is_bare_dry_ground(x, z)
-    }
-
-    /// With a peep stone in hand at night, and only if the world has no grand castle yet, bring one into the world:
-    /// beyond the edge of the land, in a direction where no lake or mountain is (as far as one can be found), with the
-    /// ghostly trail to it shown by the peep stone. Returns whether the castle appeared.
-    pub fn try_show_grand_castle(&mut self) -> bool {
-        if self.world.landmarks.grand_castle.is_some() || !self.world.night || self.held_item() != Some(ItemKind::PeepStone) {
-            return false;
-        }
-        let p = self.player.pos;
-        let first = self.rng.unit() * std::f32::consts::TAU;
-        let marks = &self.world.landmarks;
-        let Some(site) = clear_site(first, |a| GrandCastle::ahead((p.x, p.z), a), |c, dx, dz| GrandCastle { x: c.x + dx, z: c.z + dz }, |c| marks.has_room_for(c)) else {
-            return false;
-        };
-        self.world.add_grand_castle(site);
-        self.toasts.push("A ghostly trail winds away through the dark.".to_string());
-        true
-    }
-
-    /// Wearing the king's crown in the overworld, and only if the world has no ruined castle yet, bring one out beyond the
-    /// edge of the land, straight ahead of the way the player faces (or as near that as clear ground allows): they walk into
-    /// it. The sword in the stone at its centre comes out for the crown. Returns whether the castle appeared.
-    pub fn try_show_ruined_castle(&mut self) -> bool {
-        if self.world.landmarks.ruined_castle.is_some() || !self.in_overworld() || self.worn != Some(ItemKind::AncientCrown) {
-            return false;
-        }
-        let p = self.player.pos;
-        let facing = self.player.yaw;
-        let marks = &self.world.landmarks;
-        let Some(site) = clear_site(facing, |a| GrandCastle::ahead((p.x, p.z), a), |c, dx, dz| GrandCastle { x: c.x + dx, z: c.z + dz }, |c| marks.has_room_for_ruins(c)) else {
-            return false;
-        };
-        self.world.add_ruined_castle(site);
-        self.toasts.push("The crown grows warm. Far ahead, the ruins of a castle wait.".to_string());
-        true
     }
 
     /// With a peep stone in hand, and only if the world has never had a rainbow, bring it out: an arc `RAINBOW_SPAN` blocks
@@ -2275,106 +2241,6 @@ impl Game {
         }
     }
 
-    /// With a bone totem in hand by day, and only if the world has no well yet, bring the well into the world beyond the
-    /// edge of the land; by night, in the same way, the graveyard. The totem's trail then leads to it for ever.
-    pub fn try_show_well_or_graveyard(&mut self) -> bool {
-        if !self.in_overworld() || self.held_item() != Some(ItemKind::BoneTotem) {
-            return false;
-        }
-        let p = self.player.pos;
-        let first = self.rng.unit() * std::f32::consts::TAU;
-        let marks = &self.world.landmarks;
-        if self.world.night {
-            if self.world.landmarks.graveyard.is_some() {
-                return false;
-            }
-            let Some(site) = clear_site(first, |a| Graveyard::ahead((p.x, p.z), a), |g, dx, dz| Graveyard { x: g.x + dx, z: g.z + dz }, |g| marks.has_room_for_graveyard(g)) else {
-                return false;
-            };
-            self.world.add_graveyard(site);
-            self.toasts.push("A sickly green trail winds away through the dark.".to_string());
-        } else {
-            if self.world.landmarks.well.is_some() {
-                return false;
-            }
-            let Some(site) = clear_site(first, |a| Well::ahead((p.x, p.z), a), |w, dx, dz| Well { x: w.x + dx, z: w.z + dz }, |w| marks.has_room_for_well(w)) else {
-                return false;
-            };
-            self.world.add_well(site);
-            self.toasts.push("A pale trail leads away across the land.".to_string());
-        }
-        true
-    }
-
-    /// With a peep stone in hand in the Horizen, and only if it has no tower yet, bring its one silver tower out in the middle
-    /// of the great cavern (`horizen::cavern_centre`), with the ghostly trail to it shown by the peep stone. There is no sky in
-    /// the cave to tell day from night by, so the stone works at any hour. Returns whether the tower appeared.
-    pub fn try_show_horizen_tower(&mut self) -> bool {
-        if !self.in_horizen() || self.world.landmarks.horizen_tower.is_some() || self.held_item() != Some(ItemKind::PeepStone) {
-            return false;
-        }
-        let (x, z) = horizen::cavern_centre(self.info.seed);
-        self.world.add_horizen_tower(Tower { x, z });
-        self.toasts.push("A pale golden trail leads away down the tunnel.".to_string());
-        true
-    }
-
-    /// In the Horizen: note a cave the player comes into. The arrival chamber is the first; every `HORIZEN_CAMP_EVERY`th
-    /// cave entered (the great cavern only counts) has a camp set up in it: a burning log with a tin pot of red or purple
-    /// berry stew, ready to eat. Returns whether a camp was made.
-    pub fn update_cave_visits(&mut self) -> bool {
-        let p = self.player.pos;
-        let Some(cave) = horizen::cave_at(self.info.seed, p.x.floor() as i32, p.z.floor() as i32) else { return false };
-        if self.world.landmarks.caves_visited.contains(&cave.cell) {
-            return false;
-        }
-        self.world.landmarks.caves_visited.push(cave.cell);
-        if self.world.landmarks.caves_visited.len() % HORIZEN_CAMP_EVERY != 0 || cave.great || cave.king {
-            return false;
-        }
-        self.build_camp(cave)
-    }
-
-    /// Set a camp in `cave`: a log on dry floor near its middle, alight, with a pot of water and berries on it, the stew done.
-    fn build_camp(&mut self, cave: horizen::Cave) -> bool {
-        let (cx, cz) = (cave.x.floor() as i32, cave.z.floor() as i32);
-        let seed = self.info.seed;
-        let spot = (0..=6_i32).find_map(|r| {
-            (-r..=r).flat_map(|dz| (-r..=r).map(move |dx| (dx, dz))).filter(|&(dx, dz)| dx.abs().max(dz.abs()) == r).map(|(dx, dz)| (cx + dx, cz + dz)).find(|&(x, z)| {
-                self.world.chunks.contains_key(&World::chunk_of(x, z)) && horizen::air_height(seed, x, z) >= HORIZEN_MIN_AIR && !horizen::is_pond(seed, x, z)
-            })
-        });
-        let Some((x, z)) = spot else { return false };
-        let y = GROUND_TOP + 1;
-        self.world.set_block(x, y, z, Block::PlacedLog);
-        self.world.ignite((x, y, z), HORIZEN_CAMP_FIRE_SECONDS);
-        let berries = if self.rng.chance(50) { ItemKind::Berries } else { ItemKind::PurpleBerries };
-        self.world.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0, served: 0 });
-        self.toasts.push("You come on a camp: a fire, and a pot of stew still hot.".to_string());
-        true
-    }
-
-    /// In the Skylands: note the island the player stands on, and once they have walked on `SKY_TOWER_VISITS` different
-    /// ones, put the tower on the next island that has yet to appear (the nearest one not made so far), once.
-    pub fn update_sky_tower(&mut self) {
-        let p = self.player.pos;
-        let seed = self.info.seed;
-        if self.player.on_ground {
-            if let Some(cell) = skylands::island_cell_under(seed, p.x.floor() as i32, p.z.floor() as i32) {
-                self.world.landmarks.note_sky_visit(cell);
-            }
-        }
-        if self.world.landmarks.sky_tower.is_some() || self.world.landmarks.sky_visited.len() < SKY_TOWER_VISITS {
-            return;
-        }
-        let visited = self.world.landmarks.sky_visited.clone();
-        let cell = skylands::pick_tower_cell(seed, (p.x.floor() as i32, p.z.floor() as i32), &visited, &|kx, kz| self.world.chunks.contains_key(&(kx, kz)));
-        if let Some(cell) = cell {
-            self.world.add_sky_tower(cell);
-            self.toasts.push("Far off among the clouds, something tall glints in the light.".to_string());
-        }
-    }
-
     /// The bearing the compass needle points along for the player now.
     pub fn compass_bearing(&self) -> f32 {
         let at = (self.player.pos.x, self.player.pos.z);
@@ -2444,7 +2310,7 @@ impl Game {
             self.ghost_says(ghosts::GRAVEYARD_THANKS);
         } else if let Some(line) = self.tower_ghost_here() {
             self.ghost_says(line);
-        } else if self.in_king_castle() {
+        } else if self.in_throne_room() {
             self.ghost_says(ghosts::KING_GREETING);
             self.king_dialog = Some(1);
         } else if self.near_shop(SHOP_NEAR_RADIUS) {
@@ -2469,51 +2335,6 @@ impl Game {
     }
 
     // --- Crows and the ancient altar -------------------------------------------------------
-
-    /// Whether an altar can stand on the column (x, z): loaded, dry, bare ground (plants may be cleared).
-    fn altar_fits(&self, x: i32, z: i32) -> bool {
-        if !self.world.chunks.contains_key(&World::chunk_of(x, z)) || self.world.is_wet_column(x, z) {
-            return false;
-        }
-        let ground = self.world.ground_top(x, z);
-        self.world.block_at(x, ground, z) == Block::Dirt && matches!(self.world.block_at(x, ground + 1, z), Block::Air | Block::Grass | Block::Flower)
-    }
-
-    /// The nearest column to (x, z) (within `ALTAR_SEARCH_RADIUS`) where an altar fits.
-    fn altar_site_near(&self, x: i32, z: i32) -> Option<(i32, i32)> {
-        (0..=ALTAR_SEARCH_RADIUS).find_map(|r| {
-            (-r..=r).flat_map(|dz| (-r..=r).map(move |dx| (dx, dz))).filter(|&(dx, dz)| dx.abs().max(dz.abs()) == r).map(|(dx, dz)| (x + dx, z + dz)).find(|&(ax, az)| self.altar_fits(ax, az))
-        })
-    }
-
-    /// A crow that the player has followed west for `CROW_ALTAR_WEST_BLOCKS` comes down on a new ancient altar: a small altar
-    /// with a loadstone on it, built where it lands. If there is no room there it flies on a little and tries again.
-    fn land_crows_at_altars(&mut self) {
-        let due: Vec<usize> = (0..self.animals.len()).filter(|&i| self.animals[i].kind == AnimalKind::Crow && self.animals[i].is_landing() && self.animals[i].west_followed >= CROW_ALTAR_WEST_BLOCKS).collect();
-        // A player who already has a loadstone or a compass is led to no more altars: the crows just land.
-        if !due.is_empty() && (self.owns(ItemKind::Loadstone) || self.owns(ItemKind::Compass)) {
-            for i in due {
-                self.animals[i].west_followed = 0.0;
-            }
-            return;
-        }
-        for i in due {
-            let at = self.animals[i].pos;
-            match self.altar_site_near(at.x.floor() as i32, at.z.floor() as i32) {
-                Some((x, z)) => {
-                    let y = self.world.ground_top(x, z) + 1;
-                    self.world.set_block(x, y, z, Block::AltarLoadstone);
-                    // The perch is on top of the altar's collision box (which reaches up over the loadstone), never inside it: a bird
-                    // set down inside a block can move in no direction at all.
-                    let top = Block::AltarLoadstone.bounds().map_or(1.0, |(_, hi)| hi[1]);
-                    let perch = vec3(x as f32 + 0.5, y as f32 + top + 0.01, z as f32 + 0.5);
-                    self.animals[i].land_at(perch, &mut self.rng);
-                    self.toasts.push("The crow settles on an ancient altar.".to_string());
-                }
-                None => self.animals[i].west_followed = CROW_ALTAR_WEST_BLOCKS - 6.0,
-            }
-        }
-    }
 
     // --- Relics: gold boulders and the sword in the stone ---------------------------------------
 
@@ -2761,14 +2582,13 @@ impl Game {
     }
 
     /// While the screen is white from a fall out of the Skylands: the overworld, to be drawn behind it, and where its camera
-    /// stands (the player's eye carried from the first island to the summit, so the fall is a fall onto the mountain).
+    /// stands (the player's eye carried from the first island to the place they will land, so the fall is a fall onto it).
     pub fn overworld_backdrop(&self, eye: Vec3) -> Option<(&World, Vec3)> {
         if !self.in_skylands() || !self.whiteout.map_or(false, |w| w.shows_overworld()) {
             return None;
         }
         let over = &self.parked(Dimension::Overworld)?.world;
-        let (jx, jz) = crate::terrain::jungle_centre(self.info.seed);
-        let landing = vec3(jx as f32 + 0.5, (over.ground_top(jx, jz) + 1) as f32 + SKY_FALL_DROP, jz as f32 + 0.5);
+        let landing = self.fall_landing?;
         Some((over, eye - skylands::spawn_point() + landing))
     }
 
@@ -2803,8 +2623,8 @@ pub fn enter_skylands(&mut self) {
             return;
         }
         self.travel_to(Dimension::Overworld);
-        // Set down beside the cyclone, not in it, or it would carry the player straight back.
-        if let Some(c) = self.cyclone() {
+        // Set down beside the cyclone, not in it, or it would carry the player straight back (the crown's arrival in the castle has no cyclone).
+        if let Some(c) = self.cyclone().filter(|_| self.worn != Some(ItemKind::AncientCrown)) {
             self.player.pos = c.pos + vec3(CYCLONE_RADIUS + 2.5, 0.01, 0.0);
             self.player.lift_out_of_blocks(&self.world);
         }
@@ -2812,29 +2632,40 @@ pub fn enter_skylands(&mut self) {
         self.toasts.push("The cyclone sets you down on the summit.".to_string());
     }
 
-    /// The dry column nearest the middle of the jungle, where a fall out of the Skylands lands.
+    /// The dry column nearest the middle of the jungle, beside the temple: one of the places a fall out of the Skylands lands.
+    #[cfg(test)]
     pub fn jungle_landing(&self) -> (i32, i32) {
-        let (cx, cz) = crate::terrain::jungle_centre(self.info.seed);
-        // Beside the temple, not on it.
-        for r in crate::temple::TEMPLE_REACH + 3..crate::temple::TEMPLE_REACH + 40 {
-            for dz in -r..=r {
-                for dx in -r..=r {
-                    if dx.abs().max(dz.abs()) == r && !self.world.is_wet_column(cx + dx, cz + dz) {
-                        return (cx + dx, cz + dz);
-                    }
-                }
-            }
-        }
-        (cx, cz)
+        jungle_column(&self.world, self.info.seed)
     }
 
-    /// Make the jungle's chunks in the parked overworld, so that it is there to show behind the white screen of a fall.
-    fn prepare_jungle_backdrop(&mut self) {
-        let (jx, jz) = crate::terrain::jungle_centre(self.info.seed);
+    /// Where the player is set down in the normal world after a fall out of the Skylands, in `over` (the normal world): by chance one of three
+    /// places, each a column `angle` radians round from the place's heart where that matters, 50 blocks above the ground to fall onto it:
+    /// the mountain near its top, the island of the Loch Ness lake (beside its tower), or the jungle beside the temple. Wearing the King's
+    /// Crown puts the player in the ruined castle instead, on the ground (see `crown_arrival`).
+    fn pick_fall_landing(&mut self) -> Vec3 {
+        let seed = self.info.seed;
+        let roll = self.rng.range(0, 3);
+        let angle = self.rng.unit() * std::f32::consts::TAU;
+        let crowned = self.worn == Some(ItemKind::AncientCrown);
+        let over = self.parked(Dimension::Overworld).map(|a| &a.world).unwrap_or(&self.world);
+        if crowned {
+            if let Some(spot) = crown_arrival(over) {
+                return spot;
+            }
+        }
+        let (x, z) = match roll {
+            0 => mountain_column(over, angle),
+            1 => lake_island_column(over, angle),
+            _ => jungle_column(over, seed),
+        };
+        vec3(x as f32 + 0.5, over.ground_top(x, z) as f32 + 1.0 + SKY_FALL_DROP, z as f32 + 0.5)
+    }
+
+    /// Make the chunks around the place a fall will land in the parked overworld, so that it is there to show behind the white screen.
+    fn prepare_fall_backdrop(&mut self, landing: Vec3) {
         if let Some(a) = [&mut self.away, &mut self.shelf].into_iter().flatten().find(|a| a.world.dimension == Dimension::Overworld) {
-            let pos = vec3(jx as f32 + 0.5, a.world.ground_top(jx, jz) as f32 + 1.0 + SKY_FALL_DROP, jz as f32 + 0.5);
-            a.world.stream_chunks(pos);
-            a.world.rebuild_dirty(pos, usize::MAX);
+            a.world.stream_chunks(landing);
+            a.world.rebuild_dirty(landing, usize::MAX);
         }
     }
 
@@ -2845,11 +2676,13 @@ pub fn enter_skylands(&mut self) {
             w.elapsed += dt;
             if let WhiteoutKind::Fall { moved: false } = w.kind {
                 if w.elapsed >= SKY_FALL_FADE_IN {
-                    // Wholly white now: the player leaves the Skylands and is put high above the normal world's spawn point,
-                    // to fall back on to it.
+                    // Wholly white now: the player leaves the Skylands and is put where the fall was to land them (see
+                    // `pick_fall_landing`), high above the ground to fall on to it, or on the ground in the ruined castle if they wear the crown.
+                    let landing = self.fall_landing.take();
                     self.travel_to(Dimension::Overworld);
-                    let (jx, jz) = self.jungle_landing();
-                    self.player.pos = vec3(jx as f32 + 0.5, self.world.ground_top(jx, jz) as f32 + 1.0 + SKY_FALL_DROP, jz as f32 + 0.5);
+                    if let Some(spot) = landing {
+                        self.player.pos = spot;
+                    }
                     self.player.vel = Vec3::ZERO;
                     self.player.knock = Vec3::ZERO;
                     self.world.stream_chunks(self.player.pos);
@@ -2860,7 +2693,9 @@ pub fn enter_skylands(&mut self) {
             self.whiteout = (w.elapsed < w.duration()).then_some(w);
         }
         if self.in_skylands() && self.whiteout.is_none() && self.player.pos.y < SKY_VOID_Y {
-            self.prepare_jungle_backdrop();
+            let landing = self.pick_fall_landing();
+            self.fall_landing = Some(landing);
+            self.prepare_fall_backdrop(landing);
             self.whiteout = Some(Whiteout { elapsed: 0.0, kind: WhiteoutKind::Fall { moved: false } });
             self.toasts.push("You fall from the island.".to_string());
         }
@@ -2919,6 +2754,10 @@ pub fn enter_skylands(&mut self) {
         self.player.vel = Vec3::ZERO;
         self.player.knock = Vec3::ZERO;
         self.park(other);
+        // Wearing the King's Crown, anyone coming back to the normal world from the Skylands or the Horizen appears in the ruined castle.
+        if target == Dimension::Overworld {
+            self.crown_arrival_now();
+        }
         // Leaving the Skylands wakes the Yeti again: it must be killed anew before the summit cyclone returns.
         if from == Dimension::Skylands && target == Dimension::Overworld && self.world.landmarks.yeti_slain {
             self.world.landmarks.yeti_slain = false;
@@ -2937,6 +2776,7 @@ pub fn enter_skylands(&mut self) {
         self.giant_crawfish_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::GiantCrawfish).count() as u32;
         let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
         self.king_dialog = None;
+        self.guard_room = None;
         self.shop_open = false;
         self.animals.clear();
         self.arrows.clear();
@@ -2950,7 +2790,6 @@ pub fn enter_skylands(&mut self) {
         self.falling_stars.clear();
         self.star_timer = 0.0;
         self.reset_storm();
-        self.treks = Treks::new();
         self.world.stream_chunks(self.player.pos);
         self.world.rebuild_dirty(self.player.pos, usize::MAX);
         // A Horizen saved before it was a cave may leave the player inside the rock: back to the arrival pool.
@@ -2959,6 +2798,22 @@ pub fn enter_skylands(&mut self) {
         }
         self.player.lift_out_of_blocks(&self.world);
         self.bring_spirits(&spirits);
+    }
+
+    /// If the player wears the King's Crown and is in the normal world, put them in the ruined castle (on the ground, in the way in to the
+    /// dais) and stream the land there. Returns whether they were moved. (Dying sets the player at the spawn point afterwards, crown or not.)
+    fn crown_arrival_now(&mut self) -> bool {
+        if self.worn != Some(ItemKind::AncientCrown) || !self.in_overworld() {
+            return false;
+        }
+        let Some(spot) = crown_arrival(&self.world) else { return false };
+        self.player.pos = spot;
+        self.player.vel = Vec3::ZERO;
+        self.player.knock = Vec3::ZERO;
+        self.world.stream_chunks(spot);
+        self.world.rebuild_dirty(spot, usize::MAX);
+        self.player.lift_out_of_blocks(&self.world);
+        true
     }
 
     /// Set the king's spirit archers (shots left, place on their circle) down round the player, after a journey between dimensions.
@@ -3101,7 +2956,7 @@ pub fn enter_skylands(&mut self) {
             AnimalKind::Jaguar => MAX_JAGUAR,
             AnimalKind::FlyingSnake => MAX_FLYING_SNAKE,
             AnimalKind::Yeti | AnimalKind::LochNessMonster | AnimalKind::IronQuail | AnimalKind::BronzeParrot | AnimalKind::Bat | AnimalKind::Raven | AnimalKind::Phoenix => 0,
-            AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::Orangutan | AnimalKind::Unicorn | AnimalKind::BearBoss => 0,
+            AnimalKind::VampireBat | AnimalKind::SpiritArcher | AnimalKind::SpiritGuard | AnimalKind::Orangutan | AnimalKind::Unicorn | AnimalKind::BearBoss => 0,
             // Newts live only in the Horizen's mossy caves (`spawn_newts`).
             AnimalKind::Newt => 0,
             // Fairies and goats live on the Skylands' islands (`spawn_sky_wildlife`).
@@ -3318,17 +3173,8 @@ pub fn enter_skylands(&mut self) {
             } else {
                 player
             };
-            let before_x = a.pos.x;
             if let Some(kind) = a.update(&self.world, threat, dt, &mut self.rng) {
                 self.items.push(DroppedItem::spawn_at(kind, a.pos + vec3(0.0, 0.3, 0.0), &mut self.rng));
-            }
-            if a.kind == AnimalKind::Crow {
-                let gap = vec2(a.pos.x - player.x, a.pos.z - player.z).length();
-                if gap > CROW_LOSE_DISTANCE {
-                    a.west_followed = 0.0;
-                } else if a.mode == crate::animal::Mode::Fly && gap <= CROW_FOLLOW_DISTANCE {
-                    a.west_followed += (before_x - a.pos.x).max(0.0);
-                }
             }
             if a.try_attack(player) {
                 strikes.push((index, a.pos, a.kind.attack_damage(), a.kind.death_message()));
@@ -3355,7 +3201,6 @@ pub fn enter_skylands(&mut self) {
         self.hostile_arrows.extend(volleys);
         self.update_fairy_planting();
         self.update_hostile_arrows(dt);
-        self.land_crows_at_altars();
         // A bat that strikes a player holding pink salt dies on it instead: no damage, one lump of salt used up.
         let mut salted = Vec::new();
         let mut blows = Vec::new();
@@ -3752,11 +3597,73 @@ pub fn enter_skylands(&mut self) {
 
     // --- The king's castle, his gold and his spirits ----------------------------------------------
 
-    /// Whether the player is inside the walls of the king's castle in the Horizen's giant cave.
-    pub fn in_king_castle(&self) -> bool {
+    /// The room of the king's dungeon the player is in (an index into `kingcastle::ROOMS`), if they are in one: the column of their feet
+    /// inside its floor plan and their feet at a height within the room's storey.
+    pub fn king_room(&self) -> Option<usize> {
+        if !self.in_horizen() {
+            return None;
+        }
         let (kx, kz) = horizen::king_centre(self.info.seed);
         let p = self.player.pos;
-        self.in_horizen() && (p.x - (kx as f32 + 0.5)).abs() <= KING_WALL_HALF as f32 && (p.z - (kz as f32 + 0.5)).abs() <= KING_WALL_HALF as f32
+        kingcastle::room_at(p.x.floor() as i32 - kx, p.z.floor() as i32 - kz, (p.y + 0.05).floor() as i32 - (GROUND_TOP + 1))
+    }
+
+    /// Whether the player is in the throne room of the king's castle: the only place the king speaks and gives his spirits. There are no
+    /// guards there.
+    pub fn in_throne_room(&self) -> bool {
+        self.king_room() == Some(kingcastle::KING_THRONE_ROOM)
+    }
+
+    /// The king's dungeon: stepping into a room whose turn it is (every room before it cleared) brings out its `KING_GUARDS_PER_ROOM` spirit
+    /// guards; when the last of them is dead the door out of the room opens for good (`World::open_king_door`). A player who leaves the room
+    /// while its guards live finds them gone (they stand down), and they come again when the player returns. A cleared room never has guards
+    /// again, and the throne room never has any. Call once a frame.
+    pub fn update_king_dungeon(&mut self) {
+        let room = self.king_room();
+        let cleared = self.world.landmarks.king_rooms_cleared;
+        match (room, self.guard_room) {
+            (Some(r), None) if r < kingcastle::KING_THRONE_ROOM && r == cleared => {
+                self.spawn_guards(r);
+                self.guard_room = Some(r);
+            }
+            (Some(r), Some(g)) if r == g => {
+                if !self.animals.iter().any(|a| a.kind == AnimalKind::SpiritGuard) {
+                    self.world.open_king_door(r);
+                    self.guard_room = None;
+                    self.toasts.push(if r + 1 == kingcastle::KING_THRONE_ROOM { "The last guard falls. The doors of the throne room swing open.".to_string() } else { "The last guard falls. A door grinds open.".to_string() });
+                }
+            }
+            (_, Some(_)) => {
+                self.animals.retain(|a| a.kind != AnimalKind::SpiritGuard);
+                self.guard_room = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Bring out the spirit guards of dungeon room `room`, on free floor in it at least `KING_GUARD_MIN_DISTANCE` from the player.
+    fn spawn_guards(&mut self, room: usize) {
+        let (kx, kz) = horizen::king_centre(self.info.seed);
+        let r = kingcastle::ROOMS[room];
+        let y = GROUND_TOP + 1 + r.base();
+        let p = self.player.pos;
+        let mut made = 0;
+        for _ in 0..400 {
+            if made >= KING_GUARDS_PER_ROOM {
+                break;
+            }
+            let (x, z) = (kx + self.rng.range(r.x0, r.x1 + 1), kz + self.rng.range(r.z0, r.z1 + 1));
+            let at = vec3(x as f32 + 0.5, y as f32 + 0.01, z as f32 + 0.5);
+            let free = self.world.chunks.contains_key(&World::chunk_of(x, z))
+                && self.world.block_at(x, y, z) == Block::Air
+                && self.world.block_at(x, y + 1, z) == Block::Air
+                && self.world.block_at(x, y + 2, z) == Block::Air
+                && self.world.block_at(x, y - 1, z).collides();
+            if free && vec2(at.x - p.x, at.z - p.z).length() >= KING_GUARD_MIN_DISTANCE {
+                self.animals.push(Animal::new(AnimalKind::SpiritGuard, at, &mut self.rng));
+                made += 1;
+            }
+        }
     }
 
     /// For tests: stand the player on a Skylands island other than the first (which no fire tornado visits), streaming its chunks.
@@ -3835,7 +3742,7 @@ pub fn enter_skylands(&mut self) {
     pub fn give_gold_to_king(&mut self, offerings: u32) -> u32 {
         let room = MAX_SPIRIT_ARCHERS.saturating_sub(self.spirit_count()) as u32;
         let cost = offerings * GOLD_PER_SPIRIT;
-        if offerings == 0 || !self.in_king_castle() {
+        if offerings == 0 || !self.in_throne_room() {
             return 0;
         }
         if offerings > room {
@@ -6343,13 +6250,12 @@ mod landmark_tests {
     }
 
     #[test]
-    fn a_finished_river_trek_brings_a_one_block_deep_lake_with_a_channel_from_the_river() {
+    fn the_one_lake_is_where_the_seed_put_it_far_away_one_block_deep_with_an_island_and_a_tower() {
         let mut g = game(1);
         let at = (g.player.pos.x, g.player.pos.z);
-        g.bring_in(TrekEvent::Lake { at, dir: (1.0, 0.0) });
-        assert_eq!(g.world.landmarks.lakes.len(), 1);
+        assert_eq!(g.world.landmarks.lakes.len(), 1, "there from the start, and only one");
         let lake = g.world.landmarks.lakes[0];
-        assert!(lake.x as f32 - at.0 >= lake_distance() as f32, "beyond the generated land");
+        assert!(((lake.x as f32 - at.0).hypot(lake.z as f32 - at.1)) >= FIXED_LAKE_DISTANCE - 5.0, "far from where the player begins");
         // A point in the water between the island and the shore.
         let (wx, wz) = (lake.x + (lake.radius as f32 * 0.55) as i32, lake.z);
         load_column(&mut g, wx, wz);
@@ -6358,32 +6264,22 @@ mod landmark_tests {
         assert_eq!(g.world.block_at(wx, GROUND_TOP - LAKE_DEPTH, wz), Block::Dirt);
         assert_eq!(g.world.block_at(wx, GROUND_TOP + 1, wz), Block::Air);
         assert!(g.world.is_wet_column(wx, wz));
-        // In the middle is an island: a hill of dry ground with a flat top, and a silver tower on the top.
+        // In the middle is an island: a hill of dry ground with a flat top, and a ruined silver tower on the top (the monster lives).
         load_column(&mut g, lake.x + 30, lake.z);
-        load_column(&mut g, lake.x + TOWER_HALF, lake.z);
         load_column(&mut g, lake.x, lake.z);
         assert!(!g.world.is_wet_column(lake.x, lake.z) && !g.world.is_wet_column(lake.x + 30, lake.z));
         let top = GROUND_TOP + ISLAND_HILL_HEIGHT;
         assert_eq!(g.world.ground_top(lake.x, lake.z), top, "the island is a hill with a flat top");
         let slope = g.world.ground_top(lake.x + 30, lake.z);
         assert!(slope > GROUND_TOP && slope < top, "and its side slopes down to the water: {slope}");
-        assert_eq!(g.world.block_at(lake.x + TOWER_HALF, top + 1, lake.z), Block::SilverStone);
-        // The channel leaves the column the player stood in and runs to the lake, all of it water.
-        let (px, pz) = (at.0.floor() as i32, at.1.floor() as i32);
-        assert!(g.world.is_wet_column(px, pz));
-        let mid = ((px + lake.x - lake.radius) / 2, (pz + lake.z) / 2);
-        assert!(g.world.is_wet_column(mid.0, mid.1), "the middle of the channel is wet");
-        assert!(g.toasts.contains("great lake"));
-        // The chunk the player stands in was generated again, and they still stand on something.
-        assert!(g.world.chunks.contains_key(&World::chunk_of(px, pz)));
-        assert_eq!(g.world.ground_top(px, pz), GROUND_TOP - LAKE_DEPTH, "the river bed under the player is unchanged");
+        // Nothing leads to it from a river: there is no channel, and the lake is the same in a world made again.
+        assert_eq!(lake.from, (lake.x, lake.z));
+        assert_eq!(game(2).world.landmarks.lakes[0], lake, "a pure function of the seed (the same seed, another game)");
     }
 
     #[test]
     fn a_lake_takes_the_place_of_what_stood_there_and_animals_do_not_spawn_in_it() {
         let mut g = game(2);
-        let at = (g.player.pos.x, g.player.pos.z);
-        g.bring_in(TrekEvent::Lake { at, dir: (0.0, 1.0) });
         let lake = g.world.landmarks.lakes[0];
         let (wx, wz) = (lake.x + (lake.radius as f32 * 0.55) as i32, lake.z);
         load_column(&mut g, wx, wz);
@@ -6403,13 +6299,11 @@ mod landmark_tests {
     }
 
     #[test]
-    fn a_finished_compass_trek_brings_a_tall_climbable_snow_capped_mountain_you_cannot_dig() {
+    fn the_one_mountain_is_far_away_tall_climbable_snow_capped_and_you_cannot_dig_it() {
         let mut g = game(3);
         let at = (g.player.pos.x, g.player.pos.z);
-        g.bring_in(TrekEvent::Mountain { at, dir: crate::landmarks::compass_direction() });
         let m = g.world.landmarks.mountains[0];
-        assert!(m.z < at.1 as i32 - mountain_distance(), "north of the player, beyond the loaded land");
-        assert!(g.toasts.contains("mountain"));
+        assert!(((m.x as f32 - at.0).hypot(m.z as f32 - at.1)) >= FIXED_MOUNTAIN_DISTANCE - 5.0, "far from where the player begins");
         // Along a line from the far side to the summit the ground climbs, but only in steps of a jump or a ledge.
         let mut last = g.world.ground_top(m.x + m.radius * 2, m.z);
         let mut highest = last;
@@ -6438,8 +6332,6 @@ mod landmark_tests {
     #[test]
     fn no_tree_grows_above_the_tree_line_on_a_mountain() {
         let mut g = game(4);
-        let at = (g.player.pos.x, g.player.pos.z);
-        g.bring_in(TrekEvent::Mountain { at, dir: (0.0, -1.0) });
         let m = g.world.landmarks.mountains[0];
         let (cx0, cz0) = World::chunk_of(m.x, m.z);
         for cz in cz0 - 3..=cz0 + 3 {
@@ -6570,65 +6462,32 @@ mod landmark_tests {
     }
 
     #[test]
-    fn a_peep_stone_at_night_brings_one_grand_castle_beyond_the_land_and_a_trail_to_its_gate() {
+    fn a_peep_stone_at_night_leads_to_the_grand_castle_that_is_already_there_far_away() {
         let mut g = game(31);
-        assert!(!g.try_show_grand_castle(), "not by day");
-        g.world.set_night(true);
-        assert!(!g.try_show_grand_castle(), "no peep stone in hand");
-        assert_eq!(g.trail_path(), None);
-        hold(&mut g, ItemKind::PeepStone);
-        assert_eq!(g.trail_path(), None, "no castle yet, so nothing to lead to");
-        assert!(g.try_show_grand_castle());
-        assert!(g.toasts.contains("ghostly trail"));
-        let castle = g.world.landmarks.grand_castle.expect("a castle");
+        let castle = g.world.landmarks.grand_castle.expect("it stands there from the start");
         let p = g.player.pos;
-        let nearest = (castle.x as f32 - p.x).abs().max((castle.z as f32 - p.z).abs()) - GRAND_REACH as f32;
-        assert!(nearest >= grand_distance() as f32 - 1.5);
-        assert!(nearest >= ((gen_radius() + 1) * CHUNK_SIZE) as f32 - 1.0, "beyond the generated land: {nearest}");
-        assert!(g.world.landmarks.has_room_for(&castle));
-        assert!(!g.try_show_grand_castle(), "only one grand castle");
-        // The trail leads from the player to the gate and on to the door of the keep.
+        assert!(((castle.x as f32 - p.x).hypot(castle.z as f32 - p.z)) >= FIXED_GRAND_CASTLE_DISTANCE - 5.0, "far from where the player begins");
+        g.world.set_night(true);
+        assert_eq!(g.trail_path(), None, "no peep stone in hand");
+        hold(&mut g, ItemKind::PeepStone);
+        // The trail leads from the player to the gate and on to the door of the keep, as soon as the stone is held.
         let path = g.trail_path().expect("a trail");
         assert_eq!(path, vec![(p.x, p.z), castle.gate_approach(), castle.keep_door()]);
-        // It is shown only to a peep stone in the hand, and at night it leads to the castle, not to a rainbow.
+        // It is shown only to a peep stone in the hand, and by day it leads to the end of the rainbow instead.
         hold(&mut g, ItemKind::Stick);
         assert_eq!(g.trail_path(), None);
         hold(&mut g, ItemKind::PeepStone);
         g.world.set_night(false);
         assert_eq!(g.trail_path(), None, "by day it leads to the end of the rainbow, and there is none yet");
-        // The castle is really there when the land round it is made, and it is kept by a save.
+        // The castle is really there when the land round it is made, and it is the same after a save.
         g.world.set_night(true);
         let (wx, wz) = (castle.x + GRAND_WALL_HALF, castle.z);
         load_column(&mut g, wx, wz);
         assert_eq!(g.world.block_at(wx, GROUND_TOP + 1, wz), Block::CastleStone);
         let text = crate::save::serialize_save("t", 1, &g.world, &g.player, &g.inventory, &g.items, g.health, false);
         let info = WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() };
-        let mut again = Game::from_save(info, crate::save::parse_save(&text), 9);
+        let again = Game::from_save(info, crate::save::parse_save(&text), 9);
         assert_eq!(again.world.landmarks.grand_castle, Some(castle));
-        hold(&mut again, ItemKind::PeepStone);
-        assert!(!again.try_show_grand_castle(), "the same castle is still out there");
-    }
-
-    #[test]
-    fn the_grand_castle_keeps_clear_of_a_lake_in_the_way() {
-        let mut g = game(32);
-        g.world.set_night(true);
-        hold(&mut g, ItemKind::PeepStone);
-        let p = g.player.pos;
-        let spot = |angle: f32| GrandCastle::ahead((p.x, p.z), angle);
-        // Lakes all along the east half of the horizon: the castle has to go to the west.
-        for i in 0..64 {
-            let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 63.0;
-            let c = spot(angle);
-            g.world.landmarks.lakes.push(Lake { x: c.x, z: c.z, radius: 20, phase: 0, from: (c.x, c.z) });
-        }
-        assert!(g.try_show_grand_castle());
-        let castle = g.world.landmarks.grand_castle.unwrap();
-        assert!(castle.x < p.x as i32 + grand_distance() / 2, "it went west: {castle:?}");
-        assert!(g.world.landmarks.lakes.iter().all(|l| {
-            let (x0, z0, x1, z1) = l.bounds(0);
-            castle.x + GRAND_REACH < x0 || castle.x - GRAND_REACH > x1 || castle.z + GRAND_REACH < z0 || castle.z - GRAND_REACH > z1
-        }), "{castle:?} is not clear of the lakes");
     }
 
     #[test]
@@ -6655,7 +6514,8 @@ mod landmark_tests {
         assert_eq!(again.trail_path(), Some(vec![(q.x, q.z), (x as f32 + 0.5, z as f32 + 0.5)]));
         // At night it leads to the castle instead, not to the rainbow.
         again.world.set_night(true);
-        assert_eq!(again.trail_path(), None);
+        let castle = again.world.landmarks.grand_castle.unwrap();
+        assert_eq!(again.trail_path(), Some(vec![(q.x, q.z), castle.gate_approach(), castle.keep_door()]));
     }
 
     #[test]
@@ -7093,33 +6953,24 @@ mod totem_horizen_and_wear_tests {
     }
 
     #[test]
-    fn a_bone_totem_by_day_brings_one_well_and_a_trail_that_leads_there_for_ever() {
+    fn a_bone_totem_leads_by_day_to_the_well_and_by_night_to_the_graveyard_both_already_there_far_away() {
         let mut g = game(1);
-        hold(&mut g, ItemKind::BoneTotem);
-        assert_eq!(g.trail_path(), None, "nothing out there yet");
-        assert!(g.try_show_well_or_graveyard());
-        let well = g.world.landmarks.well.expect("a well");
-        assert!(g.world.landmarks.graveyard.is_none(), "by day only the well");
+        let (well, yard) = (g.world.landmarks.well.expect("a well from the start"), g.world.landmarks.graveyard.expect("a graveyard from the start"));
         let p = g.player.pos;
-        let nearest = (well.x as f32 - p.x).abs().max((well.z as f32 - p.z).abs());
-        assert!(nearest >= ((gen_radius() + 1) * CHUNK_SIZE) as f32, "beyond the generated land: {nearest}");
-        assert!(!g.try_show_well_or_graveyard(), "only one well");
-        let path = g.trail_path().expect("a trail");
+        assert!(((well.x as f32 - p.x).hypot(well.z as f32 - p.z)) >= FIXED_WELL_DISTANCE - 5.0 && ((yard.x as f32 - p.x).hypot(yard.z as f32 - p.z)) >= FIXED_GRAVEYARD_DISTANCE - 5.0);
+        assert_eq!(g.trail_path(), None, "nothing in hand, no trail");
+        hold(&mut g, ItemKind::BoneTotem);
+        let path = g.trail_path().expect("a trail at once, by day");
         assert_eq!((path[0], *path.last().unwrap()), ((p.x, p.z), well.centre()));
         // Only a totem in hand shows it; a peep stone shows its own trails.
         hold(&mut g, ItemKind::Stick);
         assert_eq!(g.trail_path(), None);
         hold(&mut g, ItemKind::PeepStone);
         assert_eq!(g.trail_path(), None, "the peep stone does not lead to the well");
-        // At night the totem leads elsewhere, and the well stays put.
+        // At night the totem leads to the graveyard, and the well stays where it was.
         hold(&mut g, ItemKind::BoneTotem);
         g.world.set_night(true);
-        assert_eq!(g.trail_path(), None, "no graveyard yet");
-        assert!(g.try_show_well_or_graveyard());
-        let yard = g.world.landmarks.graveyard.expect("a graveyard");
-        assert!(!g.try_show_well_or_graveyard(), "only one graveyard");
-        let path = g.trail_path().unwrap();
-        assert_eq!(path, vec![(p.x, p.z), yard.gate_approach(), yard.middle()]);
+        assert_eq!(g.trail_path().unwrap(), vec![(p.x, p.z), yard.gate_approach(), yard.middle()]);
         g.world.set_night(false);
         assert_eq!(g.world.landmarks.well, Some(well));
         assert_eq!(g.trail_path().unwrap().last().copied(), Some(well.centre()), "by day it leads to the well again");
@@ -7129,8 +6980,8 @@ mod totem_horizen_and_wear_tests {
     fn the_well_is_deep_water_in_a_rim_and_the_graveyard_has_stones_when_generated() {
         let mut g = game(2);
         let well = Well { x: 40, z: 40 };
-        g.world.add_well(well);
-        g.world.add_graveyard(Graveyard { x: 40, z: 80 });
+        g.world.replace_sites(|m| m.well = Some(well));
+        g.world.replace_sites(|m| m.graveyard = Some(Graveyard { x: 40, z: 80 }));
         for (cx, cz) in [(2, 2), (1, 1), (2, 4), (1, 3)] {
             g.world.ensure_chunk(cx, cz);
         }
@@ -7147,7 +6998,7 @@ mod totem_horizen_and_wear_tests {
 
     fn fall_in_the_well(g: &mut Game) {
         let well = Well { x: 40, z: 40 };
-        g.world.add_well(well);
+        g.world.replace_sites(|m| m.well = Some(well));
         for cz in 1..=3 {
             for cx in 1..=3 {
                 g.world.ensure_chunk(cx, cz);
@@ -7169,7 +7020,7 @@ mod totem_horizen_and_wear_tests {
     fn the_well_does_not_transport_the_player_until_the_stone_floor_is_hit() {
         let mut g = game(30);
         let well = Well { x: 40, z: 40 };
-        g.world.add_well(well);
+        g.world.replace_sites(|m| m.well = Some(well));
         for cz in 1..=3 {
             for cx in 1..=3 {
                 g.world.ensure_chunk(cx, cz);
@@ -7205,7 +7056,7 @@ mod totem_horizen_and_wear_tests {
         // Every frame of the fall before the world changes is already darkening, and the world changes only at full black.
         let mut h = game(31);
         let well = Well { x: 40, z: 40 };
-        h.world.add_well(well);
+        h.world.replace_sites(|m| m.well = Some(well));
         for cz in 1..=3 {
             for cx in 1..=3 {
                 h.world.ensure_chunk(cx, cz);
@@ -7493,7 +7344,7 @@ mod totem_horizen_and_wear_tests {
     fn the_grand_castle_changes_between_day_and_night_in_the_loaded_world() {
         let mut g = game(12);
         let castle = GrandCastle { x: 40, z: 40 };
-        g.world.add_grand_castle(castle);
+        g.world.replace_sites(|m| m.grand_castle = Some(castle));
         for cz in 1..=3 {
             for cx in 1..=3 {
                 g.world.ensure_chunk(cx, cz);
@@ -7517,7 +7368,7 @@ mod totem_horizen_and_wear_tests {
         let mut g = game(13);
         let castle = GrandCastle { x: 40, z: 40 };
         g.world.set_night(true);
-        g.world.add_grand_castle(castle);
+        g.world.replace_sites(|m| m.grand_castle = Some(castle));
         for cz in 0..=3 {
             for cx in 0..=3 {
                 g.world.ensure_chunk(cx, cz);
@@ -7536,27 +7387,22 @@ mod totem_horizen_and_wear_tests {
     }
 
     #[test]
-    fn there_is_only_one_mountain_and_the_compass_leads_to_it() {
+    fn there_is_only_one_mountain_and_the_compass_always_points_to_it() {
         let mut g = game(14);
-        let at = (g.player.pos.x, g.player.pos.z);
-        g.bring_in(TrekEvent::Mountain { at, dir: (0.0, -1.0) });
-        assert_eq!(g.world.landmarks.mountains.len(), 1);
+        assert_eq!(g.world.landmarks.mountains.len(), 1, "there from the start");
         let first = g.world.landmarks.mountains[0];
-        g.bring_in(TrekEvent::Mountain { at: (500.0, 500.0), dir: (1.0, 0.0) });
-        g.world.add_mountain(Mountain { x: 5, z: 5, ..first });
-        assert_eq!(g.world.landmarks.mountains, vec![first], "a second mountain never comes");
-        // The needle now points at it from wherever the player stands.
+        // The needle points at it from wherever the player stands, with nothing needing to be walked first.
         g.player.pos = vec3(300.0, 6.0, 300.0);
         let b = g.compass_bearing();
         let want = (first.z as f32 + 0.5 - 300.0).atan2(first.x as f32 + 0.5 - 300.0);
         assert!((b - want).abs() < 1e-4);
-        // And walking north with the compass in hand brings no further mountain.
+        // Walking with the compass in hand brings no further mountain.
         hold(&mut g, ItemKind::Compass);
         for i in 0..400 {
             g.player.pos = vec3(300.0, 6.0, 300.0 - i as f32 * 2.0);
             g.update_landmarks();
         }
-        assert_eq!(g.world.landmarks.mountains.len(), 1);
+        assert_eq!(g.world.landmarks.mountains, vec![first]);
     }
 }
 
@@ -7579,7 +7425,7 @@ mod boss_and_skylands_tests {
     /// A game with a mountain and the player standing on its summit, a little way from the middle.
     fn on_the_summit() -> Game {
         let mut g = game();
-        g.world.add_mountain(mountain());
+        g.world.replace_sites(|m| m.mountains = vec![mountain()]);
         let (sx, sz) = g.world.landmarks.summit().unwrap();
         let y = g.world.ground_top(sx, sz) as f32 + 1.01;
         g.player.pos = vec3(sx as f32 + 0.5 + 12.0, y, sz as f32 + 0.5);
@@ -7605,7 +7451,7 @@ mod boss_and_skylands_tests {
     fn at_the_castle() -> (Game, Lake) {
         let mut g = game();
         let lake = lake();
-        g.world.add_lake(lake);
+        g.world.replace_sites(|m| m.lakes.push(lake));
         let (x, z) = (lake.x, lake.z + TOWER_HALF + 4);
         g.player.pos = vec3(x as f32 + 0.5, g.world.ground_top(x, z) as f32 + 1.01, z as f32 + 0.5);
         g.world.stream_chunks(g.player.pos);
@@ -7634,7 +7480,7 @@ mod boss_and_skylands_tests {
     #[test]
     fn the_yeti_stays_away_from_a_distant_player_and_after_its_death() {
         let mut g = game();
-        g.world.add_mountain(mountain());
+        g.world.replace_sites(|m| m.mountains = vec![mountain()]);
         g.spawn_bosses();
         assert!(yetis(&g).is_empty(), "the summit is far away");
         let mut g = on_the_summit();
@@ -7821,18 +7667,15 @@ mod boss_and_skylands_tests {
     }
 
     #[test]
-    fn each_lake_has_its_own_monster_and_a_dead_one_never_comes_back() {
+    fn the_lakes_monster_lives_from_the_start_and_a_dead_one_never_comes_back() {
         let mut g = game();
-        let a = Lake { x: 0, z: 0, radius: 130, phase: 3, from: (0, 0) };
-        let b = Lake { x: 900, z: 0, radius: 130, phase: 5, from: (900, 0) };
-        g.world.landmarks.lakes = vec![a, b];
-        assert!(a.has_tower() && b.has_tower());
-        assert!(g.world.landmarks.monster_alive(&a) && g.world.landmarks.monster_alive(&b));
+        let a = g.world.landmarks.lakes[0];
+        assert!(a.has_tower());
+        assert!(g.world.landmarks.monster_alive(&a), "the lake's monster lives from the start");
         g.world.record_monster_slain(&a);
-        assert!(!g.world.landmarks.monster_alive(&a), "the first lake's monster is dead for good");
-        assert!(g.world.landmarks.monster_alive(&b), "the other lake's monster is another one, still alive");
+        assert!(!g.world.landmarks.monster_alive(&a), "the lake's monster is dead for good");
         let again = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, parse_save(&g.save_text()), 3);
-        assert!(!again.world.landmarks.monster_alive(&a) && again.world.landmarks.monster_alive(&b), "and it stays dead after a reload");
+        assert!(!again.world.landmarks.monster_alive(&again.world.landmarks.lakes[0]), "and it stays dead after a reload");
     }
 
     #[test]
@@ -7848,16 +7691,17 @@ mod boss_and_skylands_tests {
     fn the_skylands_and_the_bosses_survive_a_save_and_load() {
         let mut g = on_the_summit();
         in_the_cyclone(&mut g);
-        g.world.landmarks.monsters_slain.push((60, 60));
+        let centre = (g.world.landmarks.lakes[0].x, g.world.landmarks.lakes[0].z);
+        g.world.landmarks.monsters_slain.push(centre);
         g.enter_skylands();
         g.player.pos = vec3(skylands::spawn_point().x + 3.0, skylands::spawn_point().y, skylands::spawn_point().z);
         let text = g.save_text();
-        assert!(text.contains("dimension skylands") && text.contains("yetislain") && text.contains("nessie 60 60"));
+        assert!(text.contains("dimension skylands") && text.contains("yetislain") && text.contains(&format!("nessie {} {}", centre.0, centre.1)));
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let again = Game::from_save(info, parse_save(&text), 9);
         assert!(again.in_skylands(), "loaded into the Skylands");
         assert!((again.player.pos.x - (skylands::spawn_point().x + 3.0)).abs() < 0.01);
-        assert!(again.parked(Dimension::Overworld).map_or(false, |a| a.world.landmarks.yeti_slain && a.world.landmarks.monsters_slain == vec![(60, 60)]));
+        assert!(again.parked(Dimension::Overworld).map_or(false, |a| a.world.landmarks.yeti_slain && a.world.landmarks.monsters_slain == vec![centre]));
         assert!(again.parked(Dimension::Horizen).is_none());
     }
 
@@ -7958,25 +7802,22 @@ mod silver_tower_tests {
     }
 
     #[test]
-    fn a_peep_stone_in_the_horizen_brings_out_one_tower_in_the_great_cavern_and_a_trail_down_the_tunnel() {
+    fn the_horizen_tower_stands_in_the_great_cavern_from_the_start_and_a_peep_stone_leads_down_the_tunnel_to_it() {
         let mut g = game();
         g.enter_horizen();
         g.world.night = false;
-        assert!(!g.try_show_horizen_tower(), "no peep stone in hand");
-        hold(&mut g, ItemKind::PeepStone);
-        assert_eq!(g.trail_path(), None, "nothing out there yet");
-        assert!(g.try_show_horizen_tower());
-        let tower = g.world.landmarks.horizen_tower.expect("the tower is out");
+        let tower = g.world.landmarks.horizen_tower.expect("the tower is there from the start");
         assert_eq!((tower.x, tower.z), horizen::cavern_centre(g.info.seed), "in the middle of the great cavern");
         assert!(horizen::air_height(g.info.seed, tower.x, tower.z) > TOWER_HEIGHT, "under a high roof");
-        let path = g.trail_path().expect("the peep stone leads there");
+        assert_eq!(g.trail_path(), None, "no peep stone in hand");
+        hold(&mut g, ItemKind::PeepStone);
+        let path = g.trail_path().expect("the peep stone leads there at once");
         assert_eq!(path.last().copied(), Some(tower.middle()));
         assert!(path.len() > 5, "the trail follows the winding tunnel");
-        assert!(!g.try_show_horizen_tower(), "only one");
         // There is no sky in the cave to tell night by: the stone leads at any hour.
         g.world.night = true;
         assert!(g.trail_path().is_some());
-        // The tower survives a save and reload with its door unlocked.
+        // Its unlocked door survives a save and reload; its place is the seed's.
         g.world.night = false;
         g.world.unlock_tower(tower.x, tower.z);
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
@@ -7987,37 +7828,21 @@ mod silver_tower_tests {
     }
 
     #[test]
-    fn the_tenth_new_island_in_the_skylands_brings_the_tower_to_the_next_island_to_appear() {
+    fn the_skylands_tower_stands_on_a_set_far_island_from_the_start_with_a_locked_door_and_the_horn() {
         let mut g = game();
         g.travel_to(Dimension::Skylands);
-        g.player.on_ground = true;
         let seed = g.info.seed;
-        let mut count = 0;
-        // Walk onto islands one by one; nine are not enough.
-        for cell in [(0, 0), (1, 0), (2, 0), (3, 0), (3, 1), (2, 1), (1, 1), (0, 1), (-1, 1), (-1, 0)] {
-            if count == SKY_TOWER_VISITS - 1 {
-                g.update_sky_tower();
-                assert!(g.world.landmarks.sky_tower.is_none(), "nine islands are not enough");
-            }
-            let island = skylands::island_in_cell(seed, cell.0, cell.1);
-            g.player.pos = vec3(island.x as f32 + 0.5, island.top as f32 + 1.01, island.z as f32 + 0.5);
-            g.update_sky_tower();
-            count += 1;
-        }
-        assert_eq!(g.world.landmarks.sky_visited.len(), SKY_TOWER_VISITS);
-        let cell = g.world.landmarks.sky_tower.expect("the tenth island brings the tower");
-        assert!(!g.world.landmarks.sky_visited.contains(&cell) && cell != (0, 0));
+        let cell = g.world.landmarks.sky_tower.expect("there from the start");
+        assert_eq!(cell, skylands::tower_cell_for(seed));
         let island = skylands::island_in_cell(seed, cell.0, cell.1);
-        assert!(!g.world.chunks.contains_key(&World::chunk_of(island.x, island.z)), "it is the next to appear: not made yet");
-        // Its chunks hold a locked tower with the Horn of the Hunt at the top; no other island has one.
-        g.world.ensure_chunk(World::chunk_of(island.x, island.z).0, World::chunk_of(island.x, island.z).1);
+        assert!(!g.world.chunks.contains_key(&World::chunk_of(island.x, island.z)), "far away: not near the player");
+        // Its chunks hold a locked tower with the Horn of the Hunt at the top.
+        let key = World::chunk_of(island.x, island.z);
+        g.world.ensure_chunk(key.0, key.1);
         assert_eq!(g.world.block_at(island.x, island.top + 1 + TOWER_STOREY * (TOWER_STOREYS - 1), island.z), Block::HornPlinth);
         let door_chunk = World::chunk_of(island.x, island.z + TOWER_HALF);
         g.world.ensure_chunk(door_chunk.0, door_chunk.1);
         assert_eq!(g.world.block_at(island.x, island.top + 1, island.z + TOWER_HALF), Block::TowerDoor);
-        // Only one tower is ever brought out.
-        g.update_sky_tower();
-        assert_eq!(g.world.landmarks.sky_tower, Some(cell));
     }
 
     #[test]
@@ -8027,7 +7852,9 @@ mod silver_tower_tests {
         g.player.pos = vec3(HORIZEN_SPAWN.0 as f32 + 40.5, 6.0, HORIZEN_SPAWN.1 as f32 + 0.5);
         assert!((g.compass_bearing().abs() - std::f32::consts::PI).abs() < 0.01, "the spawn lies west: {}", g.compass_bearing());
         g.travel_to(Dimension::Overworld);
-        assert_eq!(g.compass_bearing(), COMPASS_NORTH_BEARING, "north in the overworld until a mountain is out");
+        let (here, m) = ((g.player.pos.x, g.player.pos.z), g.world.landmarks.mountains[0]);
+        let want = (m.z as f32 + 0.5 - here.1).atan2(m.x as f32 + 0.5 - here.0);
+        assert!((g.compass_bearing() - want).abs() < 1e-4, "in the overworld the needle points at the mountain, which is always there");
         g.travel_to(Dimension::Skylands);
         let spawn = skylands::spawn_point();
         g.player.pos = spawn + vec3(0.0, 0.0, -30.0);
@@ -8035,13 +7862,11 @@ mod silver_tower_tests {
     }
 
     #[test]
-    fn a_bone_totem_in_the_skylands_points_to_the_silver_tower_once_it_has_appeared() {
+    fn a_bone_totem_in_the_skylands_points_to_the_silver_tower_that_is_already_there() {
         let mut g = game();
         g.travel_to(Dimension::Skylands);
         hold(&mut g, ItemKind::BoneTotem);
-        assert_eq!(g.trail_path(), None, "no tower yet, nothing to point to");
-        let cell = (2, 1);
-        g.world.add_sky_tower(cell);
+        let cell = g.world.landmarks.sky_tower.expect("there from the start");
         let island = skylands::island_in_cell(g.info.seed, cell.0, cell.1);
         let p = g.player.pos;
         for night in [false, true] {
@@ -8066,10 +7891,11 @@ mod silver_tower_tests {
         assert_eq!(over_island, island.top as f32 + 1.0);
         let void = (0..400).map(|i| (island.x + 28 + i, island.z + 28)).find(|&(x, z)| skylands::surface_top(g.info.seed, x, z, false).is_none()).unwrap();
         assert_eq!(crate::effects::trail_floor(&g.world, void.0, void.1, 77.4), 77.0);
-        // Back in the overworld the totem leads to the well (none yet), not to the tower.
+        // Back in the overworld the totem leads to the well, not to the tower.
         g.travel_to(Dimension::Overworld);
         hold(&mut g, ItemKind::BoneTotem);
-        assert_eq!(g.trail_path(), None);
+        let well = g.world.landmarks.well.unwrap();
+        assert_eq!(g.trail_path().and_then(|p| p.last().copied()), Some(well.centre()));
     }
 
     #[test]
@@ -8217,27 +8043,26 @@ mod crow_pan_relic_and_mother_tests {
     }
 
     #[test]
-    fn a_startled_crow_flies_west_wherever_the_player_stands_and_a_quail_flies_away() {
+    fn a_startled_crow_flies_to_the_altar_wherever_the_player_stands_and_a_quail_flies_away() {
+        let (ax, az) = crate::terrain::nearest_altar(1, &game().world.landmarks, 8, 8, 2000.0).expect("an altar");
         for (player_dx, player_dz) in [(5.0, 0.0), (-5.0, 0.0), (0.0, 5.0), (0.0, -5.0)] {
             let mut g = game();
+            g.player.pos = vec3(ax as f32 + 30.5, GROUND_TOP as f32 + 1.0, az as f32 + 0.5);
+            g.world.stream_chunks(g.player.pos);
             clear_sky(&mut g);
-            let start = vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5);
+            let start = vec3(ax as f32 + 30.5, g.world.ground_top(ax + 30, az) as f32 + 1.0, az as f32 + 0.5);
             let mut crow = Animal::new(AnimalKind::Crow, start, &mut Rng::new(3));
             let mut quail = Animal::new(AnimalKind::Quail, start, &mut Rng::new(3));
             let player = start + vec3(player_dx, 0.0, player_dz);
             let mut rng = Rng::new(9);
-            for _ in 0..60 {
+            for _ in 0..120 {
                 crow.update(&g.world, player, 1.0 / 60.0, &mut rng);
                 quail.update(&g.world, player, 1.0 / 60.0, &mut rng);
             }
-            for _ in 0..60 {
-                crow.update(&g.world, player, 1.0 / 60.0, &mut rng);
-                quail.update(&g.world, player, 1.0 / 60.0, &mut rng);
-            }
-            assert!(crow.pos.x < start.x - 4.0, "the crow went west: {:?} (player at {player_dx},{player_dz})", crow.pos);
-            assert!((crow.pos.z - start.z).abs() < 0.5, "straight west");
+            assert!(crow.pos.x < start.x - 4.0, "the crow went towards the altar, to the west: {:?} (player at {player_dx},{player_dz})", crow.pos);
+            assert!((crow.pos.z - start.z).abs() < 1.5, "straight at it");
             if player_dx > 0.0 {
-                assert!(quail.pos.x < start.x, "a quail flees from the player, here westwards too");
+                assert!(quail.pos.x < start.x, "a quail flees from the player, here westwards");
             } else if player_dx < 0.0 {
                 assert!(quail.pos.x > start.x, "a quail flees from the player, here eastwards");
             }
@@ -8266,74 +8091,62 @@ mod crow_pan_relic_and_mother_tests {
     }
 
     #[test]
-    fn following_one_crow_west_for_two_chunks_brings_it_down_on_a_new_ancient_altar_with_a_loadstone() {
+    fn a_scared_crow_flies_to_the_nearest_ancient_altar_and_perches_on_top_of_it() {
         let mut g = game();
-        for cx in -4..=4 {
-            for cz in -3..=3 {
-                g.world.ensure_chunk(cx, cz);
+        let seed = g.info.seed;
+        let (ax, az) = crate::terrain::nearest_altar(seed, &g.world.landmarks, 8, 8, 2000.0).expect("an altar within two thousand blocks");
+        assert!(((ax - 8) as f32).hypot((az - 8) as f32) >= ALTAR_MIN_SPAWN_DISTANCE, "far from where the world began");
+        // The crow starts well short of it, with the player beside it to startle it again each time it settles.
+        let start = vec3(ax as f32 + 30.5, 0.0, az as f32 + 0.5);
+        g.player.pos = start + vec3(6.0, 0.0, 0.0);
+        g.world.stream_chunks(g.player.pos);
+        g.player.pos.y = g.world.ground_top(start.x as i32, start.z as i32) as f32 + 1.0;
+        let y = g.player.pos.y;
+        g.animals.push(Animal::new(AnimalKind::Crow, vec3(start.x, y, start.z), &mut Rng::new(3)));
+        let altar_y = g.world.ground_top(ax, az) + 1;
+        let clear = |g: &mut Game| {
+            for chunk in g.world.chunks.values_mut() {
+                for yy in altar_y + 1..WORLD_HEIGHT {
+                    for z in 0..CHUNK_SIZE {
+                        for x in 0..CHUNK_SIZE {
+                            chunk.blocks[idx(x, yy, z)] = Block::Air;
+                        }
+                    }
+                }
             }
-        }
-        clear_sky(&mut g);
-        // Where the crow starts, and a clear flat patch of ground for the altar.
-        let start = vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5);
-        let crow = Animal::new(AnimalKind::Crow, start, &mut Rng::new(3));
-        g.animals.push(crow);
-        let mut perched = None;
-        'chase: for _ in 0..40 {
-            // The player walks up to within the startle distance of the crow and the crow takes off.
+        };
+        assert_eq!(g.world.block_at(ax, altar_y, az), Block::AltarLoadstone, "the altar stands there from the start");
+        let mut perched = false;
+        'chase: for _ in 0..60 {
             let c = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap().pos;
             g.player.pos = vec3(c.x + 6.0, c.y, c.z);
             for _ in 0..600 {
                 let c = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap().pos;
-                // Keep up with the crow, a few blocks behind it.
                 g.player.pos.x = g.player.pos.x.min(c.x + 12.0);
                 g.world.stream_chunks(g.player.pos);
-                clear_sky(&mut g);
+                clear(&mut g);
                 g.update_animals(1.0 / 60.0);
-                let altar = (-120..60).flat_map(|x| (-60..60).map(move |z| (x, z))).find(|&(x, z)| g.world.block_at(x, GROUND_TOP + 1, z) == Block::AltarLoadstone);
-                if let Some(at) = altar {
-                    perched = Some(at);
+                let crow = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap();
+                if crow.on_ground && vec2(crow.pos.x - ax as f32 - 0.5, crow.pos.z - az as f32 - 0.5).length() < 2.0 {
+                    perched = true;
                     break 'chase;
                 }
             }
         }
-        let (ax, _az) = perched.expect("the crow came down on an altar");
-        assert!(ax <= 30 - CROW_ALTAR_WEST_BLOCKS as i32 + 8, "it was followed two chunks west: altar at x={ax}");
-        // The crow sits on top of the altar, not inside it, and is free to go again: it used to be set down inside the altar's
-        // collision box and stuck there for ever.
+        assert!(perched, "the crow came down on the altar");
+        // The crow sits on top of the altar, not inside it, and is free to go again.
         let eps = Vec3::splat(0.01);
         let crow = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap();
         let (lo, hi) = crow.hitbox();
         assert!(!g.world.box_blocked(lo + eps, hi - eps), "the crow is not inside the altar: {:?}", crow.pos);
-        let landed = crow.pos;
-        for _ in 0..900 {
-            g.world.stream_chunks(g.player.pos);
-            g.update_animals(1.0 / 60.0);
-        }
-        let crow = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap();
-        assert!((crow.pos - landed).length() > 0.4, "the crow got away from the altar instead of sticking: {landed:?} -> {:?}", crow.pos);
         // The loadstone is taken by hand, the altar stays and is saved.
-        let (ax, az) = perched.unwrap();
         hold(&mut g, ItemKind::Stick);
-        assert_eq!(g.mine(ax, GROUND_TOP + 1, az), vec![ItemKind::Loadstone]);
-        assert_eq!(g.world.block_at(ax, GROUND_TOP + 1, az), Block::AncientAltar);
+        assert_eq!(g.mine(ax, altar_y, az), vec![ItemKind::Loadstone]);
+        assert_eq!(g.world.block_at(ax, altar_y, az), Block::AncientAltar);
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let mut again = Game::from_save(info, parse_save(&g.save_text()), 3);
         again.world.stream_chunks(vec3(ax as f32, 6.0, az as f32));
-        assert_eq!(again.world.block_at(ax, GROUND_TOP + 1, az), Block::AncientAltar, "the altar is kept");
-    }
-
-    #[test]
-    fn a_crow_that_the_player_leaves_behind_forgets_how_far_it_was_followed() {
-        let mut g = game();
-        clear_sky(&mut g);
-        let mut crow = Animal::new(AnimalKind::Crow, vec3(30.5, GROUND_TOP as f32 + 1.0, 10.5), &mut Rng::new(3));
-        crow.west_followed = 30.0;
-        g.animals.push(crow);
-        g.player.pos = vec3(30.5 + CROW_LOSE_DISTANCE + 5.0, GROUND_TOP as f32 + 1.0, 10.5);
-        g.update_animals(1.0 / 60.0);
-        let crow = g.animals.iter().find(|a| a.kind == AnimalKind::Crow).unwrap();
-        assert_eq!(crow.west_followed, 0.0);
+        assert_eq!(again.world.block_at(ax, altar_y, az), Block::AncientAltar, "the altar is kept without its loadstone");
     }
 
     // --- The Iron Quail ---
@@ -8425,21 +8238,92 @@ mod crow_pan_relic_and_mother_tests {
     // --- The crown, the ruined castle and Excalibur ---
 
     #[test]
-    fn the_crown_is_worn_and_brings_a_ruined_castle_out_ahead_of_the_player_once() {
+    fn the_ruined_castle_stands_far_away_from_the_start_and_is_the_same_after_a_save() {
         let mut g = game();
-        assert!(!g.try_show_ruined_castle(), "not without the crown");
+        let castle = g.world.landmarks.ruined_castle.expect("it stands there from the start");
+        let p = g.player.pos;
+        assert!(((castle.x as f32 - p.x).hypot(castle.z as f32 - p.z)) >= FIXED_RUINED_CASTLE_DISTANCE - 5.0, "far from where the player begins");
         hold(&mut g, ItemKind::AncientCrown);
         assert!(g.wear_held());
         assert_eq!(g.worn, Some(ItemKind::AncientCrown));
-        g.player.yaw = 0.0;
-        assert!(g.try_show_ruined_castle());
-        let castle = g.world.landmarks.ruined_castle.expect("the ruin is out");
-        assert!(castle.x as f32 > g.player.pos.x + GRAND_REACH as f32, "ahead, to the east, beyond the generated land");
-        assert!(!g.try_show_ruined_castle(), "only one");
         let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
         let again = Game::from_save(info, parse_save(&g.save_text()), 3);
         assert_eq!(again.world.landmarks.ruined_castle, Some(castle));
         assert_eq!(again.worn, Some(ItemKind::AncientCrown));
+    }
+
+    /// Whether the player stands in the ruined castle's courtyard, `CROWN_ARRIVAL_DZ` blocks south of the sword, on the ground.
+    fn in_the_ruined_castle(g: &Game) -> bool {
+        let c = g.world.landmarks.ruined_castle.unwrap();
+        let p = g.player.pos;
+        g.in_overworld() && (p.x - (c.x as f32 + 0.5)).abs() < 0.1 && (p.z - (c.z + CROWN_ARRIVAL_DZ) as f32 - 0.5).abs() < 0.1 && (p.y - (g.world.ground_top(c.x, c.z + CROWN_ARRIVAL_DZ) as f32 + 1.0)).abs() < 0.5
+    }
+
+    #[test]
+    fn a_crowned_player_coming_back_from_the_horizen_or_the_skylands_appears_in_the_ruined_castle() {
+        // From the Horizen.
+        let mut g = game();
+        hold(&mut g, ItemKind::AncientCrown);
+        assert!(g.wear_held());
+        g.enter_horizen();
+        g.travel_to(Dimension::Overworld);
+        assert!(in_the_ruined_castle(&g), "from the Horizen: {:?}", g.player.pos);
+        // From the Skylands, whether by the way down (a fall) or any other.
+        let mut s = game();
+        hold(&mut s, ItemKind::AncientCrown);
+        assert!(s.wear_held());
+        s.travel_to(Dimension::Skylands);
+        s.player.pos.y = SKY_VOID_Y - 5.0;
+        s.update_travel(0.01);
+        for _ in 0..((SKY_FALL_FADE_IN + 0.5) * 60.0) as i32 {
+            s.update_travel(1.0 / 60.0);
+        }
+        assert!(in_the_ruined_castle(&s), "from the Skylands: {:?}", s.player.pos);
+        // Without the crown they arrive where they always did: not in the castle.
+        let mut plain = game();
+        plain.enter_horizen();
+        plain.travel_to(Dimension::Overworld);
+        assert!(!in_the_ruined_castle(&plain));
+        // The night faint in the cave takes a crowned player there too.
+        let mut f = game();
+        hold(&mut f, ItemKind::AncientCrown);
+        assert!(f.wear_held());
+        f.enter_horizen();
+        f.faint_in_cave();
+        assert!(in_the_ruined_castle(&f), "after the faint: {:?}", f.player.pos);
+        // Dying is another matter: the player starts again at the beginning.
+        let mut d = game();
+        hold(&mut d, ItemKind::AncientCrown);
+        assert!(d.wear_held());
+        d.enter_horizen();
+        d.hurt_player(MAX_HEALTH, "gone");
+        assert!(!in_the_ruined_castle(&d) && d.in_overworld());
+    }
+
+    #[test]
+    fn a_fall_from_the_skylands_lands_by_chance_on_the_mountain_the_loch_island_or_in_the_jungle() {
+        let mut g = game();
+        g.travel_to(Dimension::Skylands);
+        let seed = g.info.seed;
+        // The sites belong to the normal world, which is parked while the player is in the Skylands: read them from there.
+        let (m, lake) = (g.parked(Dimension::Overworld).unwrap().world.landmarks.mountains[0], g.parked(Dimension::Overworld).unwrap().world.landmarks.lakes[0]);
+        let mut seen = [0, 0, 0];
+        for _ in 0..90 {
+            let spot = g.pick_fall_landing();
+            let (x, z) = (spot.x.floor() as i32, spot.z.floor() as i32);
+            let ground = g.parked(Dimension::Overworld).unwrap().world.ground_top(x, z) as f32;
+            assert!((spot.y - (ground + 1.0 + SKY_FALL_DROP)).abs() < 0.01, "set {SKY_FALL_DROP} blocks above the ground");
+            if m.rise_at(x, z) >= m.height - LANDING_BELOW_SUMMIT - 3 && ((x - m.x) as f32).hypot((z - m.z) as f32) > SUMMIT_PLATEAU_RADIUS {
+                seen[0] += 1;
+            } else if ((x - lake.x) as f32).hypot((z - lake.z) as f32) <= LANDING_ISLAND_RADIUS + 1.0 {
+                seen[1] += 1;
+            } else if crate::terrain::in_jungle(seed, x, z) {
+                seen[2] += 1;
+            } else {
+                panic!("a landing at {x},{z} is none of the three places");
+            }
+        }
+        assert!(seen.iter().all(|&n| n >= 10), "all three places come up about equally: mountain {}, island {}, jungle {}", seen[0], seen[1], seen[2]);
     }
 
     #[test]
@@ -8526,7 +8410,7 @@ mod crow_pan_relic_and_mother_tests {
     fn coming_into_the_horizen_is_always_day_and_night_there_wakes_the_player_at_stonehenge() {
         let mut g = game();
         let well = Well { x: 60, z: 60 };
-        g.world.add_well(well);
+        g.world.replace_sites(|m| m.well = Some(well));
         g.world.night = true;
         g.enter_horizen();
         assert!(!g.world.night, "day, whatever the overworld was");
@@ -8550,55 +8434,38 @@ mod crow_pan_relic_and_mother_tests {
     }
 
     #[test]
-    fn every_fourth_cave_entered_has_a_camp_with_a_burning_log_and_a_pot_of_ready_stew() {
+    fn the_caves_have_camps_at_set_places_each_with_a_burning_log_and_a_pot_of_ready_stew_made_once() {
         let mut g = game();
         g.enter_horizen();
         let seed = g.info.seed;
-        let mut camps = Vec::new();
-        // Walk into the caves one by one (the arrival chamber counts as the first).
-        let cells = [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)];
-        for (n, cell) in cells.into_iter().enumerate() {
-            let cave = horizen::cave_in_cell(seed, cell.0, cell.1);
-            if cave.great {
-                continue;
-            }
-            g.player.pos = vec3(cave.x, GROUND_TOP as f32 + 1.0, cave.z);
-            g.world.stream_chunks(g.player.pos);
-            let made = g.update_cave_visits();
-            assert_eq!(made, g.world.landmarks.caves_visited.len() % HORIZEN_CAMP_EVERY == 0, "cave {n}");
-            assert!(!g.update_cave_visits(), "a cave already entered is not entered again");
-            if made {
-                camps.push(cave);
-            }
-        }
-        assert!(!camps.is_empty());
-        for cave in camps {
-            let camp = g.world.pots.iter().find(|(&(x, _, z), _)| horizen::cave_at(seed, x, z).map(|c| c.cell) == Some(cave.cell) || ((x as f32 - cave.x).abs() < 8.0 && (z as f32 - cave.z).abs() < 8.0));
-            let (&pos, pot) = camp.expect("a pot in the cave");
-            assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Fire, "on a burning log");
-            assert!(g.world.fires.contains_key(&pos));
-            assert!(pot.water && matches!(pot.stew(), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)), "stew, ready");
-            // Right click with a wooden bowl ladles a serving out.
-            g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::WoodenBowl, count: 1 });
-            g.select_slot(0);
-            let hit = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Fire, prev: (pos.0, pos.1 + 1, pos.2) };
-            assert!(g.use_held(&hit));
-            assert!(matches!(g.inventory.slots.iter().flatten().next().map(|s| s.kind), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)));
-        }
-    }
-
-    #[test]
-    fn the_caves_entered_are_saved_so_a_camp_is_not_made_twice() {
-        let mut g = game();
-        g.enter_horizen();
-        for cell in [(0, 0), (1, 0)] {
-            let cave = horizen::cave_in_cell(g.info.seed, cell.0, cell.1);
-            g.player.pos = vec3(cave.x, GROUND_TOP as f32 + 1.0, cave.z);
-            g.world.stream_chunks(g.player.pos);
-            g.update_cave_visits();
-        }
+        // The first camp: its spot is the seed's, whoever goes there and whenever.
+        let (ci, cj) = (-8..9).flat_map(|j| (-8..9).map(move |i| (i, j))).find(|&(i, j)| horizen::camp_in_cell(seed, i, j).is_some()).expect("some cave has a camp");
+        let (x, z) = horizen::camp_in_cell(seed, ci, cj).unwrap();
+        assert!(!g.world.chunks.contains_key(&World::chunk_of(x, z)), "nothing is made until the land there is");
+        g.player.pos = vec3(x as f32 + 0.5, GROUND_TOP as f32 + 3.0, z as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        let pos = (x, GROUND_TOP + 1, z);
+        assert_eq!(g.world.block_at(pos.0, pos.1, pos.2), Block::Fire, "on a burning log");
+        assert!(g.world.fires.contains_key(&pos));
+        let pot = g.world.pots[&pos];
+        assert!(pot.water && matches!(pot.stew(), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)), "stew, ready");
+        // Right click with a wooden bowl ladles a serving out.
+        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::WoodenBowl, count: 1 });
+        g.select_slot(0);
+        let hit = Hit { x: pos.0, y: pos.1, z: pos.2, block: Block::Fire, prev: (pos.0, pos.1 + 1, pos.2) };
+        assert!(g.use_held(&hit));
+        assert!(matches!(g.inventory.slots.iter().flatten().next().map(|s| s.kind), Some(ItemKind::RedBerryStew | ItemKind::PurpleBerryStew)));
+        // The camp is saved as made: a world loaded again does not light a second one over what the player did.
+        assert!(g.world.camps_built.contains(&(x, z)));
         let again = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, parse_save(&g.save_text()), 3);
-        assert_eq!(again.world.landmarks.caves_visited, vec![(0, 0), (1, 0)]);
+        assert!(again.world.camps_built.contains(&(x, z)));
+        let mut again = again;
+        again.world.chunks.clear();
+        again.world.stream_chunks(vec3(x as f32 + 0.5, GROUND_TOP as f32 + 3.0, z as f32 + 0.5));
+        assert_eq!(again.world.pots[&pos].served, 1, "the same pot, with the serving already taken");
+        // The camps are about one cave in four, found by walking: none stands in the arrival chamber.
+        let (sx, sz) = horizen::spawn_centre();
+        assert!(horizen::camps_in_chunk(seed, (sx as i32).div_euclid(CHUNK_SIZE), (sz as i32).div_euclid(CHUNK_SIZE)).is_empty());
     }
 
     // --- The jungle temple ---
@@ -8812,7 +8679,7 @@ mod crow_pan_relic_and_mother_tests {
 
     fn in_the_graveyard(g: &mut Game) -> Graveyard {
         let yard = Graveyard { x: 60, z: 60 };
-        g.world.add_graveyard(yard);
+        g.world.replace_sites(|m| m.graveyard = Some(yard));
         g.player.pos = vec3(yard.x as f32 + 0.5, GROUND_TOP as f32 + 1.0, yard.z as f32 + 0.5);
         yard
     }
@@ -8859,7 +8726,6 @@ mod crow_pan_relic_and_mother_tests {
         let mut g = game();
         g.enter_horizen();
         let (tx, tz) = horizen::cavern_centre(g.info.seed);
-        g.world.add_horizen_tower(crate::tower::Tower { x: tx, z: tz });
         g.player.pos = vec3(tx as f32 + 0.5, GROUND_TOP as f32 + 2.0, tz as f32 + 0.5);
         hold(&mut g, ItemKind::MusicalPipes);
         assert!(g.play_pipes());
@@ -8871,8 +8737,8 @@ mod crow_pan_relic_and_mother_tests {
         // The sky tower.
         let mut s = game();
         s.travel_to(Dimension::Skylands);
-        s.world.landmarks.sky_tower = Some((1, 1));
-        let island = skylands::island_in_cell(s.info.seed, 1, 1);
+        let cell = s.world.landmarks.sky_tower.expect("the tower is there from the start");
+        let island = skylands::island_in_cell(s.info.seed, cell.0, cell.1);
         s.player.pos = vec3(island.x as f32 + 0.5, island.top as f32 + 3.0, island.z as f32 + 0.5);
         hold(&mut s, ItemKind::MusicalPipes);
         s.play_pipes();
@@ -9499,7 +9365,7 @@ mod boss_update_tests {
     fn at_the_shore() -> Game {
         let mut g = game();
         let lake = lake();
-        g.world.add_lake(lake);
+        g.world.replace_sites(|m| m.lakes.push(lake));
         let shore = (0..40).map(|i| lake.z + 60 + i).find(|&z| !g.world.is_wet_column(lake.x, z) && g.world.is_wet_column(lake.x, z - 1)).unwrap_or(lake.z + 90);
         g.player.pos = vec3(lake.x as f32 + 0.5, g.world.ground_top(lake.x, shore) as f32 + 1.01, shore as f32 + 0.5);
         g.world.stream_chunks(g.player.pos);
@@ -9890,7 +9756,7 @@ mod boss_update_tests {
     fn bats_live_in_the_mineshafts_and_nowhere_else_in_the_normal_world() {
         let mut g = game();
         let m = Mountain { x: 30, z: -500, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT), phase: 7 };
-        g.world.add_mountain(m);
+        g.world.replace_sites(|marks| marks.mountains = vec![m]);
         let (rx, rz, floor) = crate::mines::network(&m).rooms[MINE_KEY_SHAFTS[0] * 3 + MINE_KEY_RING];
         g.player.pos = vec3(rx as f32 + 0.5, floor as f32 + 1.01, rz as f32 + 0.5);
         g.world.stream_chunks(g.player.pos);
@@ -10128,10 +9994,13 @@ mod upgrade_tests {
         g
     }
 
+    /// A game with the player standing in the throne room of the king's castle (on its upper floor).
     fn at_king() -> Game {
         let g = game();
         let (kx, kz) = horizen::king_centre(g.info.seed);
-        in_cave_at(kx, kz + KING_WALL_HALF - 6)
+        let mut g = in_cave_at(kx - 15, kz - 12);
+        g.player.pos.y = GROUND_TOP as f32 + 1.01 + (KING_SLAB_DY + 1) as f32;
+        g
     }
 
     // --- bats, salt, the vampire bat ---
@@ -10323,18 +10192,18 @@ mod upgrade_tests {
     #[test]
     fn playing_the_pipes_in_the_kings_castle_brings_his_voice_and_a_gold_pop_up() {
         let mut g = at_king();
-        assert!(g.in_king_castle());
+        assert!(g.in_throne_room());
         hold(&mut g, ItemKind::MusicalPipes, 1);
         assert!(g.play_pipes());
         let (text, _) = g.ghost_text.clone().expect("the king speaks");
         assert_eq!(text, "I am the king eternal. Give me gold and I shall send my spirits to guard you.");
         assert_eq!(g.king_dialog, Some(1));
         assert!(g.ui_open(), "the pop-up takes the mouse");
-        // Outside the walls the pipes bring nothing of the kind.
+        // Anywhere else (here the arrival cave) the pipes bring nothing of the kind.
         let mut far = in_cave_at(HORIZEN_SPAWN.0, HORIZEN_SPAWN.1 + 6);
         hold(&mut far, ItemKind::MusicalPipes, 1);
         far.play_pipes();
-        assert!(far.king_dialog.is_none() && !far.in_king_castle());
+        assert!(far.king_dialog.is_none() && !far.in_throne_room());
     }
 
     #[test]
@@ -10513,14 +10382,15 @@ mod upgrade_tests {
     fn the_kings_castle_stands_in_a_giant_cave_with_the_boots_in_its_heart() {
         let mut g = at_king();
         let (kx, kz) = horizen::king_centre(g.info.seed);
-        g.player.pos = vec3(kx as f32 + 0.5, GROUND_TOP as f32 + 3.5, kz as f32 + 0.5);
+        let (bx, bz, by) = kingcastle::BOOTS_CELL;
+        g.player.pos = vec3((kx + bx) as f32 + 0.5, (GROUND_TOP + 1 + by) as f32 + 2.0, (kz + bz + 1) as f32 + 0.5);
         g.world.stream_chunks(g.player.pos);
-        assert_eq!(g.world.block_at(kx, GROUND_TOP + 3, kz), Block::BootsPlinth);
+        assert_eq!(g.world.block_at(kx + bx, GROUND_TOP + 1 + by, kz + bz), Block::BootsPlinth, "on the dais in the throne room");
         assert_eq!(g.world.block_at(kx, GROUND_TOP + 1, kz + KING_WALL_HALF), Block::Air, "the gate stands open");
         assert_eq!(g.world.block_at(kx + KING_WALL_HALF, GROUND_TOP + 1, kz), Block::CastleStone, "the wall");
         // Taking the boots by hand gives them.
         hold(&mut g, ItemKind::Stick, 1);
-        assert_eq!(g.mine(kx, GROUND_TOP + 3, kz), vec![ItemKind::BootsOfTheSky]);
+        assert_eq!(g.mine(kx + bx, GROUND_TOP + 1 + by, kz + bz), vec![ItemKind::BootsOfTheSky]);
     }
 
     // --- the jungle ---
@@ -10718,8 +10588,8 @@ mod upgrade_tests {
 
     #[test]
     fn a_snake_fang_and_25_arrows_make_25_poison_arrows_that_the_bow_shoots_first_and_that_hit_twice_as_hard() {
-        let recipes: Vec<_> = crate::recipe::RECIPES.iter().filter(|r| r.output == ItemKind::PoisonArrow).collect();
-        assert_eq!(recipes.len(), 1, "the old recipe is gone");
+        let recipes: Vec<_> = crate::recipe::RECIPES.iter().filter(|r| r.output == ItemKind::PoisonArrow && r.inputs.iter().any(|&(k, _)| k == ItemKind::SnakeFang)).collect();
+        assert_eq!(recipes.len(), 1, "the old recipe is gone: one fang recipe");
         let r = recipes[0];
         assert_eq!(r.inputs, &[(ItemKind::Arrow, 25), (ItemKind::SnakeFang, 1)]);
         assert_eq!(r.output_count, 25);
@@ -11081,66 +10951,57 @@ mod upgrade_tests {
         assert_eq!(AnimalKind::BronzeParrot.drops(&mut Rng::new(1)), expected, "bronze and iron feathers");
     }
 
-    fn test_mountain() -> Mountain {
-        Mountain { x: 30, z: -500, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(WORLD_HEIGHT as i32 - 10), phase: 7 }
-    }
-
-    #[test]
-    fn a_structure_is_never_put_down_on_another_or_on_stonehenge_or_the_temple() {
-        let g = game();
-        // Wherever the totem is held, the well keeps clear of the mountain, Stonehenge and the jungle's middle.
-        for k in 0..40 {
-            let mut g = game();
-            g.world.add_mountain(Mountain { x: 100 + 7 * k, z: 40 - 3 * k, ..test_mountain() });
-            g.world.night = false;
-            g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::BoneTotem, count: 1 });
-            g.select_slot(0);
-            for _ in 0..4 {
-                g.try_show_well_or_graveyard();
-            }
-            let well = g.world.landmarks.well.expect("a well came out");
-            let marks = &g.world.landmarks;
-            let (wx0, wz0, wx1, wz1) = well.bounds(0);
-            for m in &marks.mountains {
-                let (mx0, mz0, mx1, mz1) = m.bounds(0);
-                assert!(wx1 < mx0 || wx0 > mx1 || wz1 < mz0 || wz0 > mz1, "well {well:?} on the mountain {m:?}");
-            }
-            for &(x0, z0, x1, z1) in &marks.reserved.0 {
-                assert!(wx1 < x0 || wx0 > x1 || wz1 < z0 || wz0 > z1, "well {well:?} on reserved ground");
-            }
-        }
-        // Reserved ground is really kept clear for a lake and a mountain too.
-        let reserved = g.world.landmarks.reserved.0.clone();
-        let (x0, z0, x1, z1) = reserved[0];
-        let on_it = Lake { x: (x0 + x1) / 2, z: (z0 + z1) / 2, radius: LAKE_RADIUS, phase: 1, from: ((x0 + x1) / 2, (z0 + z1) / 2) };
-        assert!(!g.world.landmarks.has_room_for_lake(&on_it));
-        assert!(!g.world.landmarks.has_room_for_mountain(&Mountain { x: (x0 + x1) / 2, z: (z0 + z1) / 2, ..test_mountain() }));
-    }
 }
 
 
-/// The first spot, going round the compass from `first` (16 headings) at the usual distance and then at `SITE_PUSH_BLOCKS` further out
-/// each time (`SITE_PUSH_STEPS` rings), where `fits` says a structure has room. `make` builds the structure ahead at a heading and
-/// `shift` moves it by (dx, dz). `None` if nowhere is clear (the caller waits and tries again with other headings): a structure is
-/// never put down on top of another.
-fn clear_site<T: Copy>(first: f32, make: impl Fn(f32) -> T, shift: impl Fn(T, i32, i32) -> T, fits: impl Fn(&T) -> bool) -> Option<T> {
-    for ring in 0..SITE_PUSH_STEPS {
-        for i in 0..16 {
-            let a = first + i as f32 * std::f32::consts::TAU / 16.0;
-            let push = (ring * SITE_PUSH_BLOCKS) as f32;
-            let site = shift(make(a), (a.cos() * push).round() as i32, (a.sin() * push).round() as i32);
-            if fits(&site) {
-                return Some(site);
+/// The dry column nearest the middle of the jungle, beside the temple (not on it), in `world`.
+fn jungle_column(world: &World, seed: i64) -> (i32, i32) {
+    let (cx, cz) = crate::terrain::jungle_centre(seed);
+    for r in crate::temple::TEMPLE_REACH + 3..crate::temple::TEMPLE_REACH + 40 {
+        for dz in -r..=r {
+            for dx in -r..=r {
+                if dx.abs().max(dz.abs()) == r && !world.is_wet_column(cx + dx, cz + dz) {
+                    return (cx + dx, cz + dz);
+                }
             }
         }
     }
-    None
+    (cx, cz)
+}
+
+/// A column on the mountain's upper slope, `LANDING_BELOW_SUMMIT` blocks or so under the top and just outside the Yeti's flat arena, at the
+/// heading `angle` from the summit. The foot of the mountain if the world has none (it always has one).
+fn mountain_column(world: &World, angle: f32) -> (i32, i32) {
+    let Some(m) = world.landmarks.mountain() else { return (0, 0) };
+    let at = |d: f32| ((m.x as f32 + angle.cos() * d).round() as i32, (m.z as f32 + angle.sin() * d).round() as i32);
+    let mut d = SUMMIT_PLATEAU_RADIUS + 2.0;
+    while d < m.radius as f32 {
+        let (x, z) = at(d);
+        if m.rise_at(x, z) <= m.height - LANDING_BELOW_SUMMIT {
+            return (x, z);
+        }
+        d += 1.0;
+    }
+    at(SUMMIT_PLATEAU_RADIUS + 2.0)
+}
+
+/// A column on the flat top of the Loch Ness lake's island, `LANDING_ISLAND_RADIUS` blocks from the tower's middle, at the heading `angle`.
+fn lake_island_column(world: &World, angle: f32) -> (i32, i32) {
+    let Some(l) = world.landmarks.lakes.first() else { return (0, 0) };
+    ((l.x as f32 + angle.cos() * LANDING_ISLAND_RADIUS).round() as i32, (l.z as f32 + angle.sin() * LANDING_ISLAND_RADIUS).round() as i32)
+}
+
+/// Where the King's Crown sets its wearer down in the ruined castle of `world`: on the ground in the way in from the gap, `CROWN_ARRIVAL_DZ`
+/// blocks south of the dais with the sword in the stone. `None` if the world has no ruined castle (it always has).
+fn crown_arrival(world: &World) -> Option<Vec3> {
+    let c = world.landmarks.ruined_castle?;
+    let (x, z) = (c.x, c.z + CROWN_ARRIVAL_DZ);
+    Some(vec3(x as f32 + 0.5, world.ground_top(x, z) as f32 + 1.01, z as f32 + 0.5))
 }
 
 #[cfg(test)]
 mod duplicate_find_and_stardust_tests {
     use super::*;
-    use crate::animal::Mode;
     use crate::chunk::idx;
     use crate::item::ItemStack;
     use std::path::PathBuf;
@@ -11175,10 +11036,10 @@ mod duplicate_find_and_stardust_tests {
         let (kx, kz) = horizen::king_centre(1);
         let mut g = game();
         g.travel_to(Dimension::Horizen);
-        g.player.pos = vec3(kx as f32 + 0.5, GROUND_TOP as f32 + 1.01, (kz + KING_WALL_HALF - 6) as f32 + 0.5);
+        g.player.pos = vec3((kx - 15) as f32 + 0.5, GROUND_TOP as f32 + 1.01 + (KING_SLAB_DY + 1) as f32, (kz - 12) as f32 + 0.5);
         g.world.stream_chunks(g.player.pos);
         g.animals.clear();
-        assert!(g.in_king_castle());
+        assert!(g.in_throne_room());
         g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::Gold, count: 100 });
         assert_eq!(g.give_gold_to_king(8), 8);
         assert_eq!(g.spirit_count(), 8);
@@ -11311,31 +11172,6 @@ mod duplicate_find_and_stardust_tests {
             let found = break_many(&mut g, Block::PlacedStone, 300);
             assert!(!found.contains(&ItemKind::Loadstone), "{owned:?}: none turn up");
             assert!(found.contains(&ItemKind::Stone), "the stones themselves still drop");
-        }
-    }
-
-    #[test]
-    fn a_crow_the_player_has_followed_builds_no_altar_for_a_player_with_a_loadstone_or_compass() {
-        fn due_crow(g: &mut Game) {
-            let at = g.player.pos + vec3(6.0, 0.0, 0.0);
-            let mut crow = Animal::new(AnimalKind::Crow, at, &mut Rng::new(2));
-            crow.mode = Mode::Fly;
-            crow.timer = 0.0;
-            crow.west_followed = CROW_ALTAR_WEST_BLOCKS;
-            g.animals.push(crow);
-        }
-        let altars = |g: &Game| g.world.placed.values().filter(|b| **b == Block::AltarLoadstone).count();
-        let mut g = game();
-        due_crow(&mut g);
-        g.land_crows_at_altars();
-        assert_eq!(altars(&g), 1, "an ordinary player is led to an altar");
-        for owned in [ItemKind::Loadstone, ItemKind::Compass] {
-            let mut g = game();
-            g.inventory.add(owned, 1);
-            due_crow(&mut g);
-            g.land_crows_at_altars();
-            assert_eq!(altars(&g), 0, "{owned:?}: no altar");
-            assert_eq!(g.animals[0].west_followed, 0.0);
         }
     }
 
@@ -11627,7 +11463,7 @@ mod store_newt_and_unicorn_tests {
                 }
                 open += 1;
                 mossy += horizen::is_mossy_floor(seed, x, z) as i32;
-                heart += horizen::cave_at(seed, x, z).is_some() as i32;
+                heart += (((x as f32 + 0.5 - cave.x).powi(2) + (z as f32 + 0.5 - cave.z).powi(2)).sqrt() <= cave.radius * 0.6) as i32;
             }
         }
         assert!(open > 100, "{open} open columns");
@@ -12735,5 +12571,252 @@ mod figs_fairies_goats_and_moonlight_tests {
         assert_eq!(g.animals[0].health, BEAR_HEALTH - IVORY_KNIFE_DAMAGE, "the knife hurt it");
         assert_eq!(g.items.iter().filter(|i| i.kind == ItemKind::IvoryKnife).count(), 1, "and was not used up");
         assert_eq!(g.inventory.count(ItemKind::IvoryKnife), 0);
+    }
+}
+
+#[cfg(test)]
+mod ivy_dungeon_and_jungle_tests {
+    use super::*;
+    use crate::chunk::idx;
+    use crate::item::ItemStack;
+    use std::path::PathBuf;
+
+    fn game() -> Game {
+        let info = WorldInfo { name: "test".into(), seed: 1, path: PathBuf::new() };
+        Game::from_save(info, SaveData::new(), 5)
+    }
+
+    /// Put a block into the loaded world at (x, y, z) without recording it as an edit.
+    fn put(g: &mut Game, (x, y, z): Pos, block: Block) {
+        g.world.chunks.get_mut(&World::chunk_of(x, z)).unwrap().blocks[idx(x.rem_euclid(CHUNK_SIZE), y, z.rem_euclid(CHUNK_SIZE))] = block;
+    }
+
+    // --- Poison ivy ---
+
+    #[test]
+    fn poison_ivy_is_walk_through_breaks_by_hand_and_always_drops_one_sprig() {
+        assert!(Block::PoisonIvy.hand_breakable() && !Block::PoisonIvy.collides());
+        assert_eq!(crate::item::drops_for(Block::PoisonIvy, &mut Rng::new(1)), vec![ItemKind::PoisonIvy]);
+        assert_eq!(ItemKind::from_id(ItemKind::PoisonIvy.id()), Some(ItemKind::PoisonIvy));
+    }
+
+    #[test]
+    fn walking_into_poison_ivy_costs_one_life_a_second_and_stops_when_the_player_steps_out() {
+        let mut g = game();
+        let (x, z) = (g.player.pos.x.floor() as i32 + 4, g.player.pos.z.floor() as i32);
+        let y = g.world.ground_top(x, z) + 1;
+        put(&mut g, (x, y, z), Block::PoisonIvy);
+        g.player.pos = vec3(x as f32 - 2.0, y as f32, z as f32 + 0.5);
+        assert!(!g.touching_ivy());
+        g.update_health(5.0);
+        assert_eq!(g.health, MAX_HEALTH, "nothing happens away from it");
+        g.player.pos = vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5);
+        assert!(g.touching_ivy());
+        g.update_health(0.9);
+        assert_eq!(g.health, MAX_HEALTH);
+        g.update_health(0.2);
+        assert_eq!(g.health, MAX_HEALTH - 1, "one life after a second");
+        assert_eq!(g.player.knock, Vec3::ZERO, "no knockback");
+        for _ in 0..20 {
+            g.update_health(0.1);
+        }
+        assert_eq!(g.health, MAX_HEALTH - 3, "one a second, two more in two seconds");
+        // Out of the ivy the count starts over.
+        g.player.pos = vec3(x as f32 - 2.0, y as f32, z as f32 + 0.5);
+        g.update_health(0.8);
+        g.player.pos = vec3(x as f32 + 0.5, y as f32, z as f32 + 0.5);
+        g.update_health(0.8);
+        assert_eq!(g.health, MAX_HEALTH - 3, "the earlier time does not carry over");
+    }
+
+    #[test]
+    fn a_sprig_of_ivy_and_five_arrows_make_five_poison_arrows() {
+        let mut inv = crate::inventory::Inventory::new();
+        inv.add(ItemKind::Arrow, 7);
+        inv.add(ItemKind::PoisonIvy, 1);
+        let recipe = crate::recipe::RECIPES.iter().find(|r| r.output == ItemKind::PoisonArrow && r.inputs.iter().any(|&(k, _)| k == ItemKind::PoisonIvy)).expect("the recipe");
+        assert!(crate::recipe::craft(&mut inv, recipe));
+        assert_eq!((inv.count(ItemKind::PoisonArrow), inv.count(ItemKind::Arrow), inv.count(ItemKind::PoisonIvy)), (5, 2, 0));
+        let mut poor = crate::inventory::Inventory::new();
+        poor.add(ItemKind::Arrow, 4);
+        poor.add(ItemKind::PoisonIvy, 1);
+        assert!(!crate::recipe::craft(&mut poor, recipe), "five arrows are needed");
+    }
+
+    #[test]
+    fn poison_ivy_grows_in_patches_on_the_islands_but_never_on_the_first_one() {
+        let seed = 1;
+        let first = skylands::island_in_cell(seed, 0, 0);
+        let (mut ivy, mut on_first) = (0, 0);
+        for cz in -3..=3 {
+            for cx in -3..=3 {
+                let blocks = skylands::generate_chunk(seed, cx, cz, &Landmarks::default(), false);
+                for lz in 0..CHUNK_SIZE {
+                    for lx in 0..CHUNK_SIZE {
+                        let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                        let Some(top) = skylands::surface_top(seed, wx, wz, false) else { continue };
+                        if blocks[idx(lx, top + 1, lz)] == Block::PoisonIvy {
+                            ivy += 1;
+                            if skylands::island_at(seed, wx, wz).map_or(false, |i| (i.x, i.z) == (first.x, first.z)) {
+                                on_first += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(ivy > 30, "ivy grows on the islands: {ivy}");
+        assert_eq!(on_first, 0, "the first island is safe");
+    }
+
+    // --- The jungle ---
+
+    #[test]
+    fn the_jungle_has_no_flowers_and_no_berry_bushes_but_plenty_of_foliage_and_figs() {
+        let seed = 1;
+        let (jx, jz) = crate::terrain::jungle_centre(seed);
+        let (ccx, ccz) = (jx.div_euclid(CHUNK_SIZE), jz.div_euclid(CHUNK_SIZE));
+        let (mut flowers, mut bushes, mut foliage, mut figs, mut dry) = (0, 0, 0, 0, 0);
+        for cz in ccz - 6..=ccz + 6 {
+            for cx in ccx - 6..=ccx + 6 {
+                let blocks = crate::terrain::generate_chunk_for(seed, cx, cz, &Landmarks::default(), false);
+                for lz in 0..CHUNK_SIZE {
+                    for lx in 0..CHUNK_SIZE {
+                        let (wx, wz) = (cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz);
+                        if !crate::terrain::in_jungle(seed, wx, wz) || crate::terrain::in_jungle_clearing(seed, wx, wz) {
+                            continue;
+                        }
+                        dry += 1;
+                        for y in GROUND_TOP..GROUND_TOP + 4 {
+                            match blocks[idx(lx, y, lz)] {
+                                Block::Flower => flowers += 1,
+                                Block::Bush => bushes += 1,
+                                Block::Foliage => foliage += 1,
+                                Block::FigFoliage => figs += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!((flowers, bushes), (0, 0), "no flowers, no red or purple berry bushes");
+        assert!(foliage > 0 && figs > 0 && (foliage + figs) as f32 / dry as f32 > 0.15, "thick with plants: {foliage} foliage, {figs} fig clumps in {dry} columns");
+        assert!(figs as f32 >= foliage as f32 * 0.3, "lots of figs: {figs} against {foliage}");
+    }
+
+    // --- The king's dungeon ---
+
+    fn at_room(room: usize) -> Game {
+        let mut g = game();
+        g.travel_to(Dimension::Horizen);
+        let (kx, kz) = horizen::king_centre(g.info.seed);
+        let r = kingcastle::ROOMS[room];
+        g.player.pos = vec3((kx + (r.x0 + r.x1) / 2) as f32 + 0.5, (GROUND_TOP + 1 + r.base()) as f32 + 0.01, (kz + (r.z1 + r.z0) / 2) as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        g.animals.clear();
+        g
+    }
+
+    fn guards(g: &Game) -> usize {
+        g.animals.iter().filter(|a| a.kind == AnimalKind::SpiritGuard).count()
+    }
+
+    fn kill_guards(g: &mut Game) {
+        let hits: Vec<(usize, i32)> = g.animals.iter().enumerate().filter(|(_, a)| a.kind == AnimalKind::SpiritGuard).map(|(i, _)| (i, 999)).collect();
+        g.hurt_animals(&hits);
+    }
+
+    fn door_open(g: &Game, door: usize) -> bool {
+        let (kx, kz) = horizen::king_centre(g.info.seed);
+        let d = kingcastle::DOORS[door];
+        g.world.block_at(kx + d.x0, GROUND_TOP + 1 + d.base, kz + d.z0) == Block::Air
+    }
+
+    #[test]
+    fn stepping_into_the_first_room_brings_two_guards_and_killing_them_opens_the_next_door() {
+        let mut g = at_room(0);
+        assert_eq!(g.king_room(), Some(0));
+        assert!(!door_open(&g, 0), "the door out of the gatehouse is shut");
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), KING_GUARDS_PER_ROOM);
+        let (kx, kz) = horizen::king_centre(g.info.seed);
+        let r = kingcastle::ROOMS[0];
+        assert!(g.animals.iter().all(|a| a.kind == AnimalKind::SpiritGuard && kingcastle::room_at(a.pos.x.floor() as i32 - kx, a.pos.z.floor() as i32 - kz, 0) == Some(0) && (a.pos - g.player.pos).length() >= KING_GUARD_MIN_DISTANCE - 0.5 && r.has(a.pos.x.floor() as i32 - kx, a.pos.z.floor() as i32 - kz)));
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), KING_GUARDS_PER_ROOM, "no more come while they live");
+        assert!(!door_open(&g, 0), "the door stays shut while a guard lives");
+        kill_guards(&mut g);
+        g.update_king_dungeon();
+        assert_eq!(g.world.landmarks.king_rooms_cleared, 1);
+        assert!(door_open(&g, 0), "the door opens once the guards are dead");
+        assert!(!door_open(&g, 1), "and only that door");
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), 0, "a cleared room never has guards again");
+        // The next room, now its turn, has guards of its own.
+        let mut next = at_room(1);
+        next.world.landmarks.king_rooms_cleared = 1;
+        next.update_king_dungeon();
+        assert_eq!(guards(&next), KING_GUARDS_PER_ROOM);
+    }
+
+    #[test]
+    fn guards_stand_down_when_the_player_leaves_their_room_and_come_again_on_return() {
+        let mut g = at_room(0);
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), KING_GUARDS_PER_ROOM);
+        // Out of the castle: the guards are gone and the door is still shut.
+        let home = g.player.pos;
+        let (kx, kz) = horizen::king_centre(g.info.seed);
+        g.player.pos = vec3(kx as f32 + 0.5, GROUND_TOP as f32 + 1.01, (kz + KING_REACH + 6) as f32 + 0.5);
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), 0);
+        assert_eq!(g.world.landmarks.king_rooms_cleared, 0, "leaving is not winning");
+        g.player.pos = home;
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), KING_GUARDS_PER_ROOM, "they are back at their posts");
+    }
+
+    #[test]
+    fn the_throne_room_has_no_guards_and_the_progress_through_the_castle_is_saved() {
+        let mut g = at_room(kingcastle::KING_THRONE_ROOM);
+        g.world.landmarks.king_rooms_cleared = kingcastle::KING_THRONE_ROOM;
+        assert!(g.in_throne_room());
+        for _ in 0..5 {
+            g.update_king_dungeon();
+        }
+        assert_eq!(guards(&g), 0, "no guards in the throne room");
+        let again = Game::from_save(WorldInfo { name: "t".into(), seed: 1, path: PathBuf::new() }, parse_save(&g.save_text()), 3);
+        assert!(again.in_horizen());
+        assert_eq!(again.world.landmarks.king_rooms_cleared, kingcastle::KING_THRONE_ROOM, "the doors stay open");
+        // The king answers only here.
+        let mut elsewhere = at_room(2);
+        elsewhere.inventory.slots[0] = Some(ItemStack { kind: ItemKind::MusicalPipes, count: 1 });
+        elsewhere.select_slot(0);
+        elsewhere.play_pipes();
+        assert!(elsewhere.king_dialog.is_none(), "not in the armoury");
+        g.inventory.slots[0] = Some(ItemStack { kind: ItemKind::MusicalPipes, count: 1 });
+        g.select_slot(0);
+        g.play_pipes();
+        assert_eq!(g.king_dialog, Some(1), "in the throne room");
+    }
+
+    #[test]
+    fn a_guard_shoots_at_a_player_it_can_see_and_it_is_not_part_of_the_wild_hunt() {
+        assert!(!AnimalKind::SpiritGuard.is_wild_hunt() && !AnimalKind::SpiritGuard.is_boss() && AnimalKind::SpiritGuard.is_huntable());
+        let mut g = at_room(1);
+        g.world.landmarks.king_rooms_cleared = 1;
+        g.update_king_dungeon();
+        assert_eq!(guards(&g), KING_GUARDS_PER_ROOM);
+        let mut shot = false;
+        for _ in 0..(8.0 * 60.0) as i32 {
+            g.update_animals(1.0 / 60.0);
+            if !g.hostile_arrows.is_empty() {
+                shot = true;
+                break;
+            }
+        }
+        assert!(shot, "a guard loosed an arrow");
+        assert!(g.boss_bar().is_none(), "the guards have no boss bar");
     }
 }

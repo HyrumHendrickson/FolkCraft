@@ -1596,7 +1596,7 @@ mod tests {
             AnimalKind::BigCrawfish => big_crawfish_parts(a, time, night),
             AnimalKind::GiantCrawfish => giant_crawfish_parts(a, time, night),
             AnimalKind::Dragon => dragon_parts(a, time, night),
-            AnimalKind::SpiritArcher => spirit_parts(a, time),
+            AnimalKind::SpiritArcher | AnimalKind::SpiritGuard => spirit_parts(a, time),
             kind if kind.is_wild_hunt() => hunt_parts(a, time),
             AnimalKind::HuntSwordsman | AnimalKind::HuntArcher | AnimalKind::HuntLancer | AnimalKind::HuntBear | AnimalKind::HuntCrow => hunt_parts(a, time),
             AnimalKind::WillOWhisp => unreachable!(),

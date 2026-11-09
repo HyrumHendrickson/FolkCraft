@@ -10,7 +10,7 @@ use crate::item::{Hearth, ItemKind};
 use crate::horizen::{self, Dimension};
 use crate::skylands;
 use crate::tower::Tower;
-use crate::landmarks::{GrandCastle, Graveyard, Landmarks, Lake, Mountain, Rainbow, RainbowState, Reserved, Well};
+use crate::landmarks::{Landmarks, Lake, Rainbow, RainbowState, Reserved};
 use crate::terrain::{berry_bush_is_purple, generate_chunk_for, ground_top_with, is_wet_column};
 
 pub type Pos = (i32, i32, i32);
@@ -103,6 +103,8 @@ pub struct World {
     pub released: Vec<(Pos, ItemKind)>,
     /// Natural bushes whose berries have already been harvested.
     pub berry_picked: HashSet<Pos>,
+    /// The Horizen's camps (by their spot) that have been set out: each is lit once, when its chunk is first made (persisted).
+    pub camps_built: HashSet<(i32, i32)>,
     /// Whether the world is currently in its night state.
     pub night: bool,
     /// The lakes, mountains and rainbow the player has brought into the world (persisted to disk).
@@ -171,9 +173,23 @@ impl World {
             pots: HashMap::new(),
             released: Vec::new(),
             berry_picked: HashSet::new(),
+            camps_built: HashSet::new(),
             night: false,
-            landmarks: Landmarks { reserved: Reserved(reserved_zones(seed)), ..Landmarks::default() },
+            landmarks: Landmarks::fixed(seed, reserved_zones(seed)),
             dimension: Dimension::Overworld,
+        }
+    }
+
+    /// The landmarks a world of `dimension` has from the start: the normal world's sites are set by the seed (`Landmarks::fixed`), the
+    /// Horizen has its one tower in the great cavern, and the Skylands have theirs on a set island.
+    fn fixed_landmarks(seed: i64, dimension: Dimension) -> Landmarks {
+        match dimension {
+            Dimension::Overworld => Landmarks::fixed(seed, reserved_zones(seed)),
+            Dimension::Horizen => {
+                let (x, z) = horizen::cavern_centre(seed);
+                Landmarks { horizen_tower: Some(Tower { x, z }), reserved: Reserved(reserved_zones(seed)), ..Landmarks::default() }
+            }
+            Dimension::Skylands => Landmarks { sky_tower: Some(skylands::tower_cell_for(seed)), reserved: Reserved(reserved_zones(seed)), ..Landmarks::default() },
         }
     }
 
@@ -181,6 +197,7 @@ impl World {
     pub fn new_horizen(seed: i64) -> Self {
         let mut w = Self::new(seed, HashSet::new());
         w.dimension = Dimension::Horizen;
+        w.landmarks = Self::fixed_landmarks(seed, Dimension::Horizen);
         w
     }
 
@@ -188,13 +205,22 @@ impl World {
     pub fn new_skylands(seed: i64) -> Self {
         let mut w = Self::new(seed, HashSet::new());
         w.dimension = Dimension::Skylands;
+        w.landmarks = Self::fixed_landmarks(seed, Dimension::Skylands);
         w
     }
 
-    /// Restore the saved lakes, mountains and rainbow. Call before any chunk is generated.
+    /// Restore what a save says the player has done to the landmarks (monsters killed, doors unlocked, the rainbow and so on). The
+    /// sites themselves are not the save's to say: they are where the seed puts them (`fixed_landmarks`), whatever an older save
+    /// recorded. Call after the dimension is set and before any chunk is generated.
     pub fn with_landmarks(mut self, landmarks: Landmarks) -> Self {
-        self.landmarks = landmarks;
-        self.landmarks.reserved = Reserved(reserved_zones(self.seed));
+        let seed = self.seed;
+        self.landmarks = match self.dimension {
+            Dimension::Overworld => landmarks.with_fixed_overworld_sites(seed, reserved_zones(seed)),
+            Dimension::Horizen | Dimension::Skylands => {
+                let fixed = Self::fixed_landmarks(seed, self.dimension);
+                Landmarks { horizen_tower: fixed.horizen_tower, sky_tower: fixed.sky_tower, reserved: fixed.reserved, ..landmarks }
+            }
+        };
         self
     }
 
@@ -243,53 +269,6 @@ impl World {
         is_wet_column(self.seed, &self.landmarks, wx, wz)
     }
 
-    /// Bring a lake into the world. Chunks already generated that it touches are generated again, so it shows at
-    /// once; the player's edits are applied to them as before.
-    pub fn add_lake(&mut self, lake: Lake) {
-        self.landmarks.lakes.push(lake);
-        self.regenerate_landmark_chunks();
-    }
-
-    /// Bring a mountain into the world (see `add_lake`).
-    /// A world has only one mountain: a second is ignored.
-    pub fn add_mountain(&mut self, mountain: Mountain) {
-        if !self.landmarks.mountains.is_empty() {
-            return;
-        }
-        self.landmarks.mountains.push(mountain);
-        self.regenerate_landmark_chunks();
-    }
-
-    /// Bring the well into the world (see `add_lake`). A world has only one.
-    pub fn add_well(&mut self, well: Well) {
-        if self.landmarks.well.is_none() {
-            self.landmarks.well = Some(well);
-            self.regenerate_landmark_chunks();
-        }
-    }
-
-    /// Bring the graveyard into the world (see `add_lake`). A world has only one.
-    pub fn add_graveyard(&mut self, yard: Graveyard) {
-        if self.landmarks.graveyard.is_none() {
-            self.landmarks.graveyard = Some(yard);
-            self.regenerate_landmark_chunks();
-        }
-    }
-
-    /// Bring the grand castle into the world (see `add_lake`). A world has only one.
-    pub fn add_grand_castle(&mut self, castle: GrandCastle) {
-        self.landmarks.grand_castle = Some(castle);
-        self.regenerate_landmark_chunks();
-    }
-
-    /// Bring the ruined castle into the world (see `add_lake`). A world has only one.
-    pub fn add_ruined_castle(&mut self, castle: GrandCastle) {
-        if self.landmarks.ruined_castle.is_none() {
-            self.landmarks.ruined_castle = Some(castle);
-            self.regenerate_landmark_chunks();
-        }
-    }
-
     /// Note that the monster of `lake` has been killed, and so make its island's tower whole again: the loaded chunks that
     /// hold it are made again, with the floors and the stair mended and the door shut and locked until a silver key opens it.
     pub fn record_monster_slain(&mut self, lake: &Lake) {
@@ -308,6 +287,29 @@ impl World {
             .filter(|&(cx, cz)| {
                 let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
                 x - TOWER_REACH <= x0 + CHUNK_SIZE - 1 && x + TOWER_REACH >= x0 && z - TOWER_REACH <= z0 + CHUNK_SIZE - 1 && z + TOWER_REACH >= z0
+            })
+            .collect();
+        for key in &stale {
+            self.chunks.remove(key);
+        }
+        for &(cx, cz) in &stale {
+            self.ensure_chunk(cx, cz);
+        }
+    }
+
+    /// The guards of room `room` of the king's dungeon are dead: its door opens for good (the rooms cleared are counted up to it), and the loaded
+    /// chunks that hold the castle are made again.
+    pub fn open_king_door(&mut self, room: usize) {
+        self.landmarks.king_rooms_cleared = self.landmarks.king_rooms_cleared.max(room + 1);
+        let (kx, kz) = horizen::king_centre(self.seed);
+        let reach = KING_REACH;
+        let stale: Vec<(i32, i32)> = self
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(cx, cz)| {
+                let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
+                kx - reach <= x0 + CHUNK_SIZE - 1 && kx + reach >= x0 && kz - reach <= z0 + CHUNK_SIZE - 1 && kz + reach >= z0
             })
             .collect();
         for key in &stale {
@@ -348,25 +350,6 @@ impl World {
         self.regenerate_tower_chunks(x, z);
     }
 
-    /// Bring the Horizen's one tower into it. A second is ignored.
-    pub fn add_horizen_tower(&mut self, tower: Tower) {
-        if self.landmarks.horizen_tower.is_none() {
-            self.landmarks.horizen_tower = Some(tower);
-            self.regenerate_tower_chunks(tower.x, tower.z);
-        }
-    }
-
-    /// Put the Skylands' one tower on the island of grid cell `cell`. A second is ignored. Chunks already made are made
-    /// again (the island is meant to be one that has not been made yet, so usually there are none).
-    pub fn add_sky_tower(&mut self, cell: (i32, i32)) {
-        if self.landmarks.sky_tower.is_some() {
-            return;
-        }
-        self.landmarks.sky_tower = Some(cell);
-        let island = skylands::island_in_cell(self.seed, cell.0, cell.1);
-        self.regenerate_tower_chunks(island.x, island.z);
-    }
-
     /// Show the rainbow, or retire it for good once its gold has been taken (the place where the gold lay is kept,
     /// so that a peep stone still leads there).
     pub fn set_rainbow(&mut self, state: RainbowState) {
@@ -381,17 +364,6 @@ impl World {
         match self.landmarks.rainbow {
             RainbowState::Active(rainbow) => Some(rainbow),
             _ => None,
-        }
-    }
-
-    /// Generate again every loaded chunk that a landmark can touch.
-    fn regenerate_landmark_chunks(&mut self) {
-        let stale: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|&(cx, cz)| self.landmarks.touches_chunk(cx, cz)).collect();
-        for &key in &stale {
-            self.chunks.remove(&key);
-        }
-        for &(cx, cz) in &stale {
-            self.ensure_chunk(cx, cz);
         }
     }
 
@@ -549,12 +521,47 @@ impl World {
             }
         }
         self.chunks.insert((cx, cz), Chunk { blocks, meshes: Vec::new(), water: Vec::new(), dirty: true });
+        if self.dimension == Dimension::Horizen {
+            self.build_camps(cx, cz);
+        }
         // Neighbours need their shared border re-meshed.
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             if let Some(n) = self.chunks.get_mut(&(cx + dx, cz + dz)) {
                 n.dirty = true;
             }
         }
+    }
+
+    /// Set out the camps of the Horizen that lie in chunk (`cx`, `cz`), once each: a log on the floor, alight for `HORIZEN_CAMP_FIRE_SECONDS`,
+    /// with a tin pot of water and red or purple berries on it, the stew already done. The spot is a set one (`horizen::camp_in_cell`).
+    fn build_camps(&mut self, cx: i32, cz: i32) {
+        for (x, z) in horizen::camps_in_chunk(self.seed, cx, cz) {
+            if !self.camps_built.insert((x, z)) {
+                continue;
+            }
+            let y = GROUND_TOP + 1;
+            self.set_block(x, y, z, Block::PlacedLog);
+            self.ignite((x, y, z), HORIZEN_CAMP_FIRE_SECONDS);
+            let berries = if crate::rng::hash3(self.seed, x, z, 0xCA3C) % 2 == 0 { ItemKind::Berries } else { ItemKind::PurpleBerries };
+            self.pots.insert((x, y, z), Pot { water: true, meat: Some(berries), left: 0.0, served: 0 });
+        }
+    }
+
+    /// For tests: change the landmarks (put a well, a castle or a mountain where the test wants it) and make every loaded chunk again.
+    #[cfg(test)]
+    pub fn replace_sites(&mut self, change: impl FnOnce(&mut Landmarks)) {
+        change(&mut self.landmarks);
+        let keys: Vec<(i32, i32)> = self.chunks.keys().copied().collect();
+        self.chunks.clear();
+        for (cx, cz) in keys {
+            self.ensure_chunk(cx, cz);
+        }
+    }
+
+    /// Restore the camps that have been set out.
+    pub fn with_camps_built(mut self, camps: HashSet<(i32, i32)>) -> Self {
+        self.camps_built = camps;
+        self
     }
 
     /// Chunk containing a world-space position.

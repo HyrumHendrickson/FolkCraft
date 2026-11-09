@@ -1,4 +1,4 @@
-//! The ghosts: four places where a voice speaks (as text on the screen: ghosts cannot be seen or touched). The graveyard's
+//! The ghosts: the places where a voice speaks (as text on the screen: ghosts cannot be seen or touched). The graveyard's
 //! ghost asks for a song, and once it has had one gives a silver key and thanks the player and says no more. In each of the
 //! three silver towers, playing a song brings a ghostly voice with a hint.
 
@@ -7,13 +7,13 @@ pub const GRAVEYARD_ASKS: &str = "Traveller... I cannot rest. Will you play me a
 /// What it says once it has heard one (and gives the player a silver key). After this it says nothing more.
 pub const GRAVEYARD_THANKS: &str = "Thank you. At last I can rest. Take this key: it is yours to keep. In three lonely towers there are others who may like to hear the music.";
 /// The voice in the Skylands' tower.
-pub const SKY_TOWER_GHOST: &str = "Wade through the river until you find the island, and do not leave the water until you do.";
+pub const SKY_TOWER_GHOST: &str = "Find the great Loch guarded by that old serpent.";
 /// The voice in the Horizen's tower, in the cave.
 pub const CAVE_TOWER_GHOST: &str = "Things work differently at night. Try out all your tools at night.";
 /// The voice in the tower on a lake's island (Nessie's).
 pub const LAKE_TOWER_GHOST: &str = "Blow the horn in the stonehenge.";
 
-/// What the ghost of the king says when the pipes are played in his castle in the Horizen's giant cave.
+/// What the ghost of the king says when the pipes are played in the throne room of his castle in the Horizen's giant cave.
 pub const KING_GREETING: &str = "I am the king eternal. Give me gold and I shall send my spirits to guard you.";
 /// What he says when gold has been given, and when it was not enough or he has sent all the spirits he can.
 pub const KING_SENDS: &str = "It is done. My spirits will follow you, and each will loose ten arrows at your foes.";
@@ -48,14 +48,14 @@ mod tests {
     #[test]
     fn lines_are_cut_at_spaces_and_nothing_is_lost() {
         let lines = wrap(SKY_TOWER_GHOST, 30);
-        assert!(lines.len() >= 3 && lines.iter().all(|l| l.len() <= 30));
+        assert!(lines.len() >= 2 && lines.iter().all(|l| l.len() <= 30));
         assert_eq!(lines.join(" "), SKY_TOWER_GHOST);
         assert_eq!(wrap("", 10), Vec::<String>::new());
     }
 
     #[test]
     fn each_ghost_says_what_it_was_meant_to() {
-        assert!(SKY_TOWER_GHOST.contains("Wade") && SKY_TOWER_GHOST.contains("river") && SKY_TOWER_GHOST.contains("island") && SKY_TOWER_GHOST.contains("water"));
+        assert!(SKY_TOWER_GHOST.contains("great Loch") && SKY_TOWER_GHOST.contains("old serpent") && !SKY_TOWER_GHOST.contains("river"));
         assert!(CAVE_TOWER_GHOST.contains("night") && CAVE_TOWER_GHOST.contains("tools"));
         assert!(LAKE_TOWER_GHOST.contains("horn") && LAKE_TOWER_GHOST.contains("stonehenge"));
         assert!(KING_GREETING.starts_with("I am the king eternal") && KING_GREETING.contains("Give me gold and I shall send my spirits to guard you"));

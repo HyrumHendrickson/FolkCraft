@@ -84,6 +84,7 @@ pub fn play_screen(app: &mut App) {
     handle_placing(game, eye, dir, target);
     game.update_items(dt);
     game.burn_fires(dt);
+    game.update_king_dungeon();
     game.update_animals(dt);
     game.update_travel(dt);
     game.update_storm(dt);
@@ -380,12 +381,10 @@ fn render_hud(game: &mut Game, drawn: usize) {
         if game.held_item() == Some(ItemKind::Compass) {
             let target = if !game.in_overworld() {
                 CompassTarget::Spawn
-            } else if game.world.landmarks.mountain().is_some() {
-                CompassTarget::Mountain
             } else {
-                CompassTarget::North
+                CompassTarget::Mountain
             };
-            draw_compass(game.player.yaw, game.compass_bearing(), game.treks.compass_progress(), target);
+            draw_compass(game.player.yaw, game.compass_bearing(), target);
         }
     }
     if game.king_dialog.is_some() {

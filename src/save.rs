@@ -43,6 +43,8 @@ pub struct SaveData {
     pub glow: HashMap<Pos, f32>,
     pub pots: HashMap<Pos, Pot>,
     pub berry_picked: HashSet<Pos>,
+    /// The Horizen's camps that have been set out (by their spot).
+    pub camps_built: HashSet<(i32, i32)>,
     pub night: bool,
     /// Lakes, mountains and the rainbow.
     pub landmarks: Landmarks,
@@ -87,6 +89,7 @@ impl SaveData {
             glow: HashMap::new(),
             pots: HashMap::new(),
             berry_picked: HashSet::new(),
+            camps_built: HashSet::new(),
             night: false,
             landmarks: Landmarks::default(),
             inventory: Inventory::new(),
@@ -123,17 +126,14 @@ impl SaveData {
 ///     "glow <x> <y> <z> <secs>"   seconds of bellows glow left on the embers at that position
 ///     "health <n>"                the player's life points (1..=MAX_HEALTH)
 ///     "berry <x> <y> <z>"          a bush whose berries have been harvested
+///     "camp <x> <z>"              a camp of the Horizen has been set out at that spot (only in the Horizen's records)
 ///     "time day|night"             the saved time of day
 ///     "mode dev"                  a dev-mode world (no line: normal mode)
-///     "lake <x> <z> <radius> <phase> <from x> <from z>"   a lake and the channel that joins it to its river
-///     "mountain <x> <z> <radius> <height> <phase>"        a mountain
 ///     "rainbow spent"            the rainbow's gold has been taken: there is never another rainbow
 ///     "rainbow <from x> <from z> <x> <y> <z>"  the rainbow is out there, its gold at (x, y, z)
 ///     "rainbowend <x> <y> <z>"   where the gold of a spent rainbow lay (the peep stone still leads there)
-///     "grandcastle <x> <z>"      the grand castle, centred on that column
-///     "well <x> <z>"            the well (its water's corner with the smallest coordinates)
-///     "graveyard <x> <z>"       the graveyard, centred on that column
 ///     "ghostrest"               the graveyard's ghost has heard its song and rests
+///     "kingcleared <n>"         the guards of the first n rooms of the king's dungeon are dead (written in the Horizen's records, with the `h` prefix)
 ///     "won"                     the player has beaten the Wild Hunt and won the game
 ///     "phoenixslain"            the Phoenix of the Skylands is dead (written in the Skylands' records, with the `s` prefix)
 ///     "phoenixdead <seconds>"   how long it has been dead; it rises again after `PHOENIX_RESPAWN_SECONDS`
@@ -148,20 +148,19 @@ impl SaveData {
 ///     "orangutanslain"          the Orangutan on the jungle temple has been killed (it never returns)
 ///     "unicornsummoned"         the Cursed Idol has been used: the Unicorn has come (it returns whole when the world is loaded, until killed)
 ///     "unicornslain"            the Unicorn has been killed (it never returns)
-///     "ruinedcastle <x> <z>"    the ruined castle with the sword in the stone, centred on that column
 ///     "dimension horizen"       the player is in the Horizen (everything above is then the overworld)
 ///     "dimension skylands"     the player is in the Skylands (everything above is then the overworld)
 ///     "yetislain"              the Yeti has been killed (a cyclone stands on the summit)
 ///     "nessie <x> <z>"         the monster of the lake centred there has been killed
 ///     "unlocked <x> <z>"       the silver tower centred there has had its door unlocked
-///     "tower <x> <z>"          the Horizen's silver tower (only in the Horizen's records)
-///     "skytower <cx> <cz>"     the Skylands' silver tower stands on the island of that grid cell (Skylands' records)
-///     "skyvisit <cx> <cz>"     the Skylands island of that grid cell has been walked on (Skylands' records)
 ///     "s <record>"              a record of the Skylands, as for \"h\"
 ///     "h <record>"              a record of the Horizen: any of the above that makes sense there (blocks, fires,
 ///                                items, \"pos <x> <y> <z> <yaw> <pitch>\" for the player's place in it)
+/// The sites of the world's landmarks (lake, mountain, castles, well, graveyard, the silver towers of the other dimensions) are not saved:
+/// the seed sets them (`Landmarks::fixed`). Saves from before that may still hold `lake`, `mountain`, `grandcastle`, `ruinedcastle`,
+/// `well`, `graveyard`, `tower`, `skytower`, `skyvisit` and `cavevisit` records; they are read and the positions overridden.
 /// Worlds saved before the inventory existed simply have none of the last six, and worlds saved before the
-/// landmarks existed have none of the last three. Animals, arrows and treks in progress are not saved.
+/// landmarks existed have none of the last three. Animals and arrows in flight are not saved.
 pub fn serialize_save(
     name: &str,
     seed: i64,
@@ -196,15 +195,6 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
     for (x, z) in &landmarks.towers_unlocked {
         out.push_str(&format!("{prefix}unlocked {x} {z}\n"));
     }
-    if let Some(t) = landmarks.horizen_tower {
-        out.push_str(&format!("{prefix}tower {} {}\n", t.x, t.z));
-    }
-    if let Some((x, z)) = landmarks.sky_tower {
-        out.push_str(&format!("{prefix}skytower {x} {z}\n"));
-    }
-    for (x, z) in &landmarks.sky_visited {
-        out.push_str(&format!("{prefix}skyvisit {x} {z}\n"));
-    }
     if landmarks.game_won {
         out.push_str(&format!("{prefix}won\n"));
     }
@@ -217,8 +207,8 @@ fn tower_lines(landmarks: &Landmarks, prefix: &str, out: &mut String) {
     if landmarks.graveyard_rested {
         out.push_str(&format!("{prefix}ghostrest\n"));
     }
-    for (x, z) in &landmarks.caves_visited {
-        out.push_str(&format!("{prefix}cavevisit {x} {z}\n"));
+    if landmarks.king_rooms_cleared > 0 {
+        out.push_str(&format!("{prefix}kingcleared {}\n", landmarks.king_rooms_cleared));
     }
 }
 
@@ -231,6 +221,9 @@ fn world_lines(world: &World, prefix: &str, out: &mut String) {
     }
     for &(x, y, z) in &world.berry_picked {
         out.push_str(&format!("{prefix}berry {} {} {}\n", x, y, z));
+    }
+    for &(x, z) in &world.camps_built {
+        out.push_str(&format!("{prefix}camp {x} {z}\n"));
     }
     for (&(x, y, z), block) in &world.placed {
         if let Some(id) = block.id().filter(|_| *block != crate::block::Block::StardustPile) {
@@ -317,12 +310,6 @@ pub fn serialize_save_full(
         out.push_str(&format!("nessie {x} {z}\n"));
     }
     tower_lines(&world.landmarks, "", &mut out);
-    for l in &world.landmarks.lakes {
-        out.push_str(&format!("lake {} {} {} {} {} {}\n", l.x, l.z, l.radius, l.phase, l.from.0, l.from.1));
-    }
-    for m in &world.landmarks.mountains {
-        out.push_str(&format!("mountain {} {} {} {} {}\n", m.x, m.z, m.radius, m.height, m.phase));
-    }
     match world.landmarks.rainbow {
         RainbowState::Unseen => {}
         RainbowState::Spent => {
@@ -332,18 +319,6 @@ pub fn serialize_save_full(
             }
         }
         RainbowState::Active(r) => out.push_str(&format!("rainbow {} {} {} {} {}\n", r.from.0, r.from.1, r.gold.0, r.gold.1, r.gold.2)),
-    }
-    if let Some(c) = world.landmarks.grand_castle {
-        out.push_str(&format!("grandcastle {} {}\n", c.x, c.z));
-    }
-    if let Some(c) = world.landmarks.ruined_castle {
-        out.push_str(&format!("ruinedcastle {} {}\n", c.x, c.z));
-    }
-    if let Some(w) = world.landmarks.well {
-        out.push_str(&format!("well {} {}\n", w.x, w.z));
-    }
-    if let Some(g) = world.landmarks.graveyard {
-        out.push_str(&format!("graveyard {} {}\n", g.x, g.z));
     }
     for (slot, stack) in inventory.slots.iter().enumerate() {
         if let Some(s) = stack {
@@ -454,24 +429,11 @@ fn apply_line(data: &mut SaveData, line: &str) {
                     data.landmarks.sky_tower = Some((x, z));
                 }
             }
-            Some("skyvisit") => {
-                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
-                if let [x, z] = v[..] {
-                    data.landmarks.note_sky_visit((x, z));
-                }
-            }
             Some("ghostrest") => data.landmarks.graveyard_rested = true,
+            Some("kingcleared") => data.landmarks.king_rooms_cleared = t.next().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(crate::kingcastle::KING_THRONE_ROOM),
             Some("won") => data.landmarks.game_won = true,
             Some("phoenixslain") => data.landmarks.phoenix_slain = true,
             Some("phoenixdead") => data.landmarks.phoenix_dead_for = t.next().and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0),
-            Some("cavevisit") => {
-                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
-                if let [x, z] = v[..] {
-                    if !data.landmarks.caves_visited.contains(&(x, z)) {
-                        data.landmarks.caves_visited.push((x, z));
-                    }
-                }
-            }
             Some("pos") => {
                 let v: Vec<f32> = t.filter_map(|s| s.parse().ok()).collect();
                 if v.len() == 5 {
@@ -553,6 +515,12 @@ fn apply_line(data: &mut SaveData, line: &str) {
                 let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
                 if let [x, z] = v[..] {
                     data.landmarks.ruined_castle = Some(GrandCastle { x, z });
+                }
+            }
+            Some("camp") => {
+                let v: Vec<i32> = t.filter_map(|s| s.parse().ok()).collect();
+                if let [x, z] = v[..] {
+                    data.camps_built.insert((x, z));
                 }
             }
             Some("berry") => {
@@ -781,16 +749,18 @@ mod tests {
     #[test]
     fn lakes_mountains_and_the_rainbow_survive_a_save_round_trip() {
         let mut world = World::new(3, HashSet::new());
-        world.landmarks.lakes.push(Lake { x: 300, z: -40, radius: 34, phase: 12, from: (10, 11) });
-        world.landmarks.mountains.push(Mountain { x: -20, z: -400, radius: 46, height: 17, phase: 5 });
         world.landmarks.rainbow = RainbowState::Active(Rainbow { from: (4, 5), gold: (30, 6, 12) });
         let text = serialize_save("W", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
-        assert!(text.contains("lake 300 -40 34 12 10 11") && text.contains("mountain -20 -400 46 17 5") && text.contains("rainbow 4 5 30 6 12"));
-        assert_eq!(parse_save(&text).landmarks, world.landmarks);
+        assert!(text.contains("rainbow 4 5 30 6 12"));
+        assert!(!text.contains("lake ") && !text.contains("mountain "), "the sites are the seed's: they are not saved");
+        assert_eq!(parse_save(&text).landmarks.rainbow, world.landmarks.rainbow);
+        // An older save that does hold them is still read (and the places are then the seed's, see `World::with_landmarks`).
+        let old = parse_save("W\n3\n0 6 0 0 0\nlake 300 -40 34 12 10 11\nmountain -20 -400 46 17 5\n");
+        assert_eq!((old.landmarks.lakes.len(), old.landmarks.mountains.len()), (1, 1));
         world.landmarks.rainbow = RainbowState::Spent;
         let text = serialize_save("W", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
         assert!(text.contains("rainbow spent"));
-        assert_eq!(parse_save(&text).landmarks, world.landmarks);
+        assert_eq!(parse_save(&text).landmarks.rainbow, RainbowState::Spent);
         assert_eq!(parse_save("W\n1\n0 6 0 0 0\n").landmarks, Landmarks::default(), "older worlds have none");
     }
 
@@ -803,26 +773,26 @@ mod tests {
         horizen.landmarks.towers_unlocked.push((300, -80));
         let mut sky = World::new_skylands(1);
         sky.landmarks.sky_tower = Some((4, -2));
-        sky.landmarks.sky_visited = vec![(0, 0), (1, 0), (1, 1)];
         let player = Player::new();
         let extras = SaveExtras { horizen: Some((&horizen, &player, &[])), skylands: Some((&sky, &player, &[])), ..Default::default() };
         let text = serialize_save_full("w", 1, &world, &player, &Inventory::new(), &[], 10, false, &extras);
         let data = parse_save(&text);
         assert_eq!(data.landmarks.towers_unlocked, vec![(100, -50)]);
         assert_eq!(data.landmarks.horizen_tower, None, "the Horizen's tower is not the overworld's");
-        assert_eq!(data.horizen.unwrap().landmarks, horizen.landmarks);
-        assert_eq!(data.skylands.unwrap().landmarks, sky.landmarks);
+        // The towers' places are the seed's, not the save's; what has been done to them is saved.
+        let (h, s) = (data.horizen.unwrap(), data.skylands.unwrap());
+        assert_eq!((h.landmarks.towers_unlocked.clone(), h.landmarks.horizen_tower), (vec![(300, -80)], None));
+        assert_eq!(s.landmarks.sky_tower, None);
     }
 
     #[test]
     fn the_grand_castle_and_the_end_of_a_spent_rainbow_survive_a_save_round_trip() {
         let mut world = World::new(3, HashSet::new());
-        world.landmarks.grand_castle = Some(GrandCastle { x: -150, z: 220 });
         world.landmarks.rainbow = RainbowState::Spent;
         world.landmarks.spent_gold = Some((30, 6, 12));
         let text = serialize_save("W", 3, &world, &Player::new(), &Inventory::new(), &[], MAX_HEALTH, false);
-        assert!(text.contains("grandcastle -150 220") && text.contains("rainbowend 30 6 12"));
-        assert_eq!(parse_save(&text).landmarks, world.landmarks);
+        assert!(text.contains("rainbowend 30 6 12") && !text.contains("grandcastle"));
+        assert_eq!(parse_save(&text).landmarks.rainbow_end(), Some((30, 6, 12)));
         // A world saved before the end was kept is still spent, with nowhere to lead to.
         let old = parse_save("W\n1\n0 6 0 0 0\nrainbow spent\n");
         assert_eq!((old.landmarks.rainbow, old.landmarks.rainbow_end()), (RainbowState::Spent, None));

@@ -142,6 +142,8 @@ pub enum ItemKind {
     CursedIdol,
     /// Dropped by a flying snake. With 25 arrows it makes 25 poison arrows.
     SnakeFang,
+    /// A sprig of poison ivy, from breaking the plant in the Skylands. With 5 arrows it makes 5 poison arrows.
+    PoisonIvy,
     /// An arrow dipped with a snake fang's poison. A bow shoots these first; they do double an arrow's damage and, like arrows, are
     /// used up only by hitting an animal.
     PoisonArrow,
@@ -188,7 +190,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 102] = [
+    pub const ALL: [ItemKind; 103] = [
         ItemKind::Stick,
         ItemKind::Pebble,
         ItemKind::Stone,
@@ -268,6 +270,7 @@ impl ItemKind {
         ItemKind::BootsOfTheSky,
         ItemKind::CursedIdol,
         ItemKind::SnakeFang,
+        ItemKind::PoisonIvy,
         ItemKind::PoisonArrow,
         ItemKind::VenisonJerky,
         ItemKind::PoultryJerky,
@@ -375,6 +378,7 @@ impl ItemKind {
             ItemKind::BootsOfTheSky => "Boots of the Sky",
             ItemKind::CursedIdol => "Cursed Idol",
             ItemKind::SnakeFang => "Snake Fang",
+            ItemKind::PoisonIvy => "Poison Ivy",
             ItemKind::PoisonArrow => "Poison Arrow",
             ItemKind::WoodenBowl => "Wooden Bowl",
             ItemKind::Stardust => "Stardust",
@@ -483,6 +487,7 @@ impl ItemKind {
             ItemKind::BootsOfTheSky => "boots_of_the_sky",
             ItemKind::CursedIdol => "cursed_idol",
             ItemKind::SnakeFang => "snake_fang",
+            ItemKind::PoisonIvy => "poison_ivy",
             ItemKind::PoisonArrow => "poison_arrow",
             ItemKind::WoodenBowl => "wooden_bowl",
             ItemKind::Stardust => "stardust",
@@ -602,6 +607,7 @@ impl ItemKind {
             ItemKind::BootsOfTheSky => Color::new(0.52, 0.76, 0.94, 1.0),
             ItemKind::CursedIdol => Color::new(0.30, 0.42, 0.26, 1.0),
             ItemKind::SnakeFang => Color::new(0.92, 0.94, 0.78, 1.0),
+            ItemKind::PoisonIvy => Color::new(0.40, 0.74, 0.18, 1.0),
             ItemKind::PoisonArrow => Color::new(0.45, 0.78, 0.22, 1.0),
             ItemKind::WoodenBowl => Color::new(0.62, 0.44, 0.24, 1.0),
             ItemKind::Stardust => Color::new(0.96, 0.97, 1.0, 1.0),
@@ -966,6 +972,8 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         // Breaking fig foliage gives a few figs; plain foliage gives nothing.
         Block::FigFoliage => drops.extend(std::iter::repeat(ItemKind::Fig).take(rng.range(FIG_BREAK_MIN as i32, FIG_BREAK_MAX as i32 + 1) as usize)),
         Block::Foliage => {}
+        // Poison ivy always gives one sprig.
+        Block::PoisonIvy => drops.push(ItemKind::PoisonIvy),
         Block::Air
         | Block::Dirt
         | Block::Stone

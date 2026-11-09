@@ -465,13 +465,30 @@ fn network_air(seed: i64, wx: i32, wz: i32) -> i32 {
     air
 }
 
-/// The cave the column (wx, wz) is in the heart of (within `HORIZEN_CAVE_ENTER_SHARE` of its radius, half that for the great
-/// cavern), if any: what counts as having entered it.
-pub fn cave_at(seed: i64, wx: i32, wz: i32) -> Option<Cave> {
-    let cave = cave_in_cell(seed, wx.div_euclid(HORIZEN_CAVE_CELL), wz.div_euclid(HORIZEN_CAVE_CELL));
-    let share = if cave.great || cave.king { HORIZEN_CAVE_ENTER_SHARE / 2.0 } else { HORIZEN_CAVE_ENTER_SHARE };
-    let dist = ((wx as f32 + 0.5 - cave.x).powi(2) + (wz as f32 + 0.5 - cave.z).powi(2)).sqrt();
-    (dist <= cave.radius * share).then_some(cave)
+/// The camp of the cave in grid square (`ci`, `cj`), if it has one: every `HORIZEN_CAMP_EVERY`th cave or so (picked by the seed; never the
+/// arrival chamber, the great cavern or the king's cave) has a camp at a set spot: dry open floor as near the middle of the cave as can be
+/// found. A pure function of the seed, so a camp is always where it is, whether or not anyone has been near.
+pub fn camp_in_cell(seed: i64, ci: i32, cj: i32) -> Option<(i32, i32)> {
+    let cave = cave_in_cell(seed, ci, cj);
+    let arrival = (ci, cj) == (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL));
+    if cave.great || cave.king || arrival || hash3(seed, ci, cj, 0xCA3B) % HORIZEN_CAMP_EVERY as u64 != 0 {
+        return None;
+    }
+    let (cx, cz) = (cave.x.floor() as i32, cave.z.floor() as i32);
+    (0..=6_i32).find_map(|r| {
+        (-r..=r).flat_map(|dz| (-r..=r).map(move |dx| (dx, dz))).filter(|&(dx, dz)| dx.abs().max(dz.abs()) == r).map(|(dx, dz)| (cx + dx, cz + dz)).find(|&(x, z)| air_height(seed, x, z) >= HORIZEN_MIN_AIR && !is_pond(seed, x, z))
+    })
+}
+
+/// The camps whose spot lies in chunk (`cx`, `cz`) of the Horizen.
+pub fn camps_in_chunk(seed: i64, cx: i32, cz: i32) -> Vec<(i32, i32)> {
+    let (mx, mz) = (cx * CHUNK_SIZE + CHUNK_SIZE / 2, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    let (ci, cj) = (mx.div_euclid(HORIZEN_CAVE_CELL), mz.div_euclid(HORIZEN_CAVE_CELL));
+    (-1..=1)
+        .flat_map(|dj| (-1..=1).map(move |di| (ci + di, cj + dj)))
+        .filter_map(|(i, j)| camp_in_cell(seed, i, j))
+        .filter(|&(x, z)| (x.div_euclid(CHUNK_SIZE), z.div_euclid(CHUNK_SIZE)) == (cx, cz))
+        .collect()
 }
 
 /// How many blocks of air lie above the floor of the cave in the column (wx, wz): 0 where the rock is solid, otherwise at
@@ -573,7 +590,7 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks) -> Vec
                 continue;
             }
             for dy in 0..crate::kingcastle::CASTLE_HEIGHT + 2 {
-                if let Some(block) = crate::kingcastle::castle_cell(dx, dz, dy) {
+                if let Some(block) = crate::kingcastle::castle_cell(dx, dz, dy, landmarks.king_rooms_cleared) {
                     blocks[idx(lx, GROUND_TOP + 1 + dy, lz)] = block;
                 }
             }
@@ -999,13 +1016,27 @@ mod tests {
     }
 
     #[test]
-    fn a_cave_counts_as_entered_near_its_middle_only() {
-        let seed = 5;
-        let cave = cave_in_cell(seed, 2, 1);
-        let (x, z) = (cave.x.floor() as i32, cave.z.floor() as i32);
-        assert_eq!(cave_at(seed, x, z).map(|c| c.cell), Some((2, 1)));
-        assert_eq!(cave_at(seed, x + (cave.radius * 0.9) as i32, z), None, "the rim is not the heart");
-        assert_eq!(cave_at(seed, HORIZEN_SPAWN.0, HORIZEN_SPAWN.1).map(|c| c.cell), Some((0, 0)), "you arrive in the first cave");
+    fn about_one_cave_in_four_has_a_camp_at_a_set_dry_spot_and_never_the_special_caves() {
+        for seed in [1_i64, 5, 9] {
+            let mut camps = 0;
+            let mut caves = 0;
+            for cj in -8..9 {
+                for ci in -8..9 {
+                    let cave = cave_in_cell(seed, ci, cj);
+                    let camp = camp_in_cell(seed, ci, cj);
+                    assert_eq!(camp, camp_in_cell(seed, ci, cj), "a set place");
+                    caves += 1;
+                    if let Some((x, z)) = camp {
+                        camps += 1;
+                        assert!(!cave.great && !cave.king && (ci, cj) != (HORIZEN_SPAWN.0.div_euclid(HORIZEN_CAVE_CELL), HORIZEN_SPAWN.1.div_euclid(HORIZEN_CAVE_CELL)));
+                        assert!(air_height(seed, x, z) >= HORIZEN_MIN_AIR && !is_pond(seed, x, z), "open, dry floor");
+                        assert!(camps_in_chunk(seed, x.div_euclid(CHUNK_SIZE), z.div_euclid(CHUNK_SIZE)).contains(&(x, z)), "its chunk knows of it");
+                    }
+                }
+            }
+            let share = camps as f32 / caves as f32;
+            assert!(share > 0.10 && share < 0.40, "seed {seed}: {camps} camps in {caves} caves");
+        }
     }
 
     #[test]
@@ -1068,8 +1099,10 @@ mod tests {
             }
         }
         assert_eq!(plinths, 1, "one pair of boots in the world");
-        let blocks = generate_chunk(seed, cx, cz, &Landmarks::default());
-        let (lx, lz) = (kx.rem_euclid(CHUNK_SIZE), kz.rem_euclid(CHUNK_SIZE));
-        assert_eq!(blocks[idx(lx, GROUND_TOP + 3, lz)], Block::BootsPlinth);
+        // On the dais in the middle of the throne room, on the upper floor.
+        let (bx, bz, by) = crate::kingcastle::BOOTS_CELL;
+        let (px, pz) = (kx + bx, kz + bz);
+        let blocks = generate_chunk(seed, px.div_euclid(CHUNK_SIZE), pz.div_euclid(CHUNK_SIZE), &Landmarks::default());
+        assert_eq!(blocks[idx(px.rem_euclid(CHUNK_SIZE), GROUND_TOP + 1 + by, pz.rem_euclid(CHUNK_SIZE))], Block::BootsPlinth);
     }
 }

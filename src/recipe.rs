@@ -1,7 +1,7 @@
 //! Crafting recipes. A recipe consumes a fixed number of items; there is no shape or
 //! placement, only counts. To add a recipe, append an entry to `RECIPES`.
 
-use crate::config::{BOWLS_PER_LOG, CRYSTAL_BALL_STARDUST, JERKY_SALT_COST, POISON_ARROW_BATCH, SHELL_ARMOR_FRAGMENTS};
+use crate::config::{BOWLS_PER_LOG, CRYSTAL_BALL_STARDUST, JERKY_SALT_COST, POISON_ARROW_BATCH, POISON_IVY_ARROWS, SHELL_ARMOR_FRAGMENTS};
 use crate::inventory::Inventory;
 use crate::item::ItemKind;
 
@@ -72,6 +72,12 @@ pub const RECIPES: &[Recipe] = &[
         output: ItemKind::PoisonArrow,
         output_count: POISON_ARROW_BATCH,
         inputs: &[(ItemKind::Arrow, POISON_ARROW_BATCH), (ItemKind::SnakeFang, 1)],
+    },
+    // A sprig of poison ivy dips five arrows.
+    Recipe {
+        output: ItemKind::PoisonArrow,
+        output_count: POISON_IVY_ARROWS,
+        inputs: &[(ItemKind::Arrow, POISON_IVY_ARROWS), (ItemKind::PoisonIvy, 1)],
     },
     // Jerky: raw meat cured with a lump of pink salt, one kind for each meat. No fire is needed.
     Recipe { output: ItemKind::CrystalBall, output_count: 1, inputs: &[(ItemKind::Stardust, CRYSTAL_BALL_STARDUST)] },
@@ -169,7 +175,7 @@ mod tests {
             let expected = match r.output {
                 ItemKind::LeatherCord => 3,
                 ItemKind::WoodenBowl => 5,
-                ItemKind::PoisonArrow => 25,
+                ItemKind::PoisonArrow => if r.inputs.iter().any(|&(k, _)| k == ItemKind::PoisonIvy) { crate::config::POISON_IVY_ARROWS } else { 25 },
                 ItemKind::IvoryKnife => crate::config::IVORY_KNIVES_PER_HORN,
                 _ => 1,
             };

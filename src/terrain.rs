@@ -58,6 +58,45 @@ pub fn clearing_in_region(seed: i64, rx: i32, rz: i32) -> Option<Clearing> {
     })
 }
 
+/// The ancient altar of region (rx, rz), if it has one. Altars are rare and fixed: the normal world is cut into squares of
+/// `ALTAR_REGION_CHUNKS` chunks, `ALTAR_REGION_PERCENT` percent of which hold one altar, at a place the seed picks, never within
+/// `ALTAR_MIN_SPAWN_DISTANCE` of the spawn point. (Whether the ground there can hold one is `altar_site_ok`.)
+pub fn altar_in_region(seed: i64, rx: i32, rz: i32) -> Option<(i32, i32)> {
+    let mut rng = Rng::new(hash3(seed, rx, rz, 0xA17A));
+    if !rng.chance(ALTAR_REGION_PERCENT) {
+        return None;
+    }
+    let size = ALTAR_REGION_CHUNKS * CHUNK_SIZE;
+    let (x, z) = (rx * size + rng.range(8, size - 8), rz * size + rng.range(8, size - 8));
+    let spawn = (CHUNK_SIZE / 2) as f32;
+    (((x as f32 - spawn).powi(2) + (z as f32 - spawn).powi(2)).sqrt() >= ALTAR_MIN_SPAWN_DISTANCE).then_some((x, z))
+}
+
+/// Whether an altar can stand on the column (x, z): dry, level (not on a hill's slope or a mountain), clear of the castles, the well, the
+/// graveyard, the towers, the jungle's bare middle and the ground the seed has set aside.
+pub fn altar_site_ok(seed: i64, landmarks: &Landmarks, x: i32, z: i32) -> bool {
+    !is_wet_column(seed, landmarks, x, z)
+        && landmarks.mountain_rise(x, z) == 0
+        && landmarks.island_rise(x, z) == 0
+        && ground_top_with(seed, landmarks, x, z) <= GROUND_TOP + 2
+        && !landmarks.keeps_trees_out(x, z)
+        && !in_jungle_clearing(seed, x, z)
+        && !landmarks.reserved.0.iter().any(|&(x0, z0, x1, z1)| (x0..=x1).contains(&x) && (z0..=z1).contains(&z))
+}
+
+/// The altar nearest to the column (x, z) within `reach` blocks (the ones that can stand: `altar_site_ok`), as its column.
+pub fn nearest_altar(seed: i64, landmarks: &Landmarks, x: i32, z: i32, reach: f32) -> Option<(i32, i32)> {
+    let size = ALTAR_REGION_CHUNKS * CHUNK_SIZE;
+    let span = (reach / size as f32).ceil() as i32 + 1;
+    let (rx, rz) = (x.div_euclid(size), z.div_euclid(size));
+    let dist2 = |a: &(i32, i32)| ((a.0 - x) as i64).pow(2) + ((a.1 - z) as i64).pow(2);
+    (-span..=span)
+        .flat_map(|dz| (-span..=span).map(move |dx| (rx + dx, rz + dz)))
+        .filter_map(|(i, j)| altar_in_region(seed, i, j))
+        .filter(|a| (dist2(a) as f32).sqrt() <= reach && altar_site_ok(seed, landmarks, a.0, a.1))
+        .min_by_key(dist2)
+}
+
 /// A broad, gentle change in the height of the ground: a hill (a rise) or a valley (a dip, the same
 /// shape upside down). Trees grow on it and clearings can lie on it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +491,8 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
     // A chunk of jungle is thick with trees.
     let jungle_chunk = in_jungle(seed, cx * CHUNK_SIZE + CHUNK_SIZE / 2, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
     let target = if jungle_chunk { rng.range(JUNGLE_TREES_MIN, JUNGLE_TREES_MAX + 1) } else { target };
+    // The chunk's altar, if one stands in it (placed last; no tree grows beside it).
+    let altar = altar_in_region(seed, cx.div_euclid(ALTAR_REGION_CHUNKS), cz.div_euclid(ALTAR_REGION_CHUNKS)).filter(|&(ax, az)| (ax.div_euclid(CHUNK_SIZE), az.div_euclid(CHUNK_SIZE)) == (cx, cz) && altar_site_ok(seed, landmarks, ax, az));
     let mut placed: Vec<(i32, i32)> = Vec::new();
     for _ in 0..120 {
         if placed.len() as i32 >= target {
@@ -475,6 +516,9 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
             continue;
         }
         // The castles, the well and the graveyard stand in clearings.
+        if altar.map_or(false, |(ax, az)| (ax - (cx * CHUNK_SIZE + lx)).abs() <= 4 && (az - (cz * CHUNK_SIZE + lz)).abs() <= 4) {
+            continue;
+        }
         if landmarks.keeps_trees_out(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz) || crate::stonehenge::near(seed, cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz, STONEHENGE_TREE_MARGIN) {
             continue;
         }
@@ -530,8 +574,13 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
                     continue;
                 }
                 let roll = hash3(seed, wx, wz, 0x91A7) % 100;
+                // The jungle has no flowers and no berry bushes (red or purple): its clearings are grass, and its foliage and figs
+                // come from the jungle pass above.
+                let in_the_jungle = in_jungle(seed, wx, wz);
                 let plant = if roll < GRASS_PERCENT {
                     Block::Grass
+                } else if in_the_jungle {
+                    continue;
                 } else if roll < GRASS_PERCENT + FLOWER_PERCENT {
                     Block::Flower
                 } else if roll < GRASS_PERCENT + FLOWER_PERCENT + BUSH_PERCENT {
@@ -717,6 +766,12 @@ pub fn generate_chunk_for(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, ni
         let tops: Vec<i32> = surfaces.iter().map(|s| s.0).collect();
         crate::mines::furnish(mountain, cx, cz, &mut blocks, &tops);
     }
+    // The altar with its loadstone on it. Taking the loadstone leaves the altar (`Game::mine`).
+    if let Some((ax, az)) = altar {
+        let (lx, lz) = (ax.rem_euclid(CHUNK_SIZE), az.rem_euclid(CHUNK_SIZE));
+        blocks[idx(lx, top_at(lx, lz) + 1, lz)] = Block::AltarLoadstone;
+    }
+
     blocks
 }
 
@@ -1677,4 +1732,32 @@ mod tests {
         marks.mountains.push(crate::landmarks::Mountain { x: 10, z: 10, radius: 40, height: MOUNTAIN_HEIGHT, phase: 0 });
         assert_eq!(crate::chunk::used_height(&generate_chunk_with(9, 0, 0, &marks)), GROUND_TOP + MOUNTAIN_HEIGHT + 1);
     }
+    #[test]
+    fn ancient_altars_are_rare_fixed_and_far_from_the_spawn_point() {
+        let seed = 1;
+        let marks = Landmarks::default();
+        let size = ALTAR_REGION_CHUNKS * CHUNK_SIZE;
+        let (mut regions, mut altars) = (0, 0);
+        for rz in -10..10 {
+            for rx in -10..10 {
+                regions += 1;
+                let Some((x, z)) = altar_in_region(seed, rx, rz) else { continue };
+                altars += 1;
+                assert_eq!(altar_in_region(seed, rx, rz), Some((x, z)), "a set place");
+                assert_eq!((x.div_euclid(size), z.div_euclid(size)), (rx, rz), "inside its own region");
+                assert!(((x - CHUNK_SIZE / 2) as f32).hypot((z - CHUNK_SIZE / 2) as f32) >= ALTAR_MIN_SPAWN_DISTANCE);
+            }
+        }
+        let share = altars as f32 / regions as f32;
+        assert!((share - ALTAR_REGION_PERCENT as f32 / 100.0).abs() < 0.12, "rare: {altars} in {regions} regions");
+        // The nearest one is in the world once its chunk is made, with the loadstone on it.
+        let (ax, az) = nearest_altar(seed, &marks, 8, 8, 3000.0).expect("one within three thousand blocks");
+        let blocks = generate_chunk_for(seed, ax.div_euclid(CHUNK_SIZE), az.div_euclid(CHUNK_SIZE), &marks, false);
+        let (lx, lz) = (ax.rem_euclid(CHUNK_SIZE), az.rem_euclid(CHUNK_SIZE));
+        let top = ground_top_with(seed, &marks, ax, az);
+        assert_eq!(blocks[idx(lx, top + 1, lz)], Block::AltarLoadstone);
+        // No other altar stands nearer to that one's own column than itself.
+        assert_eq!(nearest_altar(seed, &marks, ax, az, 100.0), Some((ax, az)));
+    }
+
 }

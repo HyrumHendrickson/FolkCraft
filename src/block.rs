@@ -115,6 +115,9 @@ pub enum Block {
     Foliage,
     /// The same foliage with figs on it. Right click picks the figs once, like a bush (the foliage stays); breaking it gives a few figs too.
     FigFoliage,
+    /// Poison ivy, which grows in patches on the islands of the Skylands. Walk-through, but it hurts: `POISON_IVY_DAMAGE` life every
+    /// `POISON_IVY_INTERVAL` seconds a body touches it. Broken by hand it drops one Poison Ivy.
+    PoisonIvy,
 }
 
 /// One coloured box inside a block's cell, in cell-local coordinates (0..=1).
@@ -165,6 +168,14 @@ const FIG_FOLIAGE_PARTS: &[Part] = &[
     part([0.60, 0.34, 0.84], [0.72, 0.48, 0.94], (0.42, 0.17, 0.32)),
     part([0.06, 0.30, 0.58], [0.16, 0.44, 0.70], (0.46, 0.20, 0.34)),
     part([0.84, 0.22, 0.28], [0.94, 0.36, 0.40], (0.46, 0.20, 0.34)),
+];
+/// Poison ivy: glossy three-leaved sprays on red stems, bright against the dull green of ordinary foliage.
+const POISON_IVY_PARTS: &[Part] = &[
+    part([0.44, 0.0, 0.44], [0.56, 0.40, 0.56], (0.55, 0.16, 0.14)),
+    part([0.10, 0.18, 0.34], [0.50, 0.30, 0.66], (0.38, 0.72, 0.16)),
+    part([0.50, 0.24, 0.20], [0.90, 0.36, 0.56], (0.34, 0.68, 0.14)),
+    part([0.28, 0.34, 0.50], [0.68, 0.46, 0.90], (0.42, 0.76, 0.20)),
+    part([0.34, 0.46, 0.34], [0.62, 0.56, 0.62], (0.48, 0.80, 0.24)),
 ];
 /// A log lying along the x axis. The mesher paints the two x ends as cut wood.
 const LOG_PARTS: &[Part] = &[part([0.05, 0.0, 0.25], [0.95, 0.5, 0.75], (0.36, 0.24, 0.12))];
@@ -500,6 +511,7 @@ impl Block {
                 | Block::Bush
                 | Block::Foliage
                 | Block::FigFoliage
+                | Block::PoisonIvy
                 | Block::PlacedLog
                 | Block::PlacedPebble
                 | Block::PlacedStone
@@ -566,6 +578,7 @@ impl Block {
             Block::Bush => BREAK_SECONDS_BUSH,
             Block::Foliage => BREAK_SECONDS_GROUND_FOLIAGE,
             Block::FigFoliage => BREAK_SECONDS_FIG_FOLIAGE,
+            Block::PoisonIvy => BREAK_SECONDS_POISON_IVY,
             Block::Leaves | Block::Needles => BREAK_SECONDS_FOLIAGE,
             Block::Grass | Block::Flower => BREAK_SECONDS_PLANT,
             Block::PlacedLog
@@ -707,6 +720,7 @@ impl Block {
             Block::Bush => BUSH_PARTS,
             Block::Foliage => FOLIAGE_PARTS,
             Block::FigFoliage => FIG_FOLIAGE_PARTS,
+            Block::PoisonIvy => POISON_IVY_PARTS,
             Block::PlacedLog => LOG_PARTS,
             Block::Fire => FIRE_PARTS,
             Block::PlacedPebble => PEBBLE_PARTS,
@@ -832,7 +846,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 58] = [
+    const ALL: [Block; 59] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -891,6 +905,7 @@ mod tests {
         Block::Mushroom,
         Block::Foliage,
         Block::FigFoliage,
+        Block::PoisonIvy,
     ];
 
     #[test]

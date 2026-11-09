@@ -157,24 +157,8 @@ impl Tower {
         (self.x as f32 + 0.5, self.z as f32 + 0.5)
     }
 
-    /// A tower whose nearest edge is `tower_distance()` blocks from `at` (counting along either axis, as the chunks do),
-    /// in the direction `angle`, pushed `extra` blocks further out.
-    #[cfg(test)]
-    pub fn ahead(at: (f32, f32), angle: f32, extra: f32) -> Tower {
-        let (c, s) = (angle.cos(), angle.sin());
-        let gap = (tower_distance() as f32 + extra + TOWER_REACH as f32) / c.abs().max(s.abs());
-        Tower { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
-    }
 }
 
-/// Blocks round an island's shore that its tower's chunks can reach (used to tell whether an island is yet made).
-pub const TOWER_FOOT_MARGIN: i32 = 2;
-
-/// How far (blocks) from the player a new tower's nearest edge lies: past the generated land, as for every structure.
-#[cfg(test)]
-pub fn tower_distance() -> i32 {
-    structure_distance()
-}
 
 #[cfg(test)]
 mod tests {
@@ -374,13 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tower_ahead_stands_beyond_the_land_and_has_a_door_approach_in_front_of_it() {
-        let at = (10.0, 20.0);
-        for i in 0..16 {
-            let t = Tower::ahead(at, i as f32 * std::f32::consts::TAU / 16.0, 0.0);
-            let gap = (t.x as f32 - at.0).abs().max((t.z as f32 - at.1).abs()) - TOWER_REACH as f32;
-            assert!(gap >= tower_distance() as f32 - 1.5, "{gap}");
-        }
+    fn a_tower_has_a_door_approach_in_front_of_it() {
         let t = Tower { x: 100, z: -40 };
         let (ax, az) = t.approach();
         assert!(az > (t.z + TOWER_HALF) as f32 && (ax - 100.5).abs() < 1e-3);

@@ -229,40 +229,23 @@ pub fn island_at(seed: i64, wx: i32, wz: i32) -> Option<Island> {
     (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (cx + dx, cz + dz))).map(|(x, z)| island_in_cell(seed, x, z)).find(|i| i.contains(wx, wz))
 }
 
-/// The grid cell of the island under the column (wx, wz), if there is one.
-pub fn island_cell_under(seed: i64, wx: i32, wz: i32) -> Option<(i32, i32)> {
-    island_at(seed, wx, wz).map(|i| (cell_of(i.x), cell_of(i.z)))
-}
-
-/// The island that carries the tower: the nearest to the column `at` (in a grid cell within a few cells of it) that the player
-/// has not walked on, is not the first island, and none of whose chunks have been made yet (`made` says whether a chunk has),
-/// so that it is the next one to appear. `None` if there is no such island.
-pub fn pick_tower_cell(seed: i64, at: (i32, i32), visited: &[(i32, i32)], made: &dyn Fn(i32, i32) -> bool) -> Option<(i32, i32)> {
-    let (cx, cz) = (cell_of(at.0), cell_of(at.1));
-    let mut best: Option<((i32, i32), i64)> = None;
-    for dz in -8..=8 {
-        for dx in -8..=8 {
-            let cell = (cx + dx, cz + dz);
-            if cell == (0, 0) || visited.contains(&cell) || in_giant_block(seed, cell.0, cell.1) {
+/// The grid cell of the island that carries the silver tower, the same in every game of a seed: a wooded island (the tower needs
+/// level ground) between `SKY_TOWER_MIN_CELLS` and `SKY_TOWER_MAX_CELLS` cells from the first island, counted along either axis, and
+/// not in the giant island's block. Of the cells that qualify the seed picks one, so the way to it has to be found.
+pub fn tower_cell_for(seed: i64) -> (i32, i32) {
+    let mut candidates: Vec<((i32, i32), u64)> = Vec::new();
+    for cz in -SKY_TOWER_MAX_CELLS..=SKY_TOWER_MAX_CELLS {
+        for cx in -SKY_TOWER_MAX_CELLS..=SKY_TOWER_MAX_CELLS {
+            let ring = cx.abs().max(cz.abs());
+            if ring < SKY_TOWER_MIN_CELLS || in_giant_block(seed, cx, cz) {
                 continue;
             }
-            let island = island_in_cell(seed, cell.0, cell.1);
-            // The tower needs level ground: a wooded island (which is flat) and nothing else.
-            if island.kind != IslandKind::Wooded {
-                continue;
-            }
-            let reach = (tower::TOWER_FOOT_MARGIN + island.radius.ceil() as i32) as i32;
-            let chunks_made = (island.z - reach).div_euclid(CHUNK_SIZE)..=(island.z + reach).div_euclid(CHUNK_SIZE);
-            if chunks_made.into_iter().any(|kz| ((island.x - reach).div_euclid(CHUNK_SIZE)..=(island.x + reach).div_euclid(CHUNK_SIZE)).any(|kx| made(kx, kz))) {
-                continue;
-            }
-            let d = ((island.x - at.0) as i64).pow(2) + ((island.z - at.1) as i64).pow(2);
-            if best.map_or(true, |(_, bd)| d < bd) {
-                best = Some((cell, d));
+            if island_in_cell(seed, cx, cz).kind == IslandKind::Wooded {
+                candidates.push(((cx, cz), hash3(seed, cx, cz, 0x5C77)));
             }
         }
     }
-    best.map(|(c, _)| c)
+    candidates.into_iter().min_by_key(|&(_, h)| h).map_or((SKY_TOWER_MIN_CELLS, 0), |(cell, _)| cell)
 }
 
 /// A bridge between two islands: the cells at its ends.
@@ -447,6 +430,17 @@ fn decoration(seed: i64, island: &Island, wx: i32, wz: i32) -> Vec<(i32, Block)>
     out
 }
 
+/// Whether poison ivy grows in the column (wx, wz) of `island` (it also needs a free cell above the ground): in patches (squares of
+/// `SKY_IVY_PATCH_CELL` blocks, `SKY_IVY_PATCH_PERCENT` of them a patch), thinning out to nothing at the shore. Never on the first
+/// island, where the player arrives, nor on the volcano. A pure function of the seed.
+fn ivy_site(seed: i64, island: &Island, wx: i32, wz: i32) -> bool {
+    if island.kind == IslandKind::Volcano || (island.x, island.z) == (SKY_SPAWN_CENTRE.0, SKY_SPAWN_CENTRE.1) || island.share(wx, wz) > SKY_IVY_MAX_SHARE {
+        return false;
+    }
+    let (px, pz) = (wx.div_euclid(SKY_IVY_PATCH_CELL), wz.div_euclid(SKY_IVY_PATCH_CELL));
+    hash3(seed, px, pz, 0x1A9E) % 100 < SKY_IVY_PATCH_PERCENT && hash3(seed, wx, wz, 0x1A9F) % 100 < SKY_IVY_DENSITY_PERCENT
+}
+
 /// The block of an island's ground at height `y` in the column (wx, wz), whose surface is at `surface`: dirt over rock; on the volcano,
 /// bare grey rock (no glowing blocks: the fire is the crater's tornado).
 fn ground_block(island: &Island, wx: i32, wz: i32, y: i32, surface: i32) -> Block {
@@ -488,7 +482,11 @@ pub fn generate_chunk(seed: i64, cx: i32, cz: i32, landmarks: &Landmarks, night:
                         }
                     }
                 }
-                if (3..CHUNK_SIZE - 3).contains(&lx) && (3..CHUNK_SIZE - 3).contains(&lz) && tree_site(seed, wx, wz, &island, landmarks) {
+                let is_tree_site = tree_site(seed, wx, wz, &island, landmarks);
+                if !tower_island && !is_tree_site && blocks[idx(lx, surface + 1, lz)] == Block::Air && ivy_site(seed, &island, wx, wz) {
+                    blocks[idx(lx, surface + 1, lz)] = Block::PoisonIvy;
+                }
+                if (3..CHUNK_SIZE - 3).contains(&lx) && (3..CHUNK_SIZE - 3).contains(&lz) && is_tree_site {
                     trees.push((lx, lz, island.top));
                 }
             } else if let Some(deck) = deck_at(seed, wx, wz, night) {
@@ -807,10 +805,12 @@ mod tests {
 
     #[test]
     fn the_tower_island_is_always_a_flat_wooded_one() {
-        for seed in 0..5 {
-            if let Some(cell) = pick_tower_cell(seed, (0, 0), &[], &|_, _| false) {
-                assert_eq!(island_in_cell(seed, cell.0, cell.1).kind, IslandKind::Wooded);
-            }
+        for seed in 0..12 {
+            let cell = tower_cell_for(seed);
+            assert_eq!(island_in_cell(seed, cell.0, cell.1).kind, IslandKind::Wooded);
+            assert_eq!(cell, tower_cell_for(seed), "a set place");
+            assert!(cell.0.abs().max(cell.1.abs()) >= SKY_TOWER_MIN_CELLS, "far from the first island: {cell:?}");
+            assert!(!in_giant_block(seed, cell.0, cell.1));
         }
     }
 

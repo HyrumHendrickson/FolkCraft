@@ -37,11 +37,6 @@ pub fn gen_radius() -> i32 {
     render_radius() + 1
 }
 
-/// How far (blocks) from the player a new structure's nearest edge lies: one chunk beyond the generated ring, so
-/// that it appears outside the render distance and is never seen to pop in.
-pub fn structure_distance() -> i32 {
-    (gen_radius() + 1) * CHUNK_SIZE
-}
 /// Chunk meshes rebuilt per frame to keep frame times steady while exploring.
 pub const MESH_BUDGET_PER_FRAME: usize = 2;
 /// Ambient-occlusion brightness for 0..=3 neighboring solid corners.
@@ -137,16 +132,9 @@ pub const RELIEF_PLACEMENT_TRIES: i32 = 8;
 
 // --- Landmarks: lakes, mountains and the rainbow -----------------------------------------
 
-/// A walk this many chunks long through a river, without leaving the water, ends at a lake.
-pub const LAKE_TREK_CHUNKS: i32 = 6;
 /// Radius of a lake in blocks (the shore is wavy, so the real radius varies by about a quarter). The lake
 /// is large: about a hundred blocks from shore to shore each way.
 pub const LAKE_RADIUS: i32 = 100;
-/// Gap in blocks between the player and the near shore of a new lake: `structure_distance()`, more than the
-/// generated ring, so the lake appears beyond the edge of the generated land instead of in front of the player.
-pub fn lake_distance() -> i32 {
-    structure_distance()
-}
 /// The island in the middle of a lake has this share of the lake's radius (about 58 blocks for a big lake).
 pub const LAKE_ISLAND_SHARE: f32 = 0.45;
 /// The island is a hill: it rises this many blocks above the plain to a flat top, which the small castle stands
@@ -159,18 +147,12 @@ pub const LAKE_CHANNEL_HALF_WIDTH: f32 = 2.5;
 /// Lakes are one block deep, like rivers.
 pub const LAKE_DEPTH: i32 = RIVER_DEPTH;
 
-/// Following a held compass this many chunks leads to a mountain.
-pub const COMPASS_TREK_CHUNKS: i32 = 8;
 /// The compass needle points this way: north, which is towards smaller z.
 pub const COMPASS_NORTH_BEARING: f32 = -std::f32::consts::FRAC_PI_2;
 /// Wide enough that the slope never exceeds one block per column, so the summit can be climbed by jumping.
 pub const MOUNTAIN_RADIUS: i32 = 400;
 /// Blocks the ground is raised at the summit: ten times what it once was (17). Hills are at most `HILL_MAX_HEIGHT`.
 pub const MOUNTAIN_HEIGHT: i32 = 170;
-/// Gap in blocks between the player and the foot of a new mountain (see `lake_distance`).
-pub fn mountain_distance() -> i32 {
-    structure_distance()
-}
 /// A mountain is steeper in parts: its slope is broken by ledges, rings of cliff `MOUNTAIN_LEDGE_HEIGHT` blocks high
 /// (more than a jump clears) that run round it. Each ring has one gap, a ramp, and the gaps of one ring and the next
 /// lie on opposite sides of the mountain, so the climb zigzags and cannot be run straight up. A mountain has one
@@ -216,8 +198,6 @@ pub const RUINED_RUBBLE_PERCENT: i32 = 12;
 pub const RUINED_TOWER_SEED: i64 = 0x70E5;
 /// A tower in the Horizen stands on dry cave floor: no pond comes within this many blocks of it.
 pub const TOWER_POND_MARGIN: i32 = 4;
-/// The player must have walked on this many different Skylands islands before the next island to appear carries a tower.
-pub const SKY_TOWER_VISITS: usize = 10;
 
 /// The grand castle: a large castle of grey stone with five floors, found by following the ghostly trail that a
 /// peep stone shows at night. These are the outer wall's half-width, the farthest any part reaches from the centre,
@@ -230,10 +210,6 @@ pub const GRAND_TREE_MARGIN: i32 = 8;
 /// Blocks between floors of the keep, and how many floors it has.
 pub const GRAND_STOREY: i32 = 5;
 pub const GRAND_STOREYS: i32 = 5;
-/// The grand castle rises this far beyond the generated land (the nearest part is at least this far from the player).
-pub fn grand_distance() -> i32 {
-    structure_distance() + 20
-}
 
 /// The bone totem's two landmarks, each of which the world has only once. The well is a square of water `WELL_SIZE`
 /// blocks across, sunk to the stone floor of the world (so `GROUND_TOP - STONE_LAYERS + 1` blocks deep) and ringed by
@@ -246,15 +222,9 @@ pub const WELL_RIM_WIDTH: i32 = 1;
 /// The well is a stone ring, a wooden frame of four corner posts under a roof, and a rope hanging over the water: this many
 /// blocks high.
 pub const WELL_HEIGHT: i32 = 7;
-pub fn well_distance() -> i32 {
-    structure_distance() + 20
-}
 pub const WELL_TREE_MARGIN: i32 = 6;
 pub const GRAVEYARD_HALF: i32 = 12;
 pub const GRAVEYARD_REACH: i32 = 14;
-pub fn graveyard_distance() -> i32 {
-    structure_distance() + 20
-}
 pub const GRAVEYARD_TREE_MARGIN: i32 = 6;
 /// Gravestones stand this many blocks apart inside the graveyard.
 pub const GRAVEYARD_SPACING: i32 = 3;
@@ -375,10 +345,8 @@ pub const HORIZEN_CAVE_MIN_HEIGHT: i32 = 8;
 pub const HORIZEN_CAVE_MAX_HEIGHT: i32 = 14;
 pub const HORIZEN_LINK_RADIUS: f32 = 4.0;
 pub const HORIZEN_LINK_HEIGHT: i32 = 6;
-/// A cave counts as entered when the player comes within this share of its radius of its middle.
-pub const HORIZEN_CAVE_ENTER_SHARE: f32 = 0.6;
-/// Every this many caves entered (the arrival chamber is the first), the one just entered has a camp: a burning log with a tin
-/// pot of berry stew, red or purple, ready to eat. The fire burns this many seconds.
+/// About one cave in this many (picked by the seed, `horizen::camp_in_cell`) has a camp at a set spot: a burning log with a tin pot of berry
+/// stew, red or purple, ready to eat. The fire is lit when the chunk is first made, and burns this many seconds.
 pub const HORIZEN_CAMP_EVERY: usize = 4;
 pub const HORIZEN_CAMP_FIRE_SECONDS: f32 = 600.0;
 
@@ -768,6 +736,12 @@ pub const SKY_VOID_Y: f32 = 55.0;
 pub const SKY_FALL_FADE_IN: f32 = 0.9;
 pub const SKY_FALL_FADE_OUT: f32 = 3.2;
 pub const SKY_FALL_DROP: f32 = 50.0;
+/// A fall out of the Skylands lands, by chance, on the mountain, on the Loch Ness island or in the jungle (`Game::pick_fall_landing`): on the
+/// mountain about `LANDING_BELOW_SUMMIT` blocks under the top; on the island `LANDING_ISLAND_RADIUS` blocks from the middle (beside the tower).
+pub const LANDING_BELOW_SUMMIT: i32 = 12;
+pub const LANDING_ISLAND_RADIUS: f32 = 9.0;
+/// The King's Crown sets its wearer down in the ruined castle this many blocks south of the dais.
+pub const CROWN_ARRIVAL_DZ: i32 = 5;
 /// Trees on an island: percent of columns that try to grow one.
 pub const SKY_TREE_PERCENT: u64 = 3;
 
@@ -778,6 +752,8 @@ pub const BREAK_SECONDS_SALT: f32 = 1.2;
 /// A cluster of ruby, sapphire or amethyst crystals, and a cave mushroom.
 pub const BREAK_SECONDS_CRYSTAL: f32 = 1.5;
 pub const BREAK_SECONDS_MUSHROOM: f32 = 0.5;
+/// Poison ivy (`Block::PoisonIvy`) of the Skylands breaks by hand quickly.
+pub const BREAK_SECONDS_POISON_IVY: f32 = 0.5;
 pub const BREAK_SECONDS_KEY: f32 = 0.6;
 pub const BREAK_SECONDS_RELIC: f32 = 1.0;
 /// Lumps of pink salt a crystal drops: this many to this many, inclusive (a random number each time).
@@ -834,15 +810,16 @@ pub const CROW_WALK_SPEED: f32 = 1.1;
 pub const CROW_FEATHER_DROP: u32 = 3;
 pub const MAX_CROW: usize = 4;
 pub const SPAWN_WEIGHT_CROW: u64 = 30;
-/// A crow's take-off checks that the way west is clear for this many blocks at flying height.
-pub const CROW_WEST_LOOKAHEAD: i32 = 24;
-/// Westward blocks a crow must fly with the player following (within `CROW_FOLLOW_DISTANCE`) to land at an altar:
-/// two chunks. A crow the player lets get more than `CROW_LOSE_DISTANCE` away forgets it.
-pub const CROW_ALTAR_WEST_BLOCKS: f32 = 2.0 * CHUNK_SIZE as f32;
-pub const CROW_FOLLOW_DISTANCE: f32 = 30.0;
-pub const CROW_LOSE_DISTANCE: f32 = 45.0;
-/// How far from where the crow comes down the game looks for a spot for the altar.
-pub const ALTAR_SEARCH_RADIUS: i32 = 6;
+/// A crow takes off towards the nearest ancient altar within `CROW_ALTAR_SEEK_DISTANCE` blocks (it flies away from the player if there is
+/// none), and comes down on it when it gets there.
+pub const CROW_ALTAR_SEEK_DISTANCE: f32 = 700.0;
+/// A crow within this many blocks of its altar starts to come down.
+pub const CROW_ALTAR_LANDING_GAP: f32 = 3.0;
+/// Ancient altars (`terrain::altar_in_region`): one in `ALTAR_REGION_PERCENT` percent of the squares of `ALTAR_REGION_CHUNKS` chunks, never
+/// within `ALTAR_MIN_SPAWN_DISTANCE` blocks of the spawn point.
+pub const ALTAR_REGION_CHUNKS: i32 = 16;
+pub const ALTAR_REGION_PERCENT: u64 = 30;
+pub const ALTAR_MIN_SPAWN_DISTANCE: f32 = 350.0;
 
 // --- The Iron Quail -------------------------------------------------------------------
 
@@ -1173,19 +1150,35 @@ pub const VAMPIRE_BAT_GOLD_DROP: u32 = 3;
 
 /// The king's castle (`kingcastle.rs`) in the Horizen's giant cave. The cave is a ragged dome `KING_CAVE_RADIUS` across from the middle
 /// (the great cavern is `HORIZEN_CAVERN_RADIUS`) and `KING_CAVE_HEIGHT` high; the castle's outer wall is `KING_WALL_HALF` from the
-/// middle (the grand castle's is `GRAND_WALL_HALF`), with a tower at each corner `KING_TOWER_HEIGHT` high, and the keep `KING_KEEP_HALF`
-/// out. `KING_REACH` is the farthest any part of it reaches. The king's cave lies `KING_CAVE_CELLS` cells of `HORIZEN_CAVE_CELL` from the arrival point.
+/// middle (the grand castle's is `GRAND_WALL_HALF`), with a tower at each corner `KING_TOWER_HEIGHT` high. Inside the wall it is a dungeon of
+/// two storeys (`kingcastle.rs`): the ground floor's rooms have `KING_STOREY_AIR` free blocks above the floor, a slab at `KING_SLAB_DY`, the
+/// upper floor's rooms `KING_STOREY_AIR` more, and a roof at `KING_ROOF_DY`. `KING_REACH` is the farthest any part of it reaches. The king's cave lies `KING_CAVE_CELLS` cells of `HORIZEN_CAVE_CELL` from the arrival point.
 pub const KING_CAVE_RADIUS: f32 = 104.0;
 pub const KING_CAVE_RAGGEDNESS: f32 = 0.08;
 pub const KING_CAVE_HEIGHT: i32 = 66;
 pub const KING_CAVE_CELLS: i32 = 3;
 pub const KING_WALL_HALF: i32 = 44;
 pub const KING_REACH: i32 = 48;
-pub const KING_WALL_HEIGHT: i32 = 11;
+pub const KING_WALL_HEIGHT: i32 = 19;
+pub const KING_STOREY_AIR: i32 = 8;
+pub const KING_SLAB_DY: i32 = 8;
+pub const KING_ROOF_DY: i32 = 17;
+/// A door of the dungeon is this many blocks high; the gate in the outer wall is `KING_GATE_HEIGHT`.
+pub const KING_DOOR_HEIGHT: i32 = 4;
+pub const KING_GATE_HEIGHT: i32 = 6;
+/// Spirit guards: the hostile spirit archers that hold the dungeon's rooms (`AnimalKind::SpiritGuard`). `KING_GUARDS_PER_ROOM` come out in
+/// each room as the player steps into it (when every room before it is cleared) and never again once it is cleared; the next door opens when
+/// the last of them is dead. They come no nearer the player than `KING_GUARD_MIN_DISTANCE` blocks. They shoot like the Wild Hunt's archers,
+/// every `SPIRIT_GUARD_INTERVAL` seconds.
+pub const KING_GUARDS_PER_ROOM: usize = 2;
+pub const KING_GUARD_MIN_DISTANCE: f32 = 6.0;
+pub const SPIRIT_GUARD_HEALTH: i32 = 14;
+pub const SPIRIT_GUARD_INTERVAL: f32 = 3.2;
+/// A guard keeps between these distances from the player, side-stepping, so that it can fight in a room.
+pub const SPIRIT_GUARD_MIN_RANGE: f32 = 5.0;
+pub const SPIRIT_GUARD_MAX_RANGE: f32 = 12.0;
 pub const KING_TOWER_HALF: i32 = 4;
 pub const KING_TOWER_HEIGHT: i32 = 26;
-pub const KING_KEEP_HALF: i32 = 17;
-pub const KING_KEEP_HEIGHT: i32 = 22;
 pub const KING_GATE_HALF: i32 = 3;
 /// What the ghost of the king says when the pipes are played in his castle.
 /// Each `GOLD_PER_SPIRIT` gold given to him sends one spirit archer to follow the player. It fires `SPIRIT_SHOTS` arrows (each as
@@ -1407,9 +1400,10 @@ pub const JUNGLE_POND_MAX_RADIUS: f32 = 4.2;
 pub const JUNGLE_POND_CLEARING_MARGIN: f32 = 4.0;
 /// The jungle's grass is darker than the grass of the ordinary forest.
 pub const JUNGLE_GRASS_COLOR: (f32, f32, f32) = (0.13, 0.36, 0.12);
-/// Foliage grows on `JUNGLE_FOLIAGE_PERCENT` of the jungle's dry ground columns (not its bare middle); one clump in `JUNGLE_FIG_ONE_IN` bears figs.
-pub const JUNGLE_FOLIAGE_PERCENT: u64 = 12;
-pub const JUNGLE_FIG_ONE_IN: u64 = 5;
+/// Foliage grows thick on `JUNGLE_FOLIAGE_PERCENT` of the jungle's dry ground columns (not its bare middle); one clump in `JUNGLE_FIG_ONE_IN` bears
+/// figs. The jungle has no flowers and no berry bushes at all (`terrain::generate_chunk_for`).
+pub const JUNGLE_FOLIAGE_PERCENT: u64 = 30;
+pub const JUNGLE_FIG_ONE_IN: u64 = 3;
 /// Picking a fig-bearing foliage (right click, like a bush: once, and the foliage stays) gives `FIG_PICK_MIN..=FIG_PICK_MAX` figs; breaking
 /// it gives `FIG_BREAK_MIN..=FIG_BREAK_MAX`. Plain foliage drops nothing.
 pub const FIG_PICK_MIN: u32 = 2;
@@ -1616,9 +1610,13 @@ pub const MUSHROOM_BOOST_SECONDS: f32 = 15.0;
 /// `CRAWFISH_FRAGMENT_PERCENT` percent leaves a Shell Fragment. **Big crawfish** (`BIG_CRAWFISH_HEALTH`) live in the Horizen's river caves,
 /// leave the player alone until hurt, then fight back (`BIG_CRAWFISH_DAMAGE` every `BIG_CRAWFISH_ATTACK_COOLDOWN`), and always drop
 /// `BIG_CRAWFISH_FRAGMENT_MIN..=MAX` fragments. Every `BIG_CRAWFISH_KILLS_PER_GIANT` big crawfish killed brings out the **Giant Crawfish**
-/// (`GIANT_CRAWFISH_HEALTH`), which always fights and drops `GIANT_CRAWFISH_FRAGMENT_MIN..=MAX` fragments. All of them keep to the water.
+/// (`GIANT_CRAWFISH_HEALTH`), which always fights and drops `GIANT_CRAWFISH_FRAGMENT_MIN..=MAX` fragments. All of them keep to the water, except
+/// that a big or giant one that is attacking comes ashore to chase the player (`AnimalKind::can_leave_water`), and goes back to the nearest
+/// water (within `CRAWFISH_SHORE_SEARCH` blocks) once it stops.
 /// `SHELL_ARMOR_FRAGMENTS` fragments make a Shell Armor, which takes `SHELL_ARMOR_REDUCTION` life off every blow (but never more than half).
 pub const CRAWFISH_HEALTH: i32 = 4;
+/// How far (blocks) a crawfish stranded on land looks for water to return to.
+pub const CRAWFISH_SHORE_SEARCH: f32 = 24.0;
 pub const CRAWFISH_HALF_WIDTH: f32 = 0.3;
 pub const CRAWFISH_HEIGHT: f32 = 0.3;
 pub const CRAWFISH_WALK_SPEED: f32 = 0.9;
@@ -1704,3 +1702,38 @@ pub const VAMPIRE_BAT_CENTRE_SPEED: f32 = 11.0;
 pub const VAMPIRE_BAT_CENTRE_LOOK: f32 = 8.0;
 /// A wall nearer than this (blocks) to a vampire bat stops its goal pulling it sideways into the rock.
 pub const VAMPIRE_BAT_WALL_NEAR: f32 = 2.5;
+
+// --- Poison ivy -------------------------------------------------------------------------------
+
+/// Poison ivy (`Block::PoisonIvy`) grows in patches on the Skylands' islands (never on the first one, nor on the volcano's, nor where
+/// the tower stands). An island is cut into squares of `SKY_IVY_PATCH_CELL` blocks; `SKY_IVY_PATCH_PERCENT` percent of the squares are
+/// a patch, and `SKY_IVY_DENSITY_PERCENT` percent of the columns of a patch (not nearer the shore than `SKY_IVY_MAX_SHARE` of the
+/// island's reach) carry a plant.
+pub const SKY_IVY_PATCH_CELL: i32 = 5;
+pub const SKY_IVY_PATCH_PERCENT: u64 = 35;
+pub const SKY_IVY_DENSITY_PERCENT: u64 = 60;
+pub const SKY_IVY_MAX_SHARE: f32 = 0.85;
+/// Walking into poison ivy costs `POISON_IVY_DAMAGE` life every `POISON_IVY_INTERVAL` seconds of contact (the count restarts when
+/// contact ends). The ivy does not push the player back.
+pub const POISON_IVY_DAMAGE: u32 = 1;
+pub const POISON_IVY_INTERVAL: f32 = 1.0;
+/// How far (blocks) the player's body may be from an ivy plant and still touch it.
+pub const POISON_IVY_TOUCH_MARGIN: f32 = 0.05;
+/// One Poison Ivy and `POISON_IVY_ARROWS` arrows make `POISON_IVY_ARROWS` poison arrows.
+pub const POISON_IVY_ARROWS: u32 = 5;
+
+// --- Fixed sites -------------------------------------------------------------------------------
+
+/// Every landmark of the normal world has a set place, a pure function of the seed (`Landmarks::fixed`). Each is put on a heading the
+/// seed decides, this many blocks from the spawn point (the centre of the structure), and pushed `SITE_PUSH_BLOCKS` further out until
+/// it stands clear of everything placed before it. They are far apart on purpose: the way to each has to be found.
+pub const FIXED_WELL_DISTANCE: f32 = 650.0;
+pub const FIXED_GRAVEYARD_DISTANCE: f32 = 800.0;
+pub const FIXED_GRAND_CASTLE_DISTANCE: f32 = 950.0;
+pub const FIXED_LAKE_DISTANCE: f32 = 1100.0;
+pub const FIXED_RUINED_CASTLE_DISTANCE: f32 = 1300.0;
+pub const FIXED_MOUNTAIN_DISTANCE: f32 = 1800.0;
+/// The Skylands' tower stands on a wooded island at least this many grid cells (counted along either axis) from the first island, and
+/// at most `SKY_TOWER_MAX_CELLS`.
+pub const SKY_TOWER_MIN_CELLS: i32 = 3;
+pub const SKY_TOWER_MAX_CELLS: i32 = 6;

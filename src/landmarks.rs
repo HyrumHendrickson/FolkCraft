@@ -1,31 +1,25 @@
-//! Landmarks: lakes, mountains and the rainbow, which the player brings into the world by exploring.
+//! Landmarks: the lake, the mountain, the castles, the well, the graveyard, the towers and the rainbow.
 //!
-//! The land of a world is a pure function of its seed (`terrain.rs`). Landmarks are the exception: they are
-//! added while the game runs and saved with the world, and the terrain generator consults them.
+//! The land of a world is a pure function of its seed (`terrain.rs`), and so are the landmarks' places: `Landmarks::fixed` sets each of the
+//! normal world's sites far from the spawn point (`FIXED_*_DISTANCE`), clear of one another, and nothing about them depends on what the
+//! player does. The terrain generator consults `Landmarks`. What the player does to them (monsters killed, doors unlocked, the Yeti, the
+//! rainbow) is kept in the same struct and saved.
 //!
-//! - A **lake** appears when the player has walked ten chunks through a river without leaving the water. It is a
-//!   large wavy basin, one block deep like a river, joined to the river by a straight channel. In the middle is a
-//!   large island: a hill with a flat top, and on the flat top stands a silver tower (`tower.rs`).
-//! - The world's one **mountain** appears when the player has followed a held compass north for ten chunks. It is
-//!   tall, can be climbed one block at a time, and is capped with snow. Rings of cliff (ledges) break its slope, each
-//!   with one gap, the gaps on alternate sides, so it has to be climbed in a zigzag. Once it is there the compass
-//!   always points at it (`compass_bearing`), and there is never a second one.
-//! - A **rainbow** appears once, by day, when the player holds a peep stone. It ends in a pile of gold; once the gold
-//!   has been taken there is never another rainbow. The peep stone shows a ghostly trail to the end of the rainbow
-//!   for ever after.
-//! - A **grand castle** appears once, at night, when the player holds a peep stone: a large castle of five floors,
-//!   beyond the edge of the land, which the peep stone's ghostly trail leads to. It is whole and shut by night and a
-//!   ruin by day (`grand_castle_cell`): the gate, the stair to the second floor and the door of the throne room are
-//!   open or closed the opposite way round, and the royal armour lies in the throne room only at night.
-//! - Two more silver towers stand in the other dimensions: one on an island of the Skylands (`Landmarks::sky_tower`, brought
-//!   out by walking on ten islands) and one on the plain of the Horizen (`Landmarks::horizen_tower`, which a peep stone leads
-//!   to by day). Each has a door locked until a silver key from the mines has been used on it (`towers_unlocked`).
-//! - A **well** (by day) and a **graveyard** (by night) each appear once, when the player holds a bone totem at that
-//!   time of day; the totem's ghostly trail leads to whichever of them is out there. The well is a deep square of
-//!   water: whoever falls in is taken to the Horizen (`horizen.rs`).
+//! - The one **lake** is a large wavy basin, one block deep like a river. In the middle is a large island: a hill with a flat top and a
+//!   silver tower (`tower.rs`) on it, guarded by the Loch Ness Monster.
+//! - The one **mountain** is tall, can be climbed one block at a time and is capped with snow. Rings of cliff (ledges) break its slope,
+//!   each with one gap, the gaps on alternate sides, so it has to be climbed in a zigzag. The compass always points at it
+//!   (`compass_bearing`).
+//! - A **rainbow** comes out once, by day, when the player first holds a peep stone: the only thing that is not there until it is looked
+//!   for. It ends in a pile of gold; once the gold is taken there is never another rainbow, and the peep stone still leads to where it lay.
+//! - The **grand castle** is a large castle of five floors, whole and shut by night and a ruin by day (`grand_castle_cell`); the ruined
+//!   castle (`ruins_cell`) has the sword in the stone at its centre.
+//! - Two more silver towers stand in the other dimensions (`Landmarks::sky_tower`, `Landmarks::horizen_tower`, set by `World`). Each door is
+//!   locked until a silver key from the mines has been used on it (`towers_unlocked`).
+//! - The **well** is a deep square of water: whoever falls in is taken to the Horizen (`horizen.rs`). The **graveyard** has a ghost.
 //!
-//! This file holds the data and the rules (where the water and the slopes are, when a trek is complete). The
-//! world, the save file and the game only call into it, and none of it needs a window to be tested.
+//! This file holds the data and the rules (where the water and the slopes are, what the sites are made of). The world, the save file and
+//! the game only call into it, and none of it needs a window to be tested.
 
 use crate::block::Block;
 use crate::config::*;
@@ -78,19 +72,6 @@ pub struct Lake {
 }
 
 impl Lake {
-    /// A lake in the direction `dir` (a unit vector) from the player's column `at`, its near shore at least
-    /// `lake_distance()` blocks away, joined to `at` by a channel.
-    pub fn ahead(at: (f32, f32), dir: (f32, f32), phase: i32) -> Lake {
-        let gap = lake_distance() as f32 + farthest_reach(LAKE_RADIUS);
-        Lake {
-            x: (at.0 + dir.0 * gap).round() as i32,
-            z: (at.1 + dir.1 * gap).round() as i32,
-            radius: LAKE_RADIUS,
-            phase,
-            from: (at.0.floor() as i32, at.1.floor() as i32),
-        }
-    }
-
     /// The nominal radius of the island.
     pub fn island_radius(&self) -> f32 {
         self.radius as f32 * LAKE_ISLAND_SHARE
@@ -206,19 +187,6 @@ pub struct Mountain {
 }
 
 impl Mountain {
-    /// A mountain in the direction `dir` (a unit vector) from the player's column `at`, its foot at least
-    /// `mountain_distance()` blocks away.
-    pub fn ahead(at: (f32, f32), dir: (f32, f32), phase: i32) -> Mountain {
-        let gap = mountain_distance() as f32 + farthest_reach(MOUNTAIN_RADIUS);
-        Mountain {
-            x: (at.0 + dir.0 * gap).round() as i32,
-            z: (at.1 + dir.1 * gap).round() as i32,
-            radius: MOUNTAIN_RADIUS,
-            height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT),
-            phase,
-        }
-    }
-
     /// Blocks from the column (wx, wz) to the foot of the mountain: negative on it.
     fn edge_distance(&self, wx: i32, wz: i32) -> f32 {
         let (dx, dz) = ((wx - self.x) as f32, (wz - self.z) as f32);
@@ -340,13 +308,6 @@ impl GrandCastle {
         (self.x as f32 + 0.5, (self.z + GRAND_KEEP_HALF + 2) as f32 + 0.5)
     }
 
-    /// A castle whose nearest edge is `grand_distance()` blocks from `at` (counting along either axis, as the chunks
-    /// do), in the direction `angle`: beyond the land that is already made.
-    pub fn ahead(at: (f32, f32), angle: f32) -> GrandCastle {
-        let (c, s) = (angle.cos(), angle.sin());
-        let gap = (grand_distance() + GRAND_REACH) as f32 / c.abs().max(s.abs());
-        GrandCastle { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
-    }
 }
 
 /// What the ruined castle has in the cell (`dx`, `dz`, `dy`) from its centre and above the ground: a broken outer wall with a
@@ -669,13 +630,6 @@ impl Well {
         (self.x as f32 + WELL_SIZE as f32 / 2.0, self.z as f32 + WELL_SIZE as f32 / 2.0)
     }
 
-    /// A well whose nearest edge is `well_distance()` blocks from `at` (counting along either axis, as the chunks do),
-    /// in the direction `angle`: beyond the land that is already made.
-    pub fn ahead(at: (f32, f32), angle: f32) -> Well {
-        let (c, s) = (angle.cos(), angle.sin());
-        let gap = (well_distance() + WELL_SIZE) as f32 / c.abs().max(s.abs());
-        Well { x: (at.0 + c * gap).round() as i32 - WELL_SIZE / 2, z: (at.1 + s * gap).round() as i32 - WELL_SIZE / 2 }
-    }
 }
 
 /// The graveyard: a walled square of gravestones. Centre in world coordinates.
@@ -725,13 +679,6 @@ impl Graveyard {
         (self.x as f32 + 0.5, self.z as f32 + 0.5)
     }
 
-    /// A graveyard whose nearest edge is `graveyard_distance()` blocks from `at` (counting along either axis), in the
-    /// direction `angle`.
-    pub fn ahead(at: (f32, f32), angle: f32) -> Graveyard {
-        let (c, s) = (angle.cos(), angle.sin());
-        let gap = (graveyard_distance() + GRAVEYARD_REACH) as f32 / c.abs().max(s.abs());
-        Graveyard { x: (at.0 + c * gap).round() as i32, z: (at.1 + s * gap).round() as i32 }
-    }
 }
 
 /// The rainbow: an arc that rises beside the player and comes down on a pile of gold.
@@ -755,7 +702,6 @@ pub enum RainbowState {
     Spent,
 }
 
-/// Everything the player has added to the world's land and sky.
 /// Ground the seed builds on, as (min x, min z, max x, max z) squares. It is derived from the seed, not saved, so it never makes two
 /// `Landmarks` differ.
 #[derive(Clone, Debug, Default)]
@@ -795,13 +741,14 @@ pub struct Landmarks {
     /// The silver towers whose door has been unlocked, by the column of their centre (a lake's centre for the tower on its
     /// island). Each world keeps its own: the Skylands and the Horizen have theirs.
     pub towers_unlocked: Vec<(i32, i32)>,
+    /// How many rooms of the king's dungeon in the Horizen have had their guards killed (the door out of each is open, the first rooms first;
+    /// `kingcastle`). Only the Horizen has one.
+    pub king_rooms_cleared: usize,
     /// The Horizen's one silver tower, once a peep stone has been held by day there. Only the Horizen has one.
     pub horizen_tower: Option<Tower>,
     /// The Skylands' one silver tower: the grid cell of the island it stands on, once it has been brought out. Only the
     /// Skylands have one.
     pub sky_tower: Option<(i32, i32)>,
-    /// The grid cells of the Skylands' islands the player has walked on.
-    pub sky_visited: Vec<(i32, i32)>,
     /// Whether the graveyard's ghost has been played its song and has rested (it says nothing more).
     pub graveyard_rested: bool,
     /// Whether the player has beaten the Wild Hunt, and so won the game (they may play on).
@@ -810,8 +757,6 @@ pub struct Landmarks {
     /// (`PHOENIX_RESPAWN_SECONDS` after its death), and how many seconds it has been dead.
     pub phoenix_slain: bool,
     pub phoenix_dead_for: f32,
-    /// The squares of the Horizen's caves the player has entered, in the order they entered them.
-    pub caves_visited: Vec<(i32, i32)>,
     /// Ground that is already taken by what the seed builds (Stonehenge, the jungle clearing and its temple) as (min x, min z, max x, max z):
     /// a new lake, mountain, well, graveyard or castle keeps clear of it. Set by `World`, not saved.
     pub reserved: Reserved,
@@ -907,16 +852,6 @@ impl Landmarks {
         self.towers_unlocked.contains(&(x, z))
     }
 
-    /// Note that the player has walked on the Skylands island of grid cell `cell`. Returns whether it is one they had not
-    /// walked on before.
-    pub fn note_sky_visit(&mut self, cell: (i32, i32)) -> bool {
-        if self.sky_visited.contains(&cell) {
-            return false;
-        }
-        self.sky_visited.push(cell);
-        true
-    }
-
     /// The world's one mountain, if it has come out yet. (A save made when mountains could be many holds more than
     /// one; the first is the one the compass points at.)
     pub fn mountain(&self) -> Option<&Mountain> {
@@ -993,18 +928,6 @@ impl Landmarks {
         self.lakes.iter().any(|l| l.near_tower(wx, wz, margin))
     }
 
-    /// Whether any lake or mountain (with the margin the hills fade over) can touch the chunk (cx, cz).
-    pub fn touches_chunk(&self, cx: i32, cz: i32) -> bool {
-        let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
-        let (x1, z1) = (x0 + CHUNK_SIZE - 1, z0 + CHUNK_SIZE - 1);
-        let overlaps = |(bx0, bz0, bx1, bz1): (i32, i32, i32, i32)| bx0 <= x1 && bx1 >= x0 && bz0 <= z1 && bz1 >= z0;
-        self.lakes.iter().any(|l| overlaps(l.bounds(LANDMARK_BLEND)))
-            || self.mountains.iter().any(|m| overlaps(m.bounds(LANDMARK_BLEND)))
-            || self.castles().any(|c| overlaps(c.bounds(LANDMARK_BLEND)))
-            || self.well.map_or(false, |w| overlaps(w.bounds(LANDMARK_BLEND)))
-            || self.graveyard.map_or(false, |g| overlaps(g.bounds(LANDMARK_BLEND)))
-    }
-
     /// Whether the grand castle can touch the chunk (cx, cz). Only it changes between day and night.
     pub fn castle_touches_chunk(&self, cx: i32, cz: i32) -> bool {
         let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
@@ -1021,25 +944,8 @@ impl Landmarks {
     }
 }
 
-/// A trek the player has finished, and where.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TrekEvent {
-    /// Ten chunks through a river: a lake lies ahead. `dir` is the way the player went (a unit vector).
-    Lake { at: (f32, f32), dir: (f32, f32) },
-    /// Ten chunks along the compass: a mountain lies ahead.
-    Mountain { at: (f32, f32), dir: (f32, f32) },
-}
-
-/// A step longer than this many blocks in one update is a respawn, not walking: treks start over.
-const TREK_JUMP_LIMIT: f32 = 12.0;
-
-/// The unit vector the compass needle points along, in (x, z).
-pub fn compass_direction() -> (f32, f32) {
-    (COMPASS_NORTH_BEARING.cos(), COMPASS_NORTH_BEARING.sin())
-}
-
-/// The bearing (radians, like a yaw) the compass needle points along for a player standing at `at` (x, z): towards the
-/// world's one mountain once it has come out, and north until then.
+/// The bearing (radians, like a yaw) the compass needle points along for a player standing at `at` (x, z): towards the world's one
+/// mountain, which is always there.
 pub fn compass_bearing(marks: &Landmarks, at: (f32, f32)) -> f32 {
     match marks.mountain() {
         Some(m) => {
@@ -1058,82 +964,68 @@ pub fn compass_needle(yaw: f32, bearing: f32) -> (f32, f32) {
     (relative.sin(), -relative.cos())
 }
 
-/// Progress of the two treks. Not saved: a trek starts over when the world is loaded.
-#[derive(Clone, Debug, Default)]
-pub struct Treks {
-    /// Where the player was at the last update.
-    last: Option<(f32, f32)>,
-    /// Where the player stepped into the water, while they have stayed in it since.
-    river_start: Option<(f32, f32)>,
-    /// Set once a river trek has made its lake, until the player next stands on dry land.
-    river_done: bool,
-    /// Blocks walked northwards with the compass in hand.
-    compass_blocks: f32,
-    /// Whether the compass was in hand at the last update.
-    compass_held: bool,
-    /// Set by the game once the world's one mountain is out: the compass then leads to it and no further trek brings a
-    /// second.
-    pub mountain_found: bool,
-}
-
-impl Treks {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Blocks walked north so far with the compass in hand.
-    pub fn compass_progress(&self) -> f32 {
-        self.compass_blocks
-    }
-
-    /// Advance both treks to the player's new column `at` (x, z). `in_water` is whether they stand in water,
-    /// `compass` whether a compass is in their hand. Returns the trek they have just finished, if any. Call it
-    /// every frame: a step of more than `TREK_JUMP_LIMIT` blocks (a respawn) starts both treks over.
-    ///
-    /// - River: the first update in the water marks the start. Leaving the water starts over. Once the player is
-    ///   `LAKE_TREK_CHUNKS` chunks from the start (counting along either axis), that is a lake, and no further
-    ///   lake comes until they have stood on dry land.
-    /// - Compass: each step adds the distance walked northwards (a step south takes it away again, down to zero).
-    ///   Putting the compass away starts over. `COMPASS_TREK_CHUNKS` chunks north is a mountain.
-    pub fn step(&mut self, at: (f32, f32), in_water: bool, compass: bool) -> Option<TrekEvent> {
-        let previous = self.last.replace(at);
-        if previous.map_or(false, |p| ((at.0 - p.0).powi(2) + (at.1 - p.1).powi(2)).sqrt() > TREK_JUMP_LIMIT) {
-            *self = Treks { last: Some(at), ..Treks::default() };
-        }
-        let mut event = None;
-
-        if in_water {
-            if !self.river_done {
-                let start = *self.river_start.get_or_insert(at);
-                let reach = (LAKE_TREK_CHUNKS * CHUNK_SIZE) as f32;
-                if (at.0 - start.0).abs() >= reach || (at.1 - start.1).abs() >= reach {
-                    let (dx, dz) = (at.0 - start.0, at.1 - start.1);
-                    let len = (dx * dx + dz * dz).sqrt();
-                    self.river_start = None;
-                    self.river_done = true;
-                    event = Some(TrekEvent::Lake { at, dir: (dx / len, dz / len) });
+impl Landmarks {
+    /// The normal world's landmarks as the seed sets them down: the one mountain, the one lake (with its island and tower and, in the lake,
+    /// the Loch Ness Monster), the grand castle, the ruined castle, the well and the graveyard, each far from the spawn point
+    /// (`FIXED_*_DISTANCE`) on a heading the seed picks, and none on top of another or on `reserved` ground. A pure function of the seed.
+    pub fn fixed(seed: i64, reserved: Vec<(i32, i32, i32, i32)>) -> Landmarks {
+        let mut marks = Landmarks { reserved: Reserved(reserved), ..Landmarks::default() };
+        let spawn = ((CHUNK_SIZE / 2) as f32, (CHUNK_SIZE / 2) as f32);
+        let phase = |salt: i64| (hash3(seed, salt as i32, 7, 0x51DE) % 64) as i32;
+        // The first heading the seed gives a site; the others follow round the compass in sixteenths.
+        let site = |salt: i64, distance: f32, fits: &dyn Fn(i32, i32) -> bool| -> (i32, i32) {
+            let first = (hash3(seed, salt as i32, -5, 0x51DF) % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
+            for ring in 0..SITE_PUSH_STEPS {
+                for i in 0..16 {
+                    let a = first + i as f32 * std::f32::consts::TAU / 16.0;
+                    let d = distance + (ring * SITE_PUSH_BLOCKS) as f32;
+                    let (x, z) = ((spawn.0 + a.cos() * d).round() as i32, (spawn.1 + a.sin() * d).round() as i32);
+                    if fits(x, z) {
+                        return (x, z);
+                    }
                 }
             }
-        } else {
-            self.river_start = None;
-            self.river_done = false;
-        }
+            // Nowhere clear within reach (never seen in practice): the last heading, as far out as the search went.
+            let d = distance + (SITE_PUSH_STEPS * SITE_PUSH_BLOCKS) as f32;
+            ((spawn.0 + first.cos() * d).round() as i32, (spawn.1 + first.sin() * d).round() as i32)
+        };
+        let (mx, mz) = site(1, FIXED_MOUNTAIN_DISTANCE, &|x, z| marks.has_room_for_mountain(&Mountain { x, z, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT), phase: phase(1) }));
+        marks.mountains.push(Mountain { x: mx, z: mz, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT.min(MOUNTAIN_MAX_HEIGHT), phase: phase(1) });
+        let lake_at = |x, z| Lake { x, z, radius: LAKE_RADIUS, phase: phase(2), from: (x, z) };
+        let (lx, lz) = site(2, FIXED_LAKE_DISTANCE, &|x, z| marks.has_room_for_lake(&lake_at(x, z)));
+        marks.lakes.push(lake_at(lx, lz));
+        let (gx, gz) = site(3, FIXED_GRAND_CASTLE_DISTANCE, &|x, z| marks.has_room_for(&GrandCastle { x, z }));
+        marks.grand_castle = Some(GrandCastle { x: gx, z: gz });
+        let (rx, rz) = site(4, FIXED_RUINED_CASTLE_DISTANCE, &|x, z| marks.has_room_for_ruins(&GrandCastle { x, z }));
+        marks.ruined_castle = Some(GrandCastle { x: rx, z: rz });
+        let (wx, wz) = site(5, FIXED_WELL_DISTANCE, &|x, z| marks.has_room_for_well(&Well { x, z }));
+        marks.well = Some(Well { x: wx, z: wz });
+        let (yx, yz) = site(6, FIXED_GRAVEYARD_DISTANCE, &|x, z| marks.has_room_for_graveyard(&Graveyard { x, z }));
+        marks.graveyard = Some(Graveyard { x: yx, z: yz });
+        marks
+    }
 
-        if compass && !self.mountain_found {
-            if let (true, Some(last)) = (self.compass_held, previous) {
-                let north = compass_direction();
-                self.compass_blocks = (self.compass_blocks + (at.0 - last.0) * north.0 + (at.1 - last.1) * north.1).max(0.0);
-            }
-            self.compass_held = true;
-            if self.compass_blocks >= (COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32 {
-                self.compass_blocks = 0.0;
-                event = event.or(Some(TrekEvent::Mountain { at, dir: compass_direction() }));
-            }
-        } else {
-            self.compass_held = false;
-            self.compass_blocks = 0.0;
+    /// These landmarks (as a world saved them, or as it has built them so far) with the places of the normal world's sites set to where the
+    /// seed puts them (`Landmarks::fixed`), whatever positions an older save recorded. What the player has done (monsters killed, doors
+    /// unlocked, the rainbow, the Yeti and so on) is kept; the single lake takes over an older save's killed monster and unlocked tower.
+    pub fn with_fixed_overworld_sites(mut self, seed: i64, reserved: Vec<(i32, i32, i32, i32)>) -> Landmarks {
+        let fixed = Landmarks::fixed(seed, reserved);
+        self.lakes = fixed.lakes;
+        self.mountains = fixed.mountains;
+        self.grand_castle = fixed.grand_castle;
+        self.ruined_castle = fixed.ruined_castle;
+        self.well = fixed.well;
+        self.graveyard = fixed.graveyard;
+        self.reserved = fixed.reserved;
+        let lake = self.lakes[0];
+        let centre = (lake.x, lake.z);
+        if !self.monsters_slain.is_empty() {
+            self.monsters_slain = vec![centre];
         }
-        event
+        if !self.towers_unlocked.is_empty() {
+            self.towers_unlocked = vec![centre];
+        }
+        self
     }
 }
 
@@ -1141,33 +1033,8 @@ impl Treks {
 mod tests {
     use super::*;
 
-    fn lake() -> Lake {
-        Lake::ahead((10.0, 10.0), (1.0, 0.0), 7)
-    }
-
     fn mountain(phase: i32) -> Mountain {
         Mountain { x: 0, z: 0, radius: MOUNTAIN_RADIUS, height: MOUNTAIN_HEIGHT, phase }
-    }
-
-    /// A point in the water of a lake, between the island and the shore: (x, z) at `share` of the radius east of the centre.
-    fn ring_point(l: &Lake, share: f32) -> (i32, i32) {
-        (l.x + (l.radius as f32 * share) as i32, l.z)
-    }
-
-    #[test]
-    fn a_lake_lies_beyond_the_generated_land_and_is_joined_to_the_river() {
-        let l = lake();
-        let (rx, rz) = ring_point(&l, 0.55);
-        assert!(l.contains(rx, rz), "water between the island and the shore");
-        assert!(l.contains(10, 10), "the channel starts in the river the player stood in");
-        assert!(l.contains((10 + l.x - l.radius) / 2, 10), "and runs straight to the lake");
-        assert!(!l.contains(l.x, l.z + LAKE_RADIUS * 2) && !l.contains(l.x, l.z - LAKE_RADIUS * 2));
-        // The near shore, off the channel, is at least lake_distance() blocks from the player.
-        let reach = farthest_reach(LAKE_RADIUS) as i32;
-        let near = (-reach..=reach).step_by(2).flat_map(|dz| (-reach..=reach).step_by(2).map(move |dx| (l.x + dx, l.z + dz))).filter(|&(x, z)| l.contains(x, z) && (z - 10).abs() > 4);
-        for (x, z) in near {
-            assert!((((x - 10) as f32).hypot((z - 10) as f32)) >= lake_distance() as f32 - 1.0, "water at {x},{z} is too close");
-        }
     }
 
     #[test]
@@ -1562,7 +1429,7 @@ mod tests {
     }
 
     #[test]
-    fn the_compass_points_north_until_the_mountain_is_out_and_then_at_it() {
+    fn the_compass_points_at_the_mountain_and_turns_on_the_screen_as_the_player_turns() {
         let mut marks = Landmarks::default();
         assert_eq!(compass_bearing(&marks, (5.0, 5.0)), COMPASS_NORTH_BEARING);
         marks.mountains.push(Mountain { x: 1000, z: 0, radius: 40, height: 10, phase: 0 });
@@ -1576,21 +1443,12 @@ mod tests {
     }
 
     #[test]
-    fn once_the_mountain_is_found_no_trek_brings_a_second() {
-        let reach = (COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32;
-        let mut treks = Treks::new();
-        treks.mountain_found = true;
-        assert!(walk(&mut treks, (0.0, 0.0), (0.0, -reach * 3.0), false, true).is_empty());
-    }
-
-    #[test]
-    fn the_grand_castle_flattens_the_hills_round_it_and_counts_as_touching_its_chunks() {
+    fn the_grand_castle_flattens_the_hills_round_it() {
         let mut marks = Landmarks::default();
         marks.grand_castle = Some(GrandCastle { x: 0, z: 0 });
         assert_eq!(marks.relief_scale(0, 0), 0.0);
         assert_eq!(marks.relief_scale(GRAND_REACH, GRAND_REACH), 0.0);
         assert_eq!(marks.relief_scale(GRAND_REACH + 2 + LANDMARK_BLEND, 0), 1.0);
-        assert!(marks.touches_chunk(0, 0) && marks.touches_chunk(-1, -1) && !marks.touches_chunk(20, 20));
         assert!(marks.near_grand_castle(GRAND_REACH + 3, 0, 5) && !marks.near_grand_castle(GRAND_REACH + 8, 0, 5));
     }
 
@@ -1613,130 +1471,6 @@ mod tests {
         assert!(SNOW_LINE_RISE < MOUNTAIN_HEIGHT, "the top is snowy");
         assert!(SNOW_LINE_RISE > TREE_LINE_RISE && TREE_LINE_RISE >= HILL_MAX_HEIGHT, "trees grow on every hill, but not up in the snow");
         assert!(GROUND_TOP + TREE_LINE_RISE + 1 + 10 < WORLD_HEIGHT, "a pine at the tree line still fits");
-    }
-
-    #[test]
-    fn a_new_mountain_lies_north_of_the_player_beyond_the_generated_land() {
-        let m = Mountain::ahead((100.0, 500.0), compass_direction(), 4);
-        assert!((m.x - 100).abs() <= 1 && m.z < 500 - mountain_distance(), "north is smaller z: {m:?}");
-        assert_eq!(m.height, MOUNTAIN_HEIGHT);
-        let nearest = (-reach_of(&m)..=reach_of(&m)).flat_map(|dz| (-reach_of(&m)..=reach_of(&m)).map(move |dx| (m.x + dx, m.z + dz))).filter(|&(x, z)| m.rise_at(x, z) > 0).map(|(x, z)| ((x - 100) as f32).hypot((z - 500) as f32)).fold(f32::MAX, f32::min);
-        assert!(nearest >= mountain_distance() as f32 - 1.0, "the foot is {nearest} away");
-    }
-
-    fn reach_of(m: &Mountain) -> i32 {
-        farthest_reach(m.radius) as i32 + 1
-    }
-
-    #[test]
-    fn a_chunk_is_touched_only_when_a_landmark_can_reach_it() {
-        let mut marks = Landmarks::default();
-        assert!(!marks.touches_chunk(0, 0));
-        marks.mountains.push(Mountain { x: 1000, z: 1000, radius: 40, height: 10, phase: 0 });
-        assert!(marks.touches_chunk(50, 50) && !marks.touches_chunk(0, 0) && !marks.touches_chunk(50, 0));
-        marks.lakes.push(Lake { x: 0, z: 0, radius: 20, phase: 0, from: (0, 0) });
-        assert!(marks.touches_chunk(0, 0) && marks.touches_chunk(-1, -1));
-    }
-
-    /// Walk from `from` to `to` in one-block steps, returning every trek finished on the way.
-    fn walk(treks: &mut Treks, from: (f32, f32), to: (f32, f32), in_water: bool, compass: bool) -> Vec<TrekEvent> {
-        let (dx, dz) = (to.0 - from.0, to.1 - from.1);
-        let steps = dx.abs().max(dz.abs()).ceil().max(1.0) as i32;
-        (0..=steps)
-            .filter_map(|i| {
-                let t = i as f32 / steps as f32;
-                treks.step((from.0 + dx * t, from.1 + dz * t), in_water, compass)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn ten_chunks_in_a_river_make_a_lake_once() {
-        let reach = (LAKE_TREK_CHUNKS * CHUNK_SIZE) as f32;
-        let mut treks = Treks::new();
-        assert!(walk(&mut treks, (10.0, 10.0), (10.0 + reach - 1.0, 10.0), true, false).is_empty(), "a block short");
-        let events = walk(&mut treks, (10.0 + reach - 1.0, 10.0), (10.0 + reach + 40.0, 12.0), true, false);
-        assert_eq!(events.len(), 1, "one lake, however much further they wade: {events:?}");
-        match events[0] {
-            TrekEvent::Lake { at, dir } => {
-                assert!((at.0 - (10.0 + reach)).abs() <= 1.0);
-                assert!(dir.0 > 0.99 && (dir.0.hypot(dir.1) - 1.0).abs() < 1e-4, "{dir:?}");
-            }
-            other => panic!("expected a lake, got {other:?}"),
-        }
-        assert!(walk(&mut treks, (10.0 + reach + 40.0, 12.0), (10.0 + 3.0 * reach, 12.0), true, false).is_empty(), "still no second lake");
-        // After standing on dry land a new trek can begin.
-        assert!(walk(&mut treks, (0.0, 20.0), (0.0, 21.0), false, false).is_empty());
-        let events = walk(&mut treks, (0.0, 21.0), (0.0, 21.0 + reach + 5.0), true, false);
-        assert!(matches!(events[..], [TrekEvent::Lake { .. }]), "{events:?}");
-    }
-
-    #[test]
-    fn leaving_the_water_starts_the_river_trek_over() {
-        let reach = (LAKE_TREK_CHUNKS * CHUNK_SIZE) as f32;
-        let mut treks = Treks::new();
-        assert!(walk(&mut treks, (0.0, 0.0), (reach - 5.0, 0.0), true, false).is_empty());
-        treks.step((reach - 4.0, 0.0), false, false); // one step on the bank
-        assert!(walk(&mut treks, (reach - 4.0, 0.0), (reach + 50.0, 0.0), true, false).is_empty(), "the trek began again at the bank");
-        assert!(matches!(walk(&mut treks, (reach + 50.0, 0.0), (reach + 50.0, reach), true, false)[..], [TrekEvent::Lake { .. }]), "ten chunks along z counts too");
-    }
-
-    #[test]
-    fn walking_back_and_forth_in_a_river_goes_nowhere() {
-        let mut treks = Treks::new();
-        for _ in 0..200 {
-            assert!(walk(&mut treks, (0.0, 0.0), (30.0, 0.0), true, false).is_empty());
-            assert!(walk(&mut treks, (30.0, 0.0), (0.0, 0.0), true, false).is_empty());
-        }
-    }
-
-    #[test]
-    fn ten_chunks_north_with_a_compass_make_a_mountain() {
-        let reach = (COMPASS_TREK_CHUNKS * CHUNK_SIZE) as f32;
-        let mut treks = Treks::new();
-        assert!(walk(&mut treks, (5.0, 0.0), (5.0, -reach + 2.0), false, true).is_empty(), "not yet");
-        let events = walk(&mut treks, (5.0, -reach + 2.0), (5.0, -reach - 30.0), false, true);
-        assert_eq!(events.len(), 1, "{events:?}");
-        match events[0] {
-            TrekEvent::Mountain { at, dir } => {
-                assert!(at.1 <= -reach + 1.0 && at.1 >= -reach - 3.0, "{at:?}");
-                assert!(dir.0.abs() < 1e-4 && dir.1 < -0.99, "north is -z: {dir:?}");
-            }
-            other => panic!("expected a mountain, got {other:?}"),
-        }
-        assert!(treks.compass_progress() < 40.0, "counting towards the next one");
-    }
-
-    #[test]
-    fn only_progress_to_the_north_counts_and_the_compass_must_stay_in_hand() {
-        let mut treks = Treks::new();
-        walk(&mut treks, (0.0, 0.0), (8.0, 0.0), false, true); // east: nothing
-        assert_eq!(treks.compass_progress(), 0.0);
-        walk(&mut treks, (8.0, 0.0), (8.0, -6.0), false, true);
-        assert!((treks.compass_progress() - 6.0).abs() < 1e-3);
-        walk(&mut treks, (8.0, -6.0), (8.0, 0.0), false, true); // back south
-        assert_eq!(treks.compass_progress(), 0.0, "never below nothing");
-        walk(&mut treks, (8.0, 0.0), (8.0, -6.0), false, true);
-        treks.step((8.0, -7.0), false, false); // compass put away
-        assert_eq!(treks.compass_progress(), 0.0);
-        treks.step((8.0, -8.0), false, true); // and taken out again: a new start
-        assert_eq!(treks.compass_progress(), 0.0);
-        treks.step((8.0, -9.0), false, true);
-        assert!((treks.compass_progress() - 1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn a_respawn_does_not_count_as_walking_and_both_treks_are_independent() {
-        let mut treks = Treks::new();
-        walk(&mut treks, (0.0, 0.0), (0.0, -5.0), false, true);
-        assert!(treks.compass_progress() > 4.0);
-        treks.step((0.0, 500.0), false, true); // moved a long way in one update
-        assert_eq!(treks.compass_progress(), 0.0);
-        // A river walk and a compass walk can finish on the same step; the lake is reported.
-        let reach = (LAKE_TREK_CHUNKS * CHUNK_SIZE) as f32;
-        let mut both = Treks::new();
-        let events = walk(&mut both, (0.0, 0.0), (0.0, -reach), true, true);
-        assert!(matches!(events[..], [TrekEvent::Lake { .. }]), "{events:?}");
     }
 
     #[test]
@@ -1804,13 +1538,71 @@ mod boss_landmark_tests {
         assert!(!marks.monster_alive(&small));
     }
 
+    fn spawn() -> (f32, f32) {
+        ((CHUNK_SIZE / 2) as f32, (CHUNK_SIZE / 2) as f32)
+    }
+
+    fn fixed(seed: i64) -> Landmarks {
+        Landmarks::fixed(seed, vec![(-20, -20, 20, 20)])
+    }
+
     #[test]
-    fn the_skylands_remember_the_islands_walked_on_and_which_one_has_the_tower() {
-        let mut marks = Landmarks::default();
-        assert!(marks.note_sky_visit((1, 0)) && marks.note_sky_visit((0, 1)));
-        assert!(!marks.note_sky_visit((1, 0)), "an island counts once");
-        assert_eq!(marks.sky_visited.len(), 2);
-        assert_eq!(marks.sky_tower, None);
+    fn every_site_has_a_set_place_far_from_the_spawn_point_and_the_same_every_time() {
+        for seed in [1_i64, 2, 3, 42, 977] {
+            let m = fixed(seed);
+            assert_eq!(m, fixed(seed), "a pure function of the seed");
+            let far = |x: i32, z: i32, least: f32| ((x as f32 - spawn().0).hypot(z as f32 - spawn().1)) >= least - 1.0;
+            let (mt, lk, gc, rc, w, gy) = (m.mountains[0], m.lakes[0], m.grand_castle.unwrap(), m.ruined_castle.unwrap(), m.well.unwrap(), m.graveyard.unwrap());
+            assert!(far(mt.x, mt.z, FIXED_MOUNTAIN_DISTANCE) && far(lk.x, lk.z, FIXED_LAKE_DISTANCE) && far(gc.x, gc.z, FIXED_GRAND_CASTLE_DISTANCE));
+            assert!(far(rc.x, rc.z, FIXED_RUINED_CASTLE_DISTANCE) && far(w.x, w.z, FIXED_WELL_DISTANCE) && far(gy.x, gy.z, FIXED_GRAVEYARD_DISTANCE), "seed {seed}");
+            assert_eq!((m.lakes.len(), m.mountains.len()), (1, 1), "one lake and one mountain");
+            assert_eq!(lk.from, (lk.x, lk.z), "the lake has no channel: nothing leads to it from a river");
+        }
+        assert_ne!(fixed(1), fixed(2), "other seeds put them elsewhere");
+    }
+
+    #[test]
+    fn the_sites_never_overlap_one_another_or_the_ground_the_seed_reserves() {
+        for seed in 0..12_i64 {
+            let m = fixed(seed);
+            let reserved = (-20, -20, 20, 20);
+            let blend = LANDMARK_BLEND + 4;
+            let boxes = [
+                ("mountain", m.mountains[0].bounds(blend)),
+                ("lake", Lake { from: (m.lakes[0].x, m.lakes[0].z), ..m.lakes[0] }.bounds(blend)),
+                ("grand castle", m.grand_castle.unwrap().bounds(blend)),
+                ("ruined castle", m.ruined_castle.unwrap().bounds(blend)),
+                ("well", m.well.unwrap().bounds(blend)),
+                ("graveyard", m.graveyard.unwrap().bounds(blend)),
+            ];
+            let overlaps = |a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)| a.0 <= b.2 && a.2 >= b.0 && a.1 <= b.3 && a.3 >= b.1;
+            for (i, (na, a)) in boxes.iter().enumerate() {
+                assert!(!overlaps(*a, reserved), "seed {seed}: the {na} stands on reserved ground");
+                for (nb, b) in &boxes[i + 1..] {
+                    assert!(!overlaps(*a, *b), "seed {seed}: the {na} overlaps the {nb}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_older_save_keeps_what_was_done_but_not_where_things_were() {
+        let old = Landmarks {
+            lakes: vec![Lake { x: 5, z: 5, radius: 30, phase: 1, from: (0, 0) }],
+            mountains: vec![Mountain { x: 9, z: 9, radius: 40, height: 10, phase: 1 }],
+            monsters_slain: vec![(5, 5)],
+            towers_unlocked: vec![(5, 5)],
+            yeti_slain: true,
+            ..Landmarks::default()
+        };
+        let now = old.with_fixed_overworld_sites(3, vec![(-20, -20, 20, 20)]);
+        let fresh = fixed(3);
+        assert_eq!((now.lakes.clone(), now.mountains.clone(), now.well, now.graveyard), (fresh.lakes.clone(), fresh.mountains.clone(), fresh.well, fresh.graveyard));
+        let centre = (fresh.lakes[0].x, fresh.lakes[0].z);
+        assert_eq!(now.monsters_slain, vec![centre], "the one lake's monster stays dead");
+        assert_eq!(now.towers_unlocked, vec![centre], "and its tower stays unlocked");
+        assert!(now.yeti_slain);
+        assert!(fresh.monster_alive(&fresh.lakes[0]) && !now.monster_alive(&now.lakes[0]));
     }
 
     #[test]

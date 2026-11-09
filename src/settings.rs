@@ -160,7 +160,6 @@ mod tests {
         let before = render_radius();
         assert_eq!(set_render_radius(50), MAX_RENDER_RADIUS);
         assert_eq!(gen_radius(), MAX_RENDER_RADIUS + 1);
-        assert_eq!(structure_distance(), (MAX_RENDER_RADIUS + 2) * CHUNK_SIZE, "structures lie beyond the generated ring");
         assert_eq!(set_render_radius(-4), MIN_RENDER_RADIUS);
         set_render_radius(before);
     }
