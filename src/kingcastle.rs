@@ -66,7 +66,7 @@ pub fn garrison(room: usize) -> &'static [(AnimalKind, usize)] {
         4 => &[(AnimalKind::SpiritGuard, 12)],
         5 => &[(AnimalKind::SpiritGuard, 6),(AnimalKind::VampireBat, 4) ],
         6 => &[(AnimalKind::SpiritGuard, 8), (AnimalKind::IronQuail, 1), (AnimalKind::BronzeParrot, 1)],
-
+        7 | _ => &[],
         
     }
 }
