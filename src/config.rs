@@ -815,6 +815,9 @@ pub const SPAWN_WEIGHT_CROW: u64 = 30;
 pub const CROW_ALTAR_SEEK_DISTANCE: f32 = 700.0;
 /// A crow within this many blocks of its altar starts to come down.
 pub const CROW_ALTAR_LANDING_GAP: f32 = 3.0;
+/// A crow that takes off within this many blocks of an altar is perched on it: that altar is not its goal (it would come straight
+/// back down and drop a feather every frame), so it flies to the next one, or away from the player if there is none.
+pub const CROW_ALTAR_PERCH_RADIUS: f32 = 6.0;
 /// Ancient altars (`terrain::altar_in_region`): one in `ALTAR_REGION_PERCENT` percent of the squares of `ALTAR_REGION_CHUNKS` chunks, never
 /// within `ALTAR_MIN_SPAWN_DISTANCE` blocks of the spawn point.
 pub const ALTAR_REGION_CHUNKS: i32 = 16;

@@ -1389,7 +1389,7 @@ impl Animal {
                     self.heading = away;
                     self.altar_goal = None;
                     if self.kind == AnimalKind::Crow && world.dimension == crate::horizen::Dimension::Overworld {
-                        let nearest = crate::terrain::nearest_altar(world.seed, &world.landmarks, self.pos.x.floor() as i32, self.pos.z.floor() as i32, CROW_ALTAR_SEEK_DISTANCE);
+                        let nearest = crate::terrain::nearest_altar_beyond(world.seed, &world.landmarks, self.pos.x.floor() as i32, self.pos.z.floor() as i32, CROW_ALTAR_PERCH_RADIUS, CROW_ALTAR_SEEK_DISTANCE);
                         self.altar_goal = nearest.map(|(x, z)| (x as f32 + 0.5, z as f32 + 0.5));
                     }
                     dropped = Some(ItemKind::Feather);

@@ -700,6 +700,12 @@ impl Game {
         self.inventory.slots[..HOTBAR_SLOTS].iter().flatten().any(|stack| stack.kind == ItemKind::CursedIdol)
     }
 
+    /// The hotbar slot whose pink salt a bat strikes: the selected slot if it holds salt, otherwise the first hotbar slot that does.
+    fn salt_slot_in_hotbar(&self) -> Option<usize> {
+        let has_salt = |slot: usize| self.inventory.slots[slot].map_or(false, |s| s.kind == ItemKind::PinkSalt);
+        if has_salt(self.selected) { Some(self.selected) } else { (0..HOTBAR_SLOTS).find(|&slot| has_salt(slot)) }
+    }
+
     fn rabbit_foot_in_hotbar(&self) -> bool {
         self.inventory.slots[..HOTBAR_SLOTS].iter().flatten().any(|stack| stack.kind == ItemKind::RabbitFoot)
     }
@@ -3355,7 +3361,7 @@ pub fn enter_skylands(&mut self) {
         self.hostile_arrows.extend(volleys);
         self.update_fairy_planting();
         self.update_hostile_arrows_for(dt, &targets);
-        // A bat that strikes a player holding pink salt dies on it instead: no damage, one lump of salt used up (the host's own player only).
+        // A bat that strikes a player with pink salt in the hotbar dies on it instead: no damage, one lump of salt used up (the host's own player only).
         let mut salted = Vec::new();
         let mut blows = Vec::new();
         for (index, from, damage, death, ti) in strikes {
@@ -3364,7 +3370,7 @@ pub fn enter_skylands(&mut self) {
                 self.hurt_guest(gi, damage, death, from, launch);
                 continue;
             }
-            if is_bat && self.held_item() == Some(ItemKind::PinkSalt) && self.inventory.take_from_slot(self.selected).is_some() {
+            if is_bat && self.salt_slot_in_hotbar().map_or(false, |slot| self.inventory.take_from_slot(slot).is_some()) {
                 salted.push(index);
             } else {
                 blows.push((from, damage, death, launch));
@@ -8436,6 +8442,29 @@ mod crow_pan_relic_and_mother_tests {
         assert_eq!(again.world.block_at(ax, altar_y, az), Block::AncientAltar, "the altar is kept without its loadstone");
     }
 
+    #[test]
+    fn a_crow_perched_on_an_altar_flies_off_with_one_feather_instead_of_hopping_on_the_spot() {
+        let mut g = game();
+        let (ax, az) = crate::terrain::nearest_altar(g.info.seed, &g.world.landmarks, 8, 8, 2000.0).expect("an altar");
+        g.player.pos = vec3(ax as f32 + 0.5, GROUND_TOP as f32 + 1.0, az as f32 + 0.5);
+        g.world.stream_chunks(g.player.pos);
+        clear_sky(&mut g);
+        let altar_y = g.world.ground_top(ax, az) + 1;
+        // The crow stands on the altar with the player right beside it.
+        let perch = vec3(ax as f32 + 0.5, altar_y as f32 + 1.0, az as f32 + 0.5);
+        let mut crow = Animal::new(AnimalKind::Crow, perch, &mut Rng::new(3));
+        let player = perch + vec3(3.0, 0.0, 0.0);
+        let mut rng = Rng::new(9);
+        let mut feathers = 0;
+        for _ in 0..600 {
+            if crow.update(&g.world, player, 1.0 / 60.0, &mut rng) == Some(ItemKind::Feather) {
+                feathers += 1;
+            }
+        }
+        assert!(feathers <= 2, "a few feathers at most, not one a frame: {feathers}");
+        assert!(vec2(crow.pos.x - perch.x, crow.pos.z - perch.z).length() > CROW_ALTAR_PERCH_RADIUS, "the crow flew away from the altar: {:?}", crow.pos);
+    }
+
     // --- The Iron Quail ---
 
     fn kill_quail(g: &mut Game, n: usize) {
@@ -10308,17 +10337,31 @@ mod upgrade_tests {
     }
 
     #[test]
-    fn without_salt_in_hand_a_bat_bites_as_before_and_salt_elsewhere_does_not_help() {
+    fn salt_anywhere_in_the_hotbar_kills_a_striking_bat_but_salt_in_the_backpack_does_not() {
+        for slot in [1, 4, HOTBAR_SLOTS - 1] {
+            let mut g = game();
+            open_sky(&mut g);
+            g.world.night = true;
+            g.inventory.slots[slot] = Some(ItemStack { kind: ItemKind::PinkSalt, count: 3 });
+            hold(&mut g, ItemKind::Stick, 1);
+            let mut bat = Animal::new(AnimalKind::Bat, g.player.pos + vec3(0.4, 0.2, 0.0), &mut Rng::new(1));
+            bat.hunting = true;
+            g.animals.push(bat);
+            step(&mut g, 3.0);
+            assert_eq!(g.health, MAX_HEALTH, "no damage (salt in slot {slot})");
+            assert_eq!(g.inventory.count(ItemKind::PinkSalt), 2, "one crystal lost (slot {slot})");
+            assert!(g.animals.iter().all(|a| a.kind != AnimalKind::Bat), "and the bat is dead (slot {slot})");
+        }
         let mut g = game();
         open_sky(&mut g);
         g.world.night = true;
-        g.inventory.slots[1] = Some(ItemStack { kind: ItemKind::PinkSalt, count: 3 });
+        g.inventory.slots[HOTBAR_SLOTS] = Some(ItemStack { kind: ItemKind::PinkSalt, count: 3 });
         hold(&mut g, ItemKind::Stick, 1);
         let mut bat = Animal::new(AnimalKind::Bat, g.player.pos + vec3(0.4, 0.2, 0.0), &mut Rng::new(1));
         bat.hunting = true;
         g.animals.push(bat);
         step(&mut g, 3.0);
-        assert!(g.health < MAX_HEALTH, "bitten");
+        assert!(g.health < MAX_HEALTH, "bitten: salt outside the hotbar does not help");
         assert_eq!(g.inventory.count(ItemKind::PinkSalt), 3);
     }
 

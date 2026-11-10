@@ -86,6 +86,11 @@ pub fn altar_site_ok(seed: i64, landmarks: &Landmarks, x: i32, z: i32) -> bool {
 
 /// The altar nearest to the column (x, z) within `reach` blocks (the ones that can stand: `altar_site_ok`), as its column.
 pub fn nearest_altar(seed: i64, landmarks: &Landmarks, x: i32, z: i32, reach: f32) -> Option<(i32, i32)> {
+    nearest_altar_beyond(seed, landmarks, x, z, 0.0, reach)
+}
+
+/// Like `nearest_altar`, but ignoring altars closer than `skip` blocks (the one a crow is perched on).
+pub fn nearest_altar_beyond(seed: i64, landmarks: &Landmarks, x: i32, z: i32, skip: f32, reach: f32) -> Option<(i32, i32)> {
     let size = ALTAR_REGION_CHUNKS * CHUNK_SIZE;
     let span = (reach / size as f32).ceil() as i32 + 1;
     let (rx, rz) = (x.div_euclid(size), z.div_euclid(size));
@@ -93,7 +98,7 @@ pub fn nearest_altar(seed: i64, landmarks: &Landmarks, x: i32, z: i32, reach: f3
     (-span..=span)
         .flat_map(|dz| (-span..=span).map(move |dx| (rx + dx, rz + dz)))
         .filter_map(|(i, j)| altar_in_region(seed, i, j))
-        .filter(|a| (dist2(a) as f32).sqrt() <= reach && altar_site_ok(seed, landmarks, a.0, a.1))
+        .filter(|a| (dist2(a) as f32).sqrt() <= reach && (dist2(a) as f32).sqrt() >= skip && altar_site_ok(seed, landmarks, a.0, a.1))
         .min_by_key(dist2)
 }
 
