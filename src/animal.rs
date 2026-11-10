@@ -659,6 +659,9 @@ const STEER_OFFSETS: [f32; 9] = [0.0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.4, -2.4
 
 #[derive(Clone, Debug)]
 pub struct Animal {
+    /// The number by which a multiplayer session names this creature (0 until the host first reports it): a guest tells the host
+    /// which creature it struck by this number.
+    pub net: u32,
     pub kind: AnimalKind,
     /// Centre of the feet.
     pub pos: Vec3,
@@ -850,6 +853,7 @@ impl Animal {
     /// A new animal standing at `pos` (feet), facing a random way.
     pub fn new(kind: AnimalKind, pos: Vec3, rng: &mut Rng) -> Self {
         let mut a = Animal {
+            net: 0,
             kind,
             pos,
             vel: Vec3::ZERO,
@@ -2684,6 +2688,109 @@ impl Animal {
         }
     }
 }
+
+// --- Multiplayer: numbers for the enums, and the creature as a guest sees it ------------------------------------------------
+
+impl AnimalKind {
+    /// Every kind, in the order of `wire`.
+    pub const ALL: [AnimalKind; 35] = [
+        AnimalKind::Fairy, AnimalKind::MountainGoat, AnimalKind::Newt, AnimalKind::Unicorn, AnimalKind::Crawfish, AnimalKind::BigCrawfish,
+        AnimalKind::GiantCrawfish, AnimalKind::Dragon, AnimalKind::BearBoss, AnimalKind::Deer, AnimalKind::Quail, AnimalKind::Bear,
+        AnimalKind::Rabbit, AnimalKind::Moose, AnimalKind::WillOWhisp, AnimalKind::Yeti, AnimalKind::LochNessMonster, AnimalKind::Crow,
+        AnimalKind::IronQuail, AnimalKind::Bat, AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::SpiritGuard,
+        AnimalKind::HuntLancer, AnimalKind::HuntBear, AnimalKind::HuntCrow, AnimalKind::Raven, AnimalKind::Phoenix,
+        AnimalKind::VampireBat, AnimalKind::SpiritArcher, AnimalKind::Orangutan, AnimalKind::Jaguar, AnimalKind::FlyingSnake,
+        AnimalKind::Parrot, AnimalKind::BronzeParrot,
+    ];
+
+    pub fn wire(self) -> u8 {
+        Self::ALL.iter().position(|&k| k == self).unwrap_or(0) as u8
+    }
+
+    pub fn from_wire(n: u8) -> Option<AnimalKind> {
+        Self::ALL.get(n as usize).copied()
+    }
+}
+
+macro_rules! wire_enum {
+    ($t:ident [$($v:ident),+]) => {
+        impl $t {
+            pub fn wire(self) -> u8 {
+                [$($t::$v),+].iter().position(|&k| k == self).unwrap_or(0) as u8
+            }
+            pub fn from_wire(n: u8) -> Option<$t> {
+                [$($t::$v),+].get(n as usize).copied()
+            }
+        }
+    };
+}
+
+wire_enum!(Mode [Idle, Wander, Flee, Fly, Charge]);
+wire_enum!(HuntPhase [Dash, Retreat, Rest]);
+wire_enum!(AirPhase [Circle, Dive, Flee]);
+wire_enum!(Pounce [Stalk, Crouch, Leap, Retreat]);
+wire_enum!(BossAction [None, Smash, IceThrow, RockThrow, Leap, Breathe]);
+
+impl Animal {
+    /// What a guest needs to draw this creature and to aim at it.
+    pub fn to_net(&self) -> crate::net::NetAnimal {
+        crate::net::NetAnimal {
+            id: self.net,
+            kind: self.kind,
+            pos: self.pos,
+            vel: self.vel,
+            home: self.home,
+            heading: self.heading,
+            phase: self.phase,
+            health: self.health,
+            mode: self.mode,
+            action: self.action,
+            pounce: self.pounce,
+            hunt_phase: self.hunt_phase,
+            air_phase: self.air_phase,
+            on_ground: self.on_ground,
+            enraged: self.enraged,
+            provoked: self.provoked,
+            summoned: self.summoned,
+            bonded: self.bonded,
+            hunting: self.hunting,
+            trail: self.trail.clone(),
+        }
+    }
+
+    /// A guest's stand-in for a creature the host reports: it is only drawn and struck, never given a mind of its own.
+    pub fn from_net(n: &crate::net::NetAnimal) -> Animal {
+        let mut a = Animal::new(n.kind, n.pos, &mut Rng::new(1));
+        a.net = n.id;
+        a.apply_net(n);
+        a.pos = n.pos;
+        a
+    }
+
+    /// Take over what the host reports, except the position, which the guest eases towards (see `session.rs`).
+    pub fn apply_net(&mut self, n: &crate::net::NetAnimal) {
+        self.vel = n.vel;
+        self.home = n.home;
+        self.heading = n.heading;
+        self.health = n.health;
+        self.mode = n.mode;
+        self.action = n.action;
+        self.pounce = n.pounce;
+        self.hunt_phase = n.hunt_phase;
+        self.air_phase = n.air_phase;
+        self.on_ground = n.on_ground;
+        self.enraged = n.enraged;
+        self.provoked = n.provoked;
+        self.summoned = n.summoned;
+        self.bonded = n.bonded;
+        self.hunting = n.hunting;
+        self.trail = n.trail.clone();
+        if (self.phase - n.phase).abs() > 2.0 || n.phase < self.phase {
+            self.phase = n.phase;
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

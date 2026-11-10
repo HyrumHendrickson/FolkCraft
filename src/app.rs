@@ -12,12 +12,23 @@ pub enum Mode {
     Help,
     Settings,
     Playing,
+    /// Choose a world to open to the network.
+    Host,
+    /// Find or type the address of a game on the network.
+    Join,
 }
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum Field {
     Name,
     Seed,
+}
+
+/// Which text box of the host and join screens is being typed in.
+#[derive(PartialEq, Clone, Copy)]
+pub enum LobbyField {
+    Name,
+    Address,
 }
 
 pub struct App {
@@ -42,6 +53,14 @@ pub struct App {
     pub settings_from_game: bool,
     /// Whether the render-distance slider is being dragged.
     pub slider_dragging: bool,
+    /// Multiplayer: the name this player goes by, the address typed on the join screen, the box being typed in, the games heard on the
+    /// network, the connection being made (if any) and what to tell the player about it.
+    pub player_name: String,
+    pub join_address: String,
+    pub lobby_field: LobbyField,
+    pub finder: Option<crate::net::Finder>,
+    pub join_task: Option<crate::lobby::JoinTask>,
+    pub lobby_status: String,
 }
 
 impl App {
@@ -63,6 +82,12 @@ impl App {
             help_from_game: false,
             settings_from_game: false,
             slider_dragging: false,
+            player_name: crate::lobby::default_player_name(),
+            join_address: String::new(),
+            lobby_field: LobbyField::Name,
+            finder: None,
+            join_task: None,
+            lobby_status: String::new(),
         }
     }
 
@@ -164,8 +189,19 @@ impl App {
         while get_char_pressed().is_some() {}
     }
 
+    /// Start playing a game that is already built (a guest's, once the host has welcomed it).
+    pub fn enter_built_game(&mut self, game: Game) {
+        self.game = Some(game);
+        self.mode = Mode::Playing;
+        set_cursor_grab(true);
+        show_mouse(false);
+        while get_char_pressed().is_some() {}
+    }
+
     pub fn leave_game(&mut self) {
-        if let Some(g) = self.game.take() {
+        if let Some(mut g) = self.game.take() {
+            // Hosts tell their guests; guests tell the host. The world is saved only if it is ours.
+            g.net_shutdown();
             g.save();
         }
         set_cursor_grab(false);

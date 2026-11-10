@@ -37,6 +37,14 @@ pub fn play_screen(app: &mut App) {
     };
     let dt = get_frame_time().min(0.05);
 
+    // Multiplayer: take in what the network has said. A guest whose host has gone goes back to the menu, told why.
+    game.net_before_frame(dt);
+    if let Some(why) = game.net.notice.take() {
+        app.error = why;
+        app.leave_game();
+        return;
+    }
+
     // F1 opens the help without leaving the game.
     if is_key_pressed(KeyCode::F1) {
         if game.inventory_open {
@@ -84,15 +92,25 @@ pub fn play_screen(app: &mut App) {
     handle_placing(game, eye, dir, target);
     game.update_items(dt);
     game.burn_fires(dt);
-    game.update_king_dungeon();
-    game.update_animals(dt);
-    game.update_travel(dt);
-    game.update_storm(dt);
+    if game.is_guest() {
+        // The host's creatures are drawn where it says they are; a guest only eases them there. Everything else (the well, the cyclone,
+        // the rainbow, the ghosts) a guest does for itself, in whatever dimension it chooses.
+        game.guest_smooth(dt);
+        game.update_travel(dt);
+    } else {
+        game.update_guest_idols();
+        game.update_king_dungeon();
+        game.update_animals(dt);
+        game.update_remote_dimensions(dt);
+        game.update_travel(dt);
+        game.update_storm(dt);
+    }
     game.update_arrows(dt);
     game.update_health(dt);
     game.update_blackout(dt);
     game.update_effects(dt);
     game.update_horizen_transition(dt);
+    game.net_after_frame(dt);
 
     game.autosave_timer += dt;
     if game.autosave_timer >= AUTOSAVE_INTERVAL {
@@ -301,7 +319,9 @@ fn render_world(game: &Game, eye: Vec3, dir: Vec3, target: Target) -> usize {
     }
     draw_animals(&game.animals, get_time() as f32, World::chunk_of_pos(eye), game.world.night);
     draw_arrows(&game.arrows);
+    draw_arrows(&game.net.remote_arrows);
     draw_arrows(&game.hostile_arrows);
+    crate::avatar::draw_players(&game.net.remotes, get_time() as f32, eye);
     draw_projectiles(&game.projectiles, get_time() as f32);
     // The water goes on last: it is translucent and the bed, the items and the animals behind it show through.
     for key in &drawn {
@@ -393,6 +413,10 @@ fn render_hud(game: &mut Game, drawn: usize) {
     if game.shop_open {
         draw_shop_dialog(game);
     }
+    if game.in_session() {
+        crate::avatar::draw_name_tags(&game.net.remotes, game.player.eye(), game.player.look_dir());
+        draw_player_list(game);
+    }
     game.toasts.draw();
     let p = game.player.pos;
     draw_text(
@@ -422,6 +446,30 @@ fn render_hud(game: &mut Game, drawn: usize) {
     let white = game.white_alpha();
     if white > 0.0 {
         draw_rectangle(0.0, 0.0, w, h, Color::new(1.0, 1.0, 1.0, white));
+    }
+}
+
+/// Who is in the game, down the right-hand side (and, for a host, where friends can join).
+fn draw_player_list(game: &Game) {
+    let w = screen_width();
+    let mut y = 40.0;
+    let mut line = |text: &str, color: Color, size: f32| {
+        let d = measure_text(text, None, size as u16, 1.0);
+        draw_rectangle(w - d.width - 22.0, y - size + 2.0, d.width + 16.0, size + 6.0, Color::new(0.0, 0.0, 0.0, 0.4));
+        draw_text(text, w - d.width - 14.0, y, size, color);
+        y += size + 8.0;
+    };
+    if game.is_host() {
+        let ip = crate::net::local_ip().map_or("?".to_string(), |ip| ip.to_string());
+        let port = game.net.port();
+        let shown = if port == crate::net::PORT { ip } else { format!("{ip}:{port}") };
+        line(&format!("Hosting: join {shown}"), Color::new(0.75, 0.95, 0.70, 1.0), 20.0);
+    } else {
+        line(&format!("In {}", game.info.name), Color::new(0.75, 0.95, 0.70, 1.0), 20.0);
+    }
+    line(&format!("{} (you)", game.net.my_name), crate::avatar::shirt_color(game.net.my_id), 22.0);
+    for r in &game.net.remotes {
+        line(&r.name, crate::avatar::shirt_color(r.id), 22.0);
     }
 }
 

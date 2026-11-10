@@ -114,15 +114,22 @@ impl Projectile {
 
     /// Fly on by `dt` seconds. `player` (feet) is hit by passing through its body. Returns the burst when it lands on a block or the player,
     /// or runs out of flight; `None` while it is in the air.
+    #[cfg(test)]
     pub fn update(&mut self, world: &World, player: Vec3, dt: f32) -> Option<Burst> {
+        self.update_among(world, &[player], dt)
+    }
+
+    /// `update` for a session with several players: the projectile bursts on the first of `players` (feet) it passes through.
+    pub fn update_among(&mut self, world: &World, players: &[Vec3], dt: f32) -> Option<Burst> {
         self.age += dt;
         let steps = ((self.vel.length() * dt / MAX_STEP).ceil() as i32).max(1);
         let h = dt / steps as f32;
-        let (lo, hi) = (player - vec3(PLAYER_HALF_WIDTH + 0.15, 0.0, PLAYER_HALF_WIDTH + 0.15), player + vec3(PLAYER_HALF_WIDTH + 0.15, PLAYER_HEIGHT + 0.15, PLAYER_HALF_WIDTH + 0.15));
+        let pad = vec3(PLAYER_HALF_WIDTH + 0.15, 0.0, PLAYER_HALF_WIDTH + 0.15);
+        let boxes: Vec<(Vec3, Vec3)> = players.iter().map(|&p| (p - pad, p + pad + vec3(0.0, PLAYER_HEIGHT + 0.15, 0.0))).collect();
         for _ in 0..steps {
             self.vel.y -= self.kind.gravity() * h;
             self.pos += self.vel * h;
-            if self.pos.cmpge(lo).all() && self.pos.cmple(hi).all() {
+            if boxes.iter().any(|&(lo, hi)| self.pos.cmpge(lo).all() && self.pos.cmple(hi).all()) {
                 return Some(Burst { kind: self.kind, pos: self.pos });
             }
             let eps = Vec3::splat(0.05);

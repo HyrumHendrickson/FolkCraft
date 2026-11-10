@@ -44,6 +44,10 @@ From there the world opens up: lakes with towers, a mountain with mine shafts an
 Horizen, the Skylands (with a ghostly general store on the first island), and a last great hunt. Part of the fun is
 finding out how. The in-game Help has the details when you want them.
 
+## Playing together
+
+On the world list, **Host Game** opens a world to your wifi network and **Join Game** finds games on it (or takes the host's address, which the host sees at the top right). Everyone shares the world, its creatures and bosses, but plays on their own: each player can travel to any dimension and use any item when they like. The host's computer runs the creatures and saves the world, and keeps each guest's pack for next time.
+
 ## Living with the game
 
 - It is a work in progress: things change between versions, and older worlds still load.

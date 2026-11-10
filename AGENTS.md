@@ -95,6 +95,9 @@ software GL, so put the player and the target at known coordinates in the save f
 | `chunk.rs`, `mesh.rs`, `culling.rs`, `rng.rs`, `sky.rs` | Storage, meshing (AO, parts, splitting), view culling, seeded RNG and hashing, sun and clouds. |
 | `player.rs` | Player state, keyboard input, AABB physics. |
 | `save.rs` | World file format, load/save, world listing, seed parsing. |
+| `net.rs` | Multiplayer transport: binary wire format (`ToHost`, `ToGuest`, `Snapshot`, `WorldOp`), framed TCP `Link`s, `Listener`, UDP `Beacon`/`Finder`. No game rules. Bump `PROTOCOL` when a message changes. |
+| `game/session.rs` | Multiplayer rules: `Session`, host and guest pumps, snapshots, op replay, targets. Child module of `game` so it can reach `Game`'s private fields. |
+| `lobby.rs`, `avatar.rs` | Host and Join screens (`JoinTask` connects on a thread); other players' figures, name tags, `project`. |
 | `app.rs`, `menu.rs`, `ui.rs`, `settings.rs` | App state, world select and create screens, immediate-mode widgets, the settings screen and `saves/settings.cfg`. |
 | `hud.rs`, `play.rs` | Hotbar, inventory screen, item icons, compass dial; the in-game frame. |
 | `help.rs` | The Help screen. `help_lines()` builds the text from `RECIPES` and the config constants, so it stays true to the rules. |
@@ -286,6 +289,15 @@ rivers. Everything else is placed by a rule:
   a silver key once; in each silver tower the pipes bring a hint: the Skylands tower says "Find the great Loch guarded by that old
   serpent.", the cave tower that things work differently at night, the lake tower to blow the horn in the stonehenge. The king and the
   shopkeeper speak as described above.
+
+## Multiplayer (`net.rs`, `game/session.rs`)
+
+- **The host simulates everything shared.** `Game::targets()` lists the players in the world swapped in (the host's own, unless that world is swapped in for guests, then each guest in that dimension); every creature picks the nearest (`nearest_target`) in `update_animals`, and boss smashes, bursts and arrows hurt each target in reach (`hurt_target`; a guest is told by `ToGuest::Hurt` and applies its own armour). Spawn and dungeon rules that look at "the player" run per player with `Game::as_player_at`. The host keeps chunks loaded round each guest (`World::load_around`).
+- **Every player travels alone.** Each dimension's creatures, projectiles, weather and clocks are a `Sim` (the fields of `Game` hold the host's own dimension's; `Away::sim` holds a parked one's, kept only while a guest is in it: `travel_to` clears it otherwise). `Game::simulate_in(dim, f)` swaps a dimension's world, items and `Sim` in for `f`, with `net.away_sim` set so `targets()` leaves the host out; `update_remote_dimensions` runs `simulate_for_guests` for each dimension guests are in, and `host_publish` builds each guest's `Snapshot` (tagged with its `dim`) inside the right one. A host's session always holds all three worlds (`ensure_dimensions`), so every `WorldOp` (tagged by dimension) has somewhere to land. Night is per dimension (`Night { dim, night }`; never sent for the Horizen).
+- **A guest runs only its body, and its own travel, rainbow, ghosts and well.** Creatures, items, arrows, projectiles, acid, tornadoes and stars come from `Snapshot`s (20 a second); stand-in `Animal`s (`Animal::from_net`, `apply_net`) are drawn and aimed at, never updated (`guest_smooth`). `Animal::net` and `DroppedItem::net` are the numbers the host gives things (0 until reported). A guest's blows go to `Game::guest_hurt` (from `hurt_animals_from`) and are done by the host (`host_hurt`); items a guest makes (net 0) are sent to the host; pickups are requested and granted. What only the host's creatures can do is an `Intent` (`Horn`, `Pipes`, `Lightning`, `KingGold`) carried out by `host_acts` where the guest stands, using `summon_hunt`, `pipes_call_creatures`, `rod_lightning` and `send_spirits`. A guest's idol is seen by the host through the flags a guest reports (`update_guest_idols`).
+- **World changes** are `WorldOp`s: every `World` mutator writes the state it left to `World::net_log` (`note`, `note_state`) when `World::net_on`; `World::apply_op` replays them quietly. Ops state the result, not the action, so they are idempotent and need no loaded chunk. The shared story (`Progress`: slain, summoned, rested, the rainbow) is sent whenever `World::note_progress` sees it change. Only the host burns fires out (`update_fires`); guests run `tick_timers`.
+- **Guests' packs:** a guest reports `Game::profile_text` every few seconds (and on leaving) once the host has sent what the name carried before (`ToGuest::Profile`, replayed with `Game::replay_messages`); the host keeps them by name in `<world>.players` (`save_profiles`, written with the world). With others in the game a death does not clear the fights (`hurt_player`); guests never save the world (`Game::save`).
+- Tests (`game/session.rs`) run a host and a guest in one process over localhost: add one for each new shared rule.
 
 ## Save format
 

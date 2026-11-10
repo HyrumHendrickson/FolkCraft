@@ -25,7 +25,10 @@ use crate::player::Player;
 use crate::rng::{clock_seed, Rng};
 use crate::save::{parse_save, serialize_save_full, SaveData, SaveExtras, WorldInfo};
 use crate::tornado::{Cyclone, FireTornado};
+use crate::net::Intent;
 use crate::shop;
+mod session;
+pub use session::{nearest_target, RemotePlayer, Session, Target};
 use crate::world::{Pot, ray_box, Hit, Pos, World};
 
 /// What kind of flash a `ShownBurst` is (the game draws each its own way).
@@ -132,6 +135,38 @@ pub struct Away {
     pub world: World,
     pub items: Vec<DroppedItem>,
     pub player: Player,
+    /// The creatures and flying things of this dimension, kept while a guest is in it and the host is not (see `Sim`).
+    pub sim: Sim,
+}
+
+/// Everything that lives in one dimension's world besides its blocks and the items on its ground: its creatures, what they have thrown,
+/// its weather and its clocks. A session with players in several dimensions keeps one `Sim` for each: the one for the host's own is in
+/// the fields of `Game`, and `Game::swap_sim` trades them for another's (`Game::simulate_in`).
+#[derive(Default)]
+pub struct Sim {
+    pub animals: Vec<Animal>,
+    pub arrows: Vec<Arrow>,
+    pub hostile_arrows: Vec<Arrow>,
+    pub projectiles: Vec<Projectile>,
+    pub bursts: Vec<ShownBurst>,
+    pub acid: Vec<AcidCell>,
+    pub tornadoes: Vec<FireTornado>,
+    pub tornado_timer: f32,
+    pub crater_tornado: Option<FireTornado>,
+    pub falling_stars: Vec<FallingStar>,
+    pub star_timer: f32,
+    pub stardust: Vec<(Pos, f32)>,
+    pub storm_active: bool,
+    pub storm_gather_timer: f32,
+    pub storm_clear_timer: f32,
+    pub storm_lightning_timer: f32,
+    pub storm_lightning_flash: f32,
+    pub storm_lightning_pos: Vec3,
+    pub spawn_timer: f32,
+    pub hunt_total: i32,
+    pub bear_rage: f32,
+    pub guard_room: Option<usize>,
+    pub cave_spawn_tick: u32,
 }
 
 impl Away {
@@ -145,7 +180,7 @@ impl Away {
         if dimension == Dimension::Skylands {
             player.pos = skylands::spawn_point();
         }
-        Away { world, items: Vec::new(), player }
+        Away { world, items: Vec::new(), player, sim: Sim::default() }
     }
 }
 
@@ -278,6 +313,8 @@ pub struct Game {
     acid_burn: f32,
     /// The health the Wild Hunt began with, and what its splitting bears and crows have added: the whole of its shared health bar.
     hunt_total: i32,
+    /// Multiplayer: whether this game is solo, hosting or a guest, and everything the session keeps (see `session.rs`).
+    pub net: Session,
 }
 
 /// Whether nothing solid lies on the straight line from `eye` along the unit vector `dir` for `dist` blocks.
@@ -342,7 +379,7 @@ impl Game {
                     .with_night(h.night);
                 w.dimension = dimension;
                 let w = w.with_landmarks(h.landmarks);
-                Away { world: w, items: h.items, player: h.player }
+                Away { world: w, items: h.items, player: h.player, sim: Sim::default() }
             })
         };
         let away = parked(data.horizen, Dimension::Horizen);
@@ -418,6 +455,7 @@ impl Game {
             acid: Vec::new(),
             acid_burn: 0.0,
             hunt_total: 0,
+            net: Session::solo(),
         };
         // A world saved away from the overworld picks up the dimension it was saved in.
         if in_horizen {
@@ -461,10 +499,15 @@ impl Game {
     }
 
     pub fn save(&self) {
+        // A guest only visits: the world is the host's to save.
+        if self.is_guest() || self.info.path.as_os_str().is_empty() {
+            return;
+        }
         let out = self.save_text();
         if let Err(e) = fs::create_dir_all(SAVE_DIR).and_then(|_| fs::write(&self.info.path, out)) {
             eprintln!("Failed to save world: {e}");
         }
+        self.save_profiles();
     }
 
     pub fn in_horizen(&self) -> bool {
@@ -501,6 +544,34 @@ impl Game {
         } else {
             self.shelf = Some(other);
         }
+    }
+
+    /// Trade the creatures, flying things, weather and clocks of the world now in `self.world` for those in `other`.
+    fn swap_sim(&mut self, other: &mut Sim) {
+        use std::mem::swap;
+        swap(&mut self.animals, &mut other.animals);
+        swap(&mut self.arrows, &mut other.arrows);
+        swap(&mut self.hostile_arrows, &mut other.hostile_arrows);
+        swap(&mut self.projectiles, &mut other.projectiles);
+        swap(&mut self.bursts, &mut other.bursts);
+        swap(&mut self.acid, &mut other.acid);
+        swap(&mut self.tornadoes, &mut other.tornadoes);
+        swap(&mut self.tornado_timer, &mut other.tornado_timer);
+        swap(&mut self.crater_tornado, &mut other.crater_tornado);
+        swap(&mut self.falling_stars, &mut other.falling_stars);
+        swap(&mut self.star_timer, &mut other.star_timer);
+        swap(&mut self.stardust, &mut other.stardust);
+        swap(&mut self.storm_active, &mut other.storm_active);
+        swap(&mut self.storm_gather_timer, &mut other.storm_gather_timer);
+        swap(&mut self.storm_clear_timer, &mut other.storm_clear_timer);
+        swap(&mut self.storm_lightning_timer, &mut other.storm_lightning_timer);
+        swap(&mut self.storm_lightning_flash, &mut other.storm_lightning_flash);
+        swap(&mut self.storm_lightning_pos, &mut other.storm_lightning_pos);
+        swap(&mut self.spawn_timer, &mut other.spawn_timer);
+        swap(&mut self.hunt_total, &mut other.hunt_total);
+        swap(&mut self.bear_rage, &mut other.bear_rage);
+        swap(&mut self.guard_room, &mut other.guard_room);
+        swap(&mut self.cave_spawn_tick, &mut other.cave_spawn_tick);
     }
 
     /// The item in the selected hotbar slot, if any.
@@ -771,7 +842,11 @@ impl Game {
             for a in self.animals.iter_mut().filter(|a| matches!(a.kind, AnimalKind::Moose | AnimalKind::MountainGoat | AnimalKind::Fairy)) {
                 a.calm();
             }
-            // The fight is over: the Iron Quail has won.
+            self.king_dialog = None;
+            // With others in the game the fights go on without the one who fell. Alone, the fight is over: the Iron Quail has won.
+            if self.in_session() {
+                return true;
+            }
             self.animals.retain(|a| !a.kind.is_metal_bird());
             // The Wild Hunt has won too: its warriors and their arrows are gone, and the horn can call them again.
             self.animals.retain(|a| !a.kind.is_wild_hunt());
@@ -894,6 +969,14 @@ impl Game {
 
     /// Turn the world to night or to day, behind a blackout (see `Blackout`). Nothing happens if it already is.
     fn set_night(&mut self, night: bool) {
+        // Whoever turns the sky tells the rest of the party (a turn that came from the party is not told again).
+        if !self.applying_remote_night() && !self.in_horizen() {
+            if self.is_guest() {
+                self.guest_says_night(night);
+            } else if self.is_host() {
+                self.host_says_night(night);
+            }
+        }
         // A nightfall immediately removes the daytime tornado, even while the blackout is fading in.
         if night {
             self.tornadoes.clear();
@@ -1387,6 +1470,10 @@ impl Game {
 
     /// Burn the fires down by `dt` and drop the meat that fell off the ones that burnt out.
     pub fn burn_fires(&mut self, dt: f32) {
+        // Only the host decides when a fire is out (a guest's clocks run in `guest_smooth`).
+        if self.is_guest() {
+            return;
+        }
         self.world.update_fires(dt);
         for ((x, y, z), item) in self.world.drain_released() {
             let spot = vec3(x as f32 + 0.5, y as f32 + 0.6, z as f32 + 0.5);
@@ -1444,6 +1531,11 @@ impl Game {
 
     /// `hurt_animals`, with the survivors thrown back away from `from` (the player for a blow, the strike for lightning).
     fn hurt_animals_from(&mut self, hits: &[(usize, i32)], from: Vec3) {
+        // A guest does not decide what a blow does: the host does, and reports the result.
+        if self.is_guest() {
+            self.guest_hurt(hits, from);
+            return;
+        }
         let mut dead = Vec::new();
         // A blow on the Great Bear calls every bear to the player.
         if hits.iter().any(|&(i, _)| self.animals[i].kind == AnimalKind::BearBoss) {
@@ -1551,9 +1643,12 @@ impl Game {
         self.star_timer += dt;
         if self.star_timer >= FALLING_STAR_INTERVAL {
             self.star_timer = 0.0;
-            let eye = self.player.pos + vec3(0.0, EYE_HEIGHT, 0.0);
+            // The star falls where one of the players (picked at random) can see it.
+            let targets = self.targets();
+            let watcher = targets[self.rng.range(0, targets.len() as i32) as usize];
+            let eye = watcher.pos + vec3(0.0, EYE_HEIGHT, 0.0);
             let range = FALLING_STAR_RANGE.min((crate::config::render_radius() * CHUNK_SIZE) as f32);
-            if let Some(landing) = stars::pick_landing(self.info.seed, eye, self.player.look_dir(), range, &mut self.rng) {
+            if let Some(landing) = stars::pick_landing(self.info.seed, eye, watcher.look, range, &mut self.rng) {
                 let star = stars::star_for(landing, &mut self.rng);
                 self.falling_stars.push(star);
             }
@@ -1797,13 +1892,29 @@ impl Game {
     /// jungle. In the Horizen and the Skylands, and in the jungle itself, the idol sleeps on, and wakes once the player is back out in the
     /// open of the normal world. Call every frame. Returns whether this was that first time.
     pub fn update_idol(&mut self) -> bool {
-        if self.world.landmarks.unicorn_summoned || !self.idol_in_hotbar() || !self.in_overworld() || self.player_in_jungle() {
+        // A guest's idol is seen by the host (`update_guest_idols`): the Unicorn is the host's creature.
+        if self.is_guest() || self.world.landmarks.unicorn_summoned {
+            return false;
+        }
+        if !self.idol_in_hotbar() || !self.in_overworld() || self.player_in_jungle() {
             return false;
         }
         self.world.landmarks.unicorn_summoned = true;
         self.toasts.push("The idol grows cold in your pack. Something white stirs among the trees.".to_string());
         self.summon_unicorn();
         true
+    }
+
+    /// A guest who carries the idol into the open normal world calls the Unicorn just as the host's own player would, to where the guest is.
+    pub fn update_guest_idols(&mut self) {
+        if self.world.landmarks.unicorn_summoned {
+            return;
+        }
+        if let Some((pos, vel)) = self.guest_idol_bearer() {
+            self.world.landmarks.unicorn_summoned = true;
+            self.announce("The idol grows cold in a pack. Something white stirs among the trees.");
+            self.as_player_at(pos, vel, |g| g.summon_unicorn());
+        }
     }
 
     /// Whether the Unicorn is due: the idol has been used, it has not been killed and it is not out (it is not saved, so it returns, whole,
@@ -1833,7 +1944,7 @@ impl Game {
     /// A bear has been killed. If the player is in the pelt cloak (in the normal world), the Great Bear is due, unless one is already out or due.
     fn note_bear_killed(&mut self) {
         let out = self.animals.iter().any(|a| a.kind == AnimalKind::BearBoss);
-        if self.worn == Some(ItemKind::PeltCloak) && self.in_overworld() && !out && self.bear_bosses_owed == 0 {
+        if self.credited_worn() == Some(ItemKind::PeltCloak) && self.in_overworld() && !out && self.bear_bosses_owed == 0 {
             self.bear_bosses_owed = 1;
         }
     }
@@ -2010,6 +2121,10 @@ impl Game {
     /// Nessie hears a bow or a sling: within `LOCH_NESS_SHOT_HEARING` she runs for the middle of the lake and, if she was not
     /// running already, calls `LOCH_NESS_ALARM_RAVENS` more ravens.
     fn alarm_nessie(&mut self) {
+        if self.is_guest() {
+            self.guest_says_shot();
+            return;
+        }
         let p = self.player.pos;
         let mut alarmed = false;
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::LochNessMonster) {
@@ -2316,6 +2431,17 @@ impl Game {
         } else if self.near_shop(SHOP_NEAR_RADIUS) {
             self.ghost_says(ghosts::SHOP_THANKS);
         }
+        // The creatures it calls belong to the host's simulation: a guest asks the host to call them.
+        if self.is_guest() {
+            self.net_intent(Intent::Pipes);
+            return true;
+        }
+        self.pipes_call_creatures();
+        true
+    }
+
+    /// The music calls bats at night, and the quail, parrots and crows of the day to the player.
+    pub fn pipes_call_creatures(&mut self) {
         // At night the music calls bats instead of birds.
         self.call_bats();
         if self.in_overworld() && !self.world.night {
@@ -2331,7 +2457,6 @@ impl Game {
                 self.animals[i].call_to(target);
             }
         }
-        true
     }
 
     // --- Crows and the ancient altar -------------------------------------------------------
@@ -2483,7 +2608,7 @@ impl Game {
         match boss.kind {
             AnimalKind::Yeti => {
                 self.world.landmarks.yeti_slain = true;
-                self.toasts.push("The Yeti is slain. A cyclone rises on the summit.".to_string());
+                self.announce("The Yeti is slain. A cyclone rises on the summit.");
             }
             AnimalKind::LochNessMonster => {
                 let nearest = self.world.landmarks.lakes.iter().copied().filter(|l| l.has_tower()).min_by(|a, b| {
@@ -2492,35 +2617,35 @@ impl Game {
                 });
                 if let Some(lake) = nearest {
                     self.world.record_monster_slain(&lake);
-                    self.toasts.push("The Loch Ness Monster is slain.".to_string());
+                    self.announce("The Loch Ness Monster is slain.");
                 }
             }
             AnimalKind::Unicorn => {
                 self.world.landmarks.unicorn_slain = true;
-                self.toasts.push("The Unicorn is slain.".to_string());
+                self.announce("The Unicorn is slain.");
             }
             AnimalKind::BearBoss => {
                 // Its roar is over: the bears it called go back to their ways.
                 self.bear_rage = 0.0;
-                self.toasts.push("The Great Bear is slain.".to_string());
+                self.announce("The Great Bear is slain.");
             }
             AnimalKind::Dragon => {
                 // The count starts over: another Dragon comes after another `DRAGON_SWITCHES` switches.
                 self.day_night_switches = 0;
-                self.toasts.push("The Dragon is slain. Its hoard of gold rains down.".to_string());
+                self.announce("The Dragon is slain. Its hoard of gold rains down.");
             }
             AnimalKind::GiantCrawfish => {
-                self.toasts.push("The Giant Crawfish is slain.".to_string());
+                self.announce("The Giant Crawfish is slain.");
             }
             AnimalKind::Orangutan => {
                 self.world.open_temple();
-                self.toasts.push("The Orangutan is slain. The boards over the passage to the idol give way.".to_string());
+                self.announce("The Orangutan is slain. The boards over the passage to the idol give way.");
             }
             AnimalKind::Phoenix => {
                 self.world.landmarks.phoenix_slain = true;
                 self.world.landmarks.phoenix_dead_for = 0.0;
                 self.tornadoes.clear();
-                self.toasts.push("The Phoenix is slain. The fire tornadoes that sweep the islands die away; in a minute it will rise again.".to_string());
+                self.announce("The Phoenix is slain. The fire tornadoes that sweep the islands die away; in a minute it will rise again.");
             }
             kind if kind.is_wild_hunt() => {
                 // The last of the Hunt to fall wins the game.
@@ -2538,6 +2663,9 @@ impl Game {
         self.hostile_arrows.clear();
         self.victory = Some(VICTORY_TEXT_SECONDS);
         self.toasts.push("The Wild Hunt is beaten. You have won!".to_string());
+        if self.is_host() {
+            self.host_says_victory();
+        }
     }
 
     /// The nearest living boss within `BOSS_BAR_DISTANCE`, as its name and the share of its health left (for the bar at
@@ -2742,12 +2870,46 @@ pub fn enter_skylands(&mut self) {
         }
         let seed = self.info.seed;
         let from = self.world.dimension;
-        self.clear_stardust();
+        // A guest may still be in the dimension being left: then its creatures carry on (parked with the world, simulated by
+        // `simulate_in`), and nothing is cleared or counted as left behind.
+        let keep = self.guest_in(from);
+        if !keep {
+            self.clear_stardust();
+        }
+        // The king's spirits go with the player, whatever dimension they travel to (each keeps the arrows it has left).
+        let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
+        self.animals.retain(|a| a.kind != AnimalKind::SpiritArcher);
+        if !keep {
+            // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
+            self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
+            self.bronze_parrots_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).count() as u32;
+            // A Great Bear left behind comes again (whole) when the player is back in the overworld; the rage it caused is over.
+            self.bear_bosses_owed = self.bear_bosses_owed.max(self.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count() as u32).min(1);
+            self.bear_rage = 0.0;
+            // A vampire bat left behind in the cave is waiting for the player's next visit.
+            self.vampire_bats_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count() as u32;
+            // A Giant Crawfish left behind waits for the next visit to the Horizen.
+            self.giant_crawfish_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::GiantCrawfish).count() as u32;
+            self.animals.clear();
+            self.arrows.clear();
+            self.hostile_arrows.clear();
+            self.tornadoes.clear();
+            self.crater_tornado = None;
+            self.tornado_timer = 0.0;
+            self.falling_stars.clear();
+            self.star_timer = 0.0;
+            self.guard_room = None;
+            self.reset_storm();
+        }
         let mut other = self.take_parked(target).unwrap_or_else(|| Away::fresh(target, seed));
         let (yaw, pitch) = (self.player.yaw, self.player.pitch);
         std::mem::swap(&mut self.world, &mut other.world);
         std::mem::swap(&mut self.items, &mut other.items);
         std::mem::swap(&mut self.player, &mut other.player);
+        // The creatures of the dimension left go into its parking place; those of the one entered (if guests have kept them) come out.
+        let mut sim = std::mem::take(&mut other.sim);
+        self.swap_sim(&mut sim);
+        other.sim = sim;
         // The player keeps looking the way they were looking.
         self.player.yaw = yaw;
         self.player.pitch = pitch;
@@ -2763,33 +2925,11 @@ pub fn enter_skylands(&mut self) {
             self.world.landmarks.yeti_slain = false;
             self.toasts.push("Far below, the Yeti stirs on the summit once more.".to_string());
         }
-        // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
-        self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
-        self.bronze_parrots_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).count() as u32;
-        // A Great Bear left behind comes again (whole) when the player is back in the overworld; the rage it caused is over.
-        self.bear_bosses_owed = self.bear_bosses_owed.max(self.animals.iter().filter(|a| a.kind == AnimalKind::BearBoss).count() as u32).min(1);
-        self.bear_rage = 0.0;
-        // A vampire bat left behind in the cave is waiting for the player's next visit. The king's spirits go with the player, whatever
-        // dimension they travel to (each keeps the arrows it has left).
-        self.vampire_bats_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::VampireBat).count() as u32;
-        // A Giant Crawfish left behind waits for the next visit to the Horizen.
-        self.giant_crawfish_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::GiantCrawfish).count() as u32;
-        let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
         self.king_dialog = None;
-        self.guard_room = None;
         self.shop_open = false;
-        self.animals.clear();
-        self.arrows.clear();
-        self.hostile_arrows.clear();
         self.mining = None;
         self.blackout = None;
-        self.tornadoes.clear();
-        self.crater_tornado = None;
-        self.tornado_timer = 0.0;
         self.cyclone_timer = 0.0;
-        self.falling_stars.clear();
-        self.star_timer = 0.0;
-        self.reset_storm();
         self.world.stream_chunks(self.player.pos);
         self.world.rebuild_dirty(self.player.pos, usize::MAX);
         // A Horizen saved before it was a cave may leave the player inside the rock: back to the arrival pool.
@@ -2798,6 +2938,7 @@ pub fn enter_skylands(&mut self) {
         }
         self.player.lift_out_of_blocks(&self.world);
         self.bring_spirits(&spirits);
+        self.sync_world_flags();
     }
 
     /// If the player wears the King's Crown and is in the normal world, put them in the ruined castle (on the ground, in the way in to the
@@ -3109,20 +3250,31 @@ pub fn enter_skylands(&mut self) {
             Dimension::Skylands => self.update_sky_tornado(dt),
             Dimension::Overworld => {}
         }
-        let player = self.player.pos;
-        // Will-o-whisps are drawn to a player with a holly rod in the hotbar. One that is bonded and has been left
+        // Everyone in the game is somebody for the creatures to notice (the host's player, then each guest): each creature picks the
+        // nearest. Alone, this is the one player and nothing changes.
+        let targets = self.targets();
+        let seed = self.info.seed;
+        let jungle_at = |p: Vec3| self.in_overworld() && crate::terrain::in_jungle(seed, p.x.floor() as i32, p.z.floor() as i32);
+        let in_jungle_of: Vec<bool> = targets.iter().map(|t| jungle_at(t.pos)).collect();
+        // Will-o-whisps are drawn to the nearest player with a holly rod in the hotbar. One that is bonded and has been left
         // far behind (the player ran off, or started again at the beginning) catches up at once.
-        let lure = if self.holly_rod_in_hotbar() { Some(player) } else { None };
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::WillOWhisp) {
+            let lure = targets
+                .iter()
+                .filter(|t| t.holly_rod)
+                .min_by(|x, y| (a.pos - x.pos).length_squared().partial_cmp(&(a.pos - y.pos).length_squared()).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|t| t.pos);
             a.lure = lure;
             if lure.is_none() {
                 a.bonded = false;
             }
-            if a.bonded && lure.is_some() && (a.pos - player).length() > WILL_O_WHISP_TELEPORT_DISTANCE {
-                a.pos = player + vec3(0.0, WILL_O_WHISP_ORBIT_HEIGHT, WILL_O_WHISP_ORBIT_RADIUS);
+            if let Some(l) = lure {
+                if a.bonded && (a.pos - l).length() > WILL_O_WHISP_TELEPORT_DISTANCE {
+                    a.pos = l + vec3(0.0, WILL_O_WHISP_ORBIT_HEIGHT, WILL_O_WHISP_ORBIT_RADIUS);
+                }
             }
         }
-        let flat = |a: &Animal| vec2(a.pos.x - player.x, a.pos.z - player.z).length();
+        let flat = |a: &Animal| targets.iter().map(|t| vec2(a.pos.x - t.pos.x, a.pos.z - t.pos.z).length()).fold(f32::MAX, f32::min);
         // Whisps go with the night, except the ones that follow the player.
         // Bats called by the pipes go with the dawn.
         let overworld = self.in_overworld();
@@ -3146,23 +3298,22 @@ pub fn enter_skylands(&mut self) {
         if self.in_skylands() {
             self.animals.retain(|a| !(matches!(a.kind, AnimalKind::Fairy | AnimalKind::MountainGoat) && a.pos.y < SKY_VOID_Y));
         }
-        let cloaked = self.worn == Some(ItemKind::PeltCloak);
-        // The Unicorn will not attack while the player is in the jungle.
-        let in_jungle = self.player_in_jungle();
+        // The Unicorn will not attack while the player it is after is in the jungle; a bear leaves alone the player in a pelt cloak.
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Unicorn) {
-            a.pacified = in_jungle;
+            a.pacified = in_jungle_of[nearest_target(&targets, a.pos)];
         }
         for a in self.animals.iter_mut().filter(|a| a.kind == AnimalKind::Bear) {
-            a.pacified = cloaked && !a.provoked;
+            a.pacified = targets[nearest_target(&targets, a.pos)].cloaked && !a.provoked;
         }
         let bears: Vec<Vec3> = self.animals.iter().filter(|a| a.kind == AnimalKind::Bear).map(|a| a.pos).collect();
-        let mut strikes: Vec<(usize, Vec3, u32, &'static str)> = Vec::new();
+        let mut strikes: Vec<(usize, Vec3, u32, &'static str, usize)> = Vec::new();
         let mut volleys: Vec<Arrow> = Vec::new();
-        // A Rabbit Foot in the hotbar makes the Wild Hunt's archer nock its arrows half as fast.
-        let slowdown = if self.rabbit_foot_in_hotbar() { HUNT_ARCHER_FOOT_FACTOR } else { 1.0 };
-        let player_vel = self.player.vel;
-        let mut events: Vec<BossEvent> = Vec::new();
+        let mut events: Vec<(BossEvent, usize)> = Vec::new();
         for (index, a) in self.animals.iter_mut().enumerate() {
+            let ti = nearest_target(&targets, a.pos);
+            let (player, player_vel) = (targets[ti].pos, targets[ti].vel);
+            // A Rabbit Foot in the hotbar makes the Wild Hunt's archer nock its arrows half as fast.
+            let slowdown = if targets[ti].rabbit_foot { HUNT_ARCHER_FOOT_FACTOR } else { 1.0 };
             let near = a.kind.never_gives_up() || (raging && a.kind == AnimalKind::Bear) || vec2(a.pos.x - player.x, a.pos.z - player.z).length() <= if a.kind.is_boss() { BOSS_UPDATE_DISTANCE } else { ANIMAL_UPDATE_DISTANCE };
             if !near || !self.world.chunks.contains_key(&World::chunk_of_pos(a.pos)) {
                 continue;
@@ -3177,9 +3328,9 @@ pub fn enter_skylands(&mut self) {
                 self.items.push(DroppedItem::spawn_at(kind, a.pos + vec3(0.0, 0.3, 0.0), &mut self.rng));
             }
             if a.try_attack(player) {
-                strikes.push((index, a.pos, a.kind.attack_damage(), a.kind.death_message()));
+                strikes.push((index, a.pos, a.kind.attack_damage(), a.kind.death_message(), ti));
             }
-            events.extend(a.take_events());
+            events.extend(a.take_events().into_iter().map(|e| (e, ti)));
             if a.ready_to_shoot(player) {
                 // An archer (or an Iron Quail) shoots if it can see the player, leading them a little and allowing for the missile's fall.
                 let quail = a.kind.is_metal_bird();
@@ -3200,12 +3351,16 @@ pub fn enter_skylands(&mut self) {
         }
         self.hostile_arrows.extend(volleys);
         self.update_fairy_planting();
-        self.update_hostile_arrows(dt);
-        // A bat that strikes a player holding pink salt dies on it instead: no damage, one lump of salt used up.
+        self.update_hostile_arrows_for(dt, &targets);
+        // A bat that strikes a player holding pink salt dies on it instead: no damage, one lump of salt used up (the host's own player only).
         let mut salted = Vec::new();
         let mut blows = Vec::new();
-        for (index, from, damage, death) in strikes {
+        for (index, from, damage, death, ti) in strikes {
             let (is_bat, launch) = (self.animals[index].kind == AnimalKind::Bat, self.animals[index].kind.strike_knockback());
+            if let Some(gi) = targets[ti].guest {
+                self.hurt_guest(gi, damage, death, from, launch);
+                continue;
+            }
             if is_bat && self.held_item() == Some(ItemKind::PinkSalt) && self.inventory.take_from_slot(self.selected).is_some() {
                 salted.push(index);
             } else {
@@ -3228,35 +3383,42 @@ pub fn enter_skylands(&mut self) {
             }
         }
         self.update_spirits();
-        for event in events {
-            self.carry_out(event);
+        for (event, ti) in events {
+            self.carry_out_for(event, &targets, ti);
         }
-        self.update_hazards(dt);
+        self.update_hazards_for(dt, &targets);
         self.spawn_timer += dt;
         if self.spawn_timer >= ANIMAL_SPAWN_INTERVAL {
             self.spawn_timer = 0.0;
-            self.spawn_wildlife();
-            self.spawn_bosses();
-            self.summon_iron_quails();
-            self.summon_unicorn();
-            self.summon_bear_bosses();
-            self.summon_bronze_parrots();
-            self.summon_giant_crawfish();
+            // Wildlife and bosses come in round each player in turn; what the kills have earned comes near the host's own player.
+            for t in &targets {
+                self.as_player_at(t.pos, t.vel, |g| {
+                    g.spawn_wildlife();
+                    g.spawn_bosses();
+                });
+            }
+            let first = targets[0];
+            self.as_player_at(first.pos, first.vel, |g| {
+                g.summon_iron_quails();
+                g.summon_unicorn();
+                g.summon_bear_bosses();
+                g.summon_bronze_parrots();
+                g.summon_giant_crawfish();
+            });
         }
     }
 
     /// Fly the arrows the Wild Hunt's archer has shot. One that passes through the player hurts them (and throws them back a
     /// little); one that strikes a block or flies too long is gone.
-    fn update_hostile_arrows(&mut self, dt: f32) {
-        let player = self.player.pos;
+    fn update_hostile_arrows_for(&mut self, dt: f32, targets: &[Target]) {
         let mut hits = Vec::new();
         let mut landed = Vec::new();
         let world = &self.world;
         self.hostile_arrows.retain_mut(|arrow| {
             let from = arrow.pos;
             let fate = arrow.update(world, &[], dt);
-            if arrow.hit_player(from, player) {
-                hits.push((from, arrow.kind));
+            if let Some(ti) = (0..targets.len()).find(|&ti| arrow.hit_player(from, targets[ti].pos)) {
+                hits.push((from, arrow.kind, ti));
                 return false;
             }
             if fate != Fate::InFlight && arrow.kind == ItemKind::IronFeather {
@@ -3268,41 +3430,61 @@ pub fn enter_skylands(&mut self) {
         for spot in landed {
             self.items.push(DroppedItem::at_rest(ItemKind::IronFeather, spot));
         }
-        for (from, kind) in hits {
+        for (from, kind, ti) in hits {
             let (damage, death) = if kind == ItemKind::IronFeather {
                 (IRON_FEATHER_DAMAGE as u32, "An iron feather pierced you")
             } else {
                 (HUNT_ARROW_DAMAGE, "An arrow of the Wild Hunt killed you")
             };
-            if !self.hurt_player(damage, death) {
-                self.knock_player(from);
-            }
+            self.hurt_target(&targets[ti], damage, death, from, 0.0);
         }
     }
 
     // --- Boss attacks: the Yeti's smash and ice, Nessie's ravens and acid, the Phoenix's fire -----------
 
-    /// Do what a boss has done (see `BossEvent`).
+    /// `carry_out_for` with the one player as the target (the tests' way in).
+    #[cfg(test)]
     fn carry_out(&mut self, event: BossEvent) {
-        let player = self.player.pos;
+        let targets = self.targets();
+        self.carry_out_for(event, &targets, 0);
+    }
+
+    /// `update_hostile_arrows_for` with the one player as the target (the tests' way in).
+    #[cfg(test)]
+    fn update_hostile_arrows(&mut self, dt: f32) {
+        let targets = self.targets();
+        self.update_hostile_arrows_for(dt, &targets);
+    }
+
+    /// `update_hazards_for` with the one player as the target (the tests' way in).
+    #[cfg(test)]
+    fn update_hazards(&mut self, dt: f32) {
+        let targets = self.targets();
+        self.update_hazards_for(dt, &targets);
+    }
+
+    /// Do what a boss has done (see `BossEvent`).
+    fn carry_out_for(&mut self, event: BossEvent, targets: &[Target], ti: usize) {
+        // What the boss throws and breathes is aimed at the player it chose; what it smashes hurts everybody within reach.
+        let (player, player_vel) = (targets[ti].pos, targets[ti].vel);
         match event {
-            BossEvent::Smash { at } => self.smash(at, AnimalKind::Yeti, BurstShape::Smash, YETI_SMASH_RADIUS, YETI_SMASH_DAMAGE, YETI_SMASH_KNOCKBACK, "The Yeti smashed you flat"),
-            BossEvent::OrangutanSmash { at } => self.smash(at, AnimalKind::Orangutan, BurstShape::OrangutanSmash, ORANGUTAN_SMASH_RADIUS, ORANGUTAN_SMASH_DAMAGE, ORANGUTAN_SMASH_KNOCKBACK, "The Orangutan smashed you flat"),
+            BossEvent::Smash { at } => self.smash(at, AnimalKind::Yeti, BurstShape::Smash, YETI_SMASH_RADIUS, YETI_SMASH_DAMAGE, YETI_SMASH_KNOCKBACK, "The Yeti smashed you flat", targets),
+            BossEvent::OrangutanSmash { at } => self.smash(at, AnimalKind::Orangutan, BurstShape::OrangutanSmash, ORANGUTAN_SMASH_RADIUS, ORANGUTAN_SMASH_DAMAGE, ORANGUTAN_SMASH_KNOCKBACK, "The Orangutan smashed you flat", targets),
             BossEvent::RockThrow { from } => {
-                let dir = Projectile::aim(ProjectileKind::Rock, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                let dir = Projectile::aim(ProjectileKind::Rock, from, player + vec3(0.0, 1.0, 0.0), player_vel);
                 self.projectiles.push(Projectile::launch(ProjectileKind::Rock, from, dir));
             }
             BossEvent::IceThrow { from } => {
-                let dir = Projectile::aim(ProjectileKind::IceBall, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                let dir = Projectile::aim(ProjectileKind::IceBall, from, player + vec3(0.0, 1.0, 0.0), player_vel);
                 self.projectiles.push(Projectile::launch(ProjectileKind::IceBall, from, dir));
             }
             BossEvent::Fireball { from } => {
-                let dir = Projectile::aim(ProjectileKind::Fireball, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                let dir = Projectile::aim(ProjectileKind::Fireball, from, player + vec3(0.0, 1.0, 0.0), player_vel);
                 self.projectiles.push(Projectile::launch(ProjectileKind::Fireball, from, dir));
             }
             BossEvent::DragonFlame { from } => {
                 // The stream wavers: each flame is aimed a little off the player.
-                let aim = Projectile::aim(ProjectileKind::DragonFire, from, player + vec3(0.0, 1.0, 0.0), self.player.vel);
+                let aim = Projectile::aim(ProjectileKind::DragonFire, from, player + vec3(0.0, 1.0, 0.0), player_vel);
                 let jitter = vec3(self.rng.unit() - 0.5, self.rng.unit() - 0.5, self.rng.unit() - 0.5) * 2.0 * DRAGON_FLAME_SPREAD;
                 self.projectiles.push(Projectile::launch(ProjectileKind::DragonFire, from, (aim + jitter).normalize_or_zero()));
             }
@@ -3320,12 +3502,13 @@ pub fn enter_skylands(&mut self) {
 
     /// A boss's fists hit the ground at `at`: everything within `radius` of its body (`owner`'s), level with it, is hurt for `damage` and
     /// thrown `knockback` blocks away, others of `owner`'s kind excepted.
-    fn smash(&mut self, at: Vec3, owner: AnimalKind, shape: BurstShape, radius: f32, damage: u32, knockback: f32, death: &str) {
-        let player = self.player.pos;
+    fn smash(&mut self, at: Vec3, owner: AnimalKind, shape: BurstShape, radius: f32, damage: u32, knockback: f32, death: &str, targets: &[Target]) {
         self.bursts.push(ShownBurst { pos: at, shape, age: 0.0 });
         let near = |p: Vec3, half: f32| vec2(p.x - at.x, p.z - at.z).length() - owner.half_width() - half <= radius && (p.y - at.y).abs() <= 2.5;
-        if near(player, PLAYER_HALF_WIDTH) && !self.hurt_player(damage, death) {
-            self.player.launch(player - at, knockback);
+        for t in targets {
+            if near(t.pos, PLAYER_HALF_WIDTH) {
+                self.hurt_target(t, damage, death, at, knockback);
+            }
         }
         let mut dead = Vec::new();
         for (i, a) in self.animals.iter_mut().enumerate() {
@@ -3342,11 +3525,11 @@ pub fn enter_skylands(&mut self) {
     }
 
     /// Fly the projectiles, burst them, burn a player standing in acid water, and fade the flashes.
-    fn update_hazards(&mut self, dt: f32) {
-        let player = self.player.pos;
+    fn update_hazards_for(&mut self, dt: f32, targets: &[Target]) {
+        let spots: Vec<Vec3> = targets.iter().map(|t| t.pos).collect();
         let mut bursts: Vec<Burst> = Vec::new();
         let world = &self.world;
-        self.projectiles.retain_mut(|p| match p.update(world, player, dt) {
+        self.projectiles.retain_mut(|p| match p.update_among(world, &spots, dt) {
             Some(burst) => {
                 bursts.push(burst);
                 false
@@ -3355,8 +3538,10 @@ pub fn enter_skylands(&mut self) {
         });
         for burst in bursts {
             self.bursts.push(ShownBurst { pos: burst.pos, shape: match burst.kind { ProjectileKind::IceBall => BurstShape::Ice, ProjectileKind::Rock => BurstShape::Rock, ProjectileKind::Fireball | ProjectileKind::DragonFire => BurstShape::Fire }, age: 0.0 });
-            if burst.reaches(player) && !self.hurt_player(burst.kind.burst_damage(), burst.kind.death_message()) {
-                self.knock_player(burst.pos);
+            for t in targets {
+                if burst.reaches(t.pos) {
+                    self.hurt_target(t, burst.kind.burst_damage(), burst.kind.death_message(), burst.pos, 0.0);
+                }
             }
         }
         for b in &mut self.bursts {
@@ -3367,6 +3552,11 @@ pub fn enter_skylands(&mut self) {
             c.left -= dt;
         }
         self.acid.retain(|c| c.left > 0.0);
+        self.update_acid_burn(dt);
+    }
+
+    /// Burn this player while they wade in tainted water (each guest does this for itself).
+    fn update_acid_burn(&mut self, dt: f32) {
         if self.standing_in_acid() {
             self.acid_burn += dt;
             while self.acid_burn >= ACID_DAMAGE_INTERVAL {
@@ -3600,11 +3790,15 @@ pub fn enter_skylands(&mut self) {
     /// The room of the king's dungeon the player is in (an index into `kingcastle::ROOMS`), if they are in one: the column of their feet
     /// inside its floor plan and their feet at a height within the room's storey.
     pub fn king_room(&self) -> Option<usize> {
+        self.king_room_at(self.player.pos)
+    }
+
+    /// The room of the king's castle a player standing at `p` is in.
+    fn king_room_at(&self, p: Vec3) -> Option<usize> {
         if !self.in_horizen() {
             return None;
         }
         let (kx, kz) = horizen::king_centre(self.info.seed);
-        let p = self.player.pos;
         kingcastle::room_at(p.x.floor() as i32 - kx, p.z.floor() as i32 - kz, (p.y + 0.05).floor() as i32 - (GROUND_TOP + 1))
     }
 
@@ -3619,6 +3813,27 @@ pub fn enter_skylands(&mut self) {
     /// while its guards live finds them gone (they stand down), and they come again when the player returns. A cleared room never has guards
     /// again, and the throne room never has any. Call once a frame.
     pub fn update_king_dungeon(&mut self) {
+        if !self.in_horizen() {
+            return;
+        }
+        // With guests the dungeon follows whoever is in the room whose turn it is (or in the room whose guards are out); with nobody in
+        // either, it follows the host's player, so that guards left behind stand down.
+        let cleared = self.world.landmarks.king_rooms_cleared;
+        let targets = self.targets();
+        let pick = targets
+            .iter()
+            .find(|t| match (self.king_room_at(t.pos), self.guard_room) {
+                (Some(r), Some(g)) => r == g,
+                (Some(r), None) => r == cleared && r < kingcastle::KING_THRONE_ROOM,
+                _ => false,
+            })
+            .copied()
+            .unwrap_or(targets[0]);
+        self.as_player_at(pick.pos, pick.vel, |g| g.update_king_room());
+    }
+
+    /// `update_king_dungeon` for the one player standing as `self.player` now.
+    fn update_king_room(&mut self) {
         let room = self.king_room();
         let cleared = self.world.landmarks.king_rooms_cleared;
         match (room, self.guard_room) {
@@ -3754,6 +3969,19 @@ pub fn enter_skylands(&mut self) {
             return 0;
         }
         self.inventory.remove(ItemKind::Gold, cost);
+        // The spirits belong to the host's simulation (they follow whoever is nearest): a guest asks the host to send them.
+        if self.is_guest() {
+            self.net_intent(Intent::KingGold(offerings));
+        } else {
+            self.send_spirits(offerings);
+        }
+        self.ghost_says(ghosts::KING_SENDS);
+        self.toasts.push(format!("{offerings} spirit archer{} will follow you", if offerings == 1 { "" } else { "s" }));
+        offerings
+    }
+
+    /// Set `offerings` spirit archers down round the player.
+    pub fn send_spirits(&mut self, offerings: u32) {
         let p = self.player.pos;
         for n in 0..offerings {
             let a = n as f32 * 2.4;
@@ -3761,9 +3989,6 @@ pub fn enter_skylands(&mut self) {
             spirit.set_orbit(a);
             self.animals.push(spirit);
         }
-        self.ghost_says(ghosts::KING_SENDS);
-        self.toasts.push(format!("{offerings} spirit archer{} will follow you", if offerings == 1 { "" } else { "s" }));
-        offerings
     }
 
     /// The spirit archers shoot, each at the nearest creature the player has hit lately (within `SPIRIT_RANGE`, in plain sight), once
@@ -3826,6 +4051,17 @@ pub fn enter_skylands(&mut self) {
             self.toasts.push("The Wild Hunt is already upon you.".to_string());
             return true;
         }
+        // The Hunt belongs to the host's simulation: a guest asks the host to send it.
+        if self.is_guest() {
+            self.net_intent(Intent::Horn);
+            return true;
+        }
+        self.summon_hunt();
+        true
+    }
+
+    /// The Wild Hunt rides out of the mist round the player.
+    pub fn summon_hunt(&mut self) {
         let p = self.player.pos;
         let first = self.rng.unit() * std::f32::consts::TAU;
         // One swordsman, two archers, two lancers on horses, and the ghostly bears and crows (the first of which split when killed).
@@ -3848,8 +4084,7 @@ pub fn enter_skylands(&mut self) {
                 }
             }
         }
-        self.toasts.push("The horn sounds, and the Wild Hunt rides out of the mist!".to_string());
-        true
+        self.announce("The horn sounds, and the Wild Hunt rides out of the mist!");
     }
 
     fn reset_storm(&mut self) {
@@ -3965,13 +4200,31 @@ pub fn enter_skylands(&mut self) {
         {
             return false;
         }
-        let Some(index) = self.animals.iter().position(|a| a.kind == AnimalKind::WillOWhisp && a.bonded) else {
+        // The storm, the whisps and the bolt belong to the host's simulation: a guest asks the host to strike.
+        if self.is_guest() {
+            self.net_intent(Intent::Lightning(strike_pos));
+            self.toasts.push("Lightning answers the Holly Rod.".to_string());
+            return true;
+        }
+        if !self.rod_lightning(strike_pos) {
+            return false;
+        }
+        self.toasts.push("Lightning answers the Holly Rod.".to_string());
+        true
+    }
+
+    /// Spend the following whisp nearest the player and strike `strike_pos`. False if no whisp follows anyone.
+    pub fn rod_lightning(&mut self, strike_pos: Vec3) -> bool {
+        let p = self.player.pos;
+        let Some(index) = (0..self.animals.len())
+            .filter(|&i| self.animals[i].kind == AnimalKind::WillOWhisp && self.animals[i].bonded)
+            .min_by(|&a, &b| (self.animals[a].pos - p).length_squared().partial_cmp(&(self.animals[b].pos - p).length_squared()).unwrap_or(std::cmp::Ordering::Equal))
+        else {
             return false;
         };
         self.animals.remove(index);
         self.trigger_storm_lightning(strike_pos);
         self.storm_lightning_timer = self.next_storm_lightning_delay();
-        self.toasts.push("Lightning answers the Holly Rod.".to_string());
         true
     }
 
@@ -3995,9 +4248,12 @@ pub fn enter_skylands(&mut self) {
             self.tornado_timer += dt;
             if self.tornado_timer >= SKY_TORNADO_INTERVAL {
                 self.tornado_timer = 0.0;
-                // The first island is a safe haven: no tornado is sent after a player standing on it.
-                if !skylands::on_spawn_island(self.info.seed, self.player.pos.x, self.player.pos.z) {
-                    self.spawn_sky_tornado();
+                // The first island is a safe haven: no tornado is sent after a player standing on it. With several players one of them is
+                // picked at random.
+                let targets = self.targets();
+                let pick = targets[self.rng.range(0, targets.len() as i32) as usize];
+                if !skylands::on_spawn_island(self.info.seed, pick.pos.x, pick.pos.z) {
+                    self.as_player_at(pick.pos, pick.vel, |g| g.spawn_sky_tornado());
                 }
             }
         }
@@ -4022,7 +4278,7 @@ pub fn enter_skylands(&mut self) {
                 tornado.damage_timer = 0.0;
             }
         }
-        if damage && !self.hurt_player(SKY_TORNADO_DAMAGE, "The fire tornado burns you") {
+        if damage && !self.host_is_away() && !self.hurt_player(SKY_TORNADO_DAMAGE, "The fire tornado burns you") {
             self.knock_player(source);
         }
     }
@@ -4042,10 +4298,14 @@ pub fn enter_skylands(&mut self) {
         for item in &mut self.items {
             item.update(&self.world, dt);
         }
-        for kind in collect_nearby(&mut self.items, &mut self.inventory, self.player.pos) {
-            self.toasts.push(format!("+1 {}", kind.name()));
+        if self.is_guest() {
+            self.guest_collect();
+        } else {
+            for kind in collect_nearby(&mut self.items, &mut self.inventory, self.player.pos) {
+                self.toasts.push(format!("+1 {}", kind.name()));
+            }
+            self.limit_items();
         }
-        self.limit_items();
         self.toasts.update(dt);
         if let Some((_, left)) = self.ghost_text.as_mut() {
             *left -= dt;

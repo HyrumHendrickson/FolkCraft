@@ -10,6 +10,7 @@ use crate::item::{Hearth, ItemKind};
 use crate::horizen::{self, Dimension};
 use crate::skylands;
 use crate::tower::Tower;
+use crate::net::{Progress, WorldOp};
 use crate::landmarks::{Landmarks, Lake, Rainbow, RainbowState, Reserved};
 use crate::terrain::{berry_bush_is_purple, generate_chunk_for, ground_top_with, is_wet_column};
 
@@ -111,6 +112,13 @@ pub struct World {
     pub landmarks: Landmarks,
     /// Which dimension this world is. The Horizen has no landmarks or animals, but it has its own day/night state.
     pub dimension: Dimension,
+    /// Multiplayer: whether changes are written to `net_log` (only in a session), whether they are being replayed from another machine
+    /// (and so must not be written again), and the changes made since the session last collected them (`Game::net_ops`).
+    pub net_on: bool,
+    pub net_quiet: bool,
+    pub net_log: Vec<WorldOp>,
+    /// The story of this world as last shared (see `note_progress`).
+    pub net_progress: Option<Progress>,
 }
 
 /// What a ray hit: the block's cell, the block, and the empty cell the ray came from
@@ -177,6 +185,10 @@ impl World {
             night: false,
             landmarks: Landmarks::fixed(seed, reserved_zones(seed)),
             dimension: Dimension::Overworld,
+            net_on: false,
+            net_quiet: false,
+            net_log: Vec::new(),
+            net_progress: None,
         }
     }
 
@@ -269,12 +281,173 @@ impl World {
         is_wet_column(self.seed, &self.landmarks, wx, wz)
     }
 
+    /// Write a change to the multiplayer journal (nothing happens outside a session).
+    fn note(&mut self, op: WorldOp) {
+        if self.net_on && !self.net_quiet {
+            self.net_log.push(op);
+        }
+    }
+
+    /// Write down the fire, glow, piece and pot now at `pos`: the state, whatever it was that changed it.
+    fn note_state(&mut self, pos: Pos) {
+        if !self.net_on || self.net_quiet {
+            return;
+        }
+        let ops = [
+            WorldOp::Fire(pos, self.fires.get(&pos).copied()),
+            WorldOp::Glow(pos, self.glow.get(&pos).copied()),
+            WorldOp::Cook(pos, self.cooking.get(&pos).map(|c| (c.raw, c.left))),
+            WorldOp::PotAt(pos, self.pots.get(&pos).map(|p| (p.water, p.meat, p.left, p.served))),
+        ];
+        self.net_log.extend(ops);
+    }
+
+    /// The shared story of this world, as it stands.
+    pub fn progress(&self) -> Progress {
+        let l = &self.landmarks;
+        let (rainbow, from, gold) = match l.rainbow {
+            RainbowState::Unseen => (0, (0, 0), (0, 0, 0)),
+            RainbowState::Active(r) => (1, r.from, r.gold),
+            RainbowState::Spent => (2, (0, 0), (0, 0, 0)),
+        };
+        Progress {
+            yeti_slain: l.yeti_slain,
+            orangutan_slain: l.orangutan_slain,
+            unicorn_summoned: l.unicorn_summoned,
+            unicorn_slain: l.unicorn_slain,
+            graveyard_rested: l.graveyard_rested,
+            game_won: l.game_won,
+            phoenix_slain: l.phoenix_slain,
+            rainbow,
+            rainbow_from: from,
+            rainbow_gold: gold,
+            spent_gold: l.spent_gold,
+        }
+    }
+
+    /// Write the story to the journal if it has changed since it was last shared. (Orangutan: the temple's chunks are remade by
+    /// `open_temple`'s own op, so only the flag is carried here.)
+    pub fn note_progress(&mut self) {
+        if !self.net_on || self.net_quiet {
+            return;
+        }
+        let now = self.progress();
+        if self.net_progress != Some(now) {
+            self.net_progress = Some(now);
+            self.net_log.push(WorldOp::Progress(now));
+        }
+    }
+
+    fn apply_progress(&mut self, p: &Progress) {
+        let l = &mut self.landmarks;
+        l.yeti_slain = p.yeti_slain;
+        l.orangutan_slain = p.orangutan_slain;
+        l.unicorn_summoned = p.unicorn_summoned;
+        l.unicorn_slain = p.unicorn_slain;
+        l.graveyard_rested = p.graveyard_rested;
+        l.game_won = p.game_won;
+        l.phoenix_slain = p.phoenix_slain;
+        l.spent_gold = p.spent_gold;
+        l.rainbow = match p.rainbow {
+            1 => RainbowState::Active(Rainbow { from: p.rainbow_from, gold: p.rainbow_gold }),
+            2 => RainbowState::Spent,
+            _ => RainbowState::Unseen,
+        };
+        self.net_progress = Some(self.progress());
+    }
+
+    /// Replay a change made on another machine. It is not written to the journal again.
+    pub fn apply_op(&mut self, op: &WorldOp) {
+        let before = self.net_quiet;
+        self.net_quiet = true;
+        match op {
+            WorldOp::Break(p) => self.break_block(p.0, p.1, p.2),
+            WorldOp::Set(p, block) => self.set_block(p.0, p.1, p.2, *block),
+            WorldOp::Fire(p, secs) => match secs {
+                Some(s) => {
+                    self.fires.insert(*p, *s);
+                }
+                None => {
+                    self.fires.remove(p);
+                }
+            },
+            WorldOp::Glow(p, secs) => match secs {
+                Some(s) => {
+                    self.glow.insert(*p, *s);
+                }
+                None => {
+                    self.glow.remove(p);
+                }
+            },
+            WorldOp::Cook(p, piece) => match piece {
+                Some((raw, left)) => {
+                    self.cooking.insert(*p, Cooking { raw: *raw, left: *left });
+                }
+                None => {
+                    self.cooking.remove(p);
+                }
+            },
+            WorldOp::PotAt(p, pot) => match pot {
+                Some((water, meat, left, served)) => {
+                    self.pots.insert(*p, Pot { water: *water, meat: *meat, left: *left, served: *served });
+                }
+                None => {
+                    self.pots.remove(p);
+                }
+            },
+            WorldOp::Berry(p) => {
+                self.berry_picked.insert(*p);
+                if let Some(chunk) = self.chunks.get_mut(&Self::chunk_of(p.0, p.2)) {
+                    chunk.dirty = true;
+                }
+            }
+            WorldOp::MonsterSlain(x, z) => {
+                if let Some(lake) = self.landmarks.lakes.iter().copied().find(|l| l.x == *x && l.z == *z) {
+                    self.record_monster_slain(&lake);
+                }
+            }
+            WorldOp::OpenKingDoor(room) => self.open_king_door(*room as usize),
+            WorldOp::OpenTemple => self.open_temple(),
+            WorldOp::UnlockTower(x, z) => self.unlock_tower(*x, *z),
+            WorldOp::Progress(p) => self.apply_progress(p),
+        }
+        self.net_quiet = before;
+    }
+
+    /// Hand over the changes made since the last call.
+    pub fn take_net_log(&mut self) -> Vec<WorldOp> {
+        std::mem::take(&mut self.net_log)
+    }
+
+    /// Run the clocks of fires, cooking, pots and glow without letting any fire burn out: a guest's copy of a fire counts down so that
+    /// its meat and its stew look right, but only the host decides when it is out (and says so).
+    pub fn tick_timers(&mut self, dt: f32) {
+        for (pos, meat) in self.cooking.iter_mut() {
+            let hot_enough = !meat.raw.needs_glow() || self.glow.contains_key(pos);
+            if self.fires.contains_key(pos) && hot_enough {
+                meat.left = (meat.left - dt).max(0.0);
+            }
+        }
+        for (pos, pot) in self.pots.iter_mut() {
+            if self.fires.contains_key(pos) && pot.water && pot.meat.is_some() {
+                pot.left = (pot.left - dt).max(0.0);
+            }
+        }
+        for t in self.glow.values_mut() {
+            *t = (*t - dt).max(0.05);
+        }
+        for t in self.fires.values_mut() {
+            *t = (*t - dt).max(0.05);
+        }
+    }
+
     /// Note that the monster of `lake` has been killed, and so make its island's tower whole again: the loaded chunks that
     /// hold it are made again, with the floors and the stair mended and the door shut and locked until a silver key opens it.
     pub fn record_monster_slain(&mut self, lake: &Lake) {
         if !self.landmarks.monsters_slain.contains(&(lake.x, lake.z)) {
             self.landmarks.monsters_slain.push((lake.x, lake.z));
             self.regenerate_tower_chunks(lake.x, lake.z);
+            self.note(WorldOp::MonsterSlain(lake.x, lake.z));
         }
     }
 
@@ -300,6 +473,7 @@ impl World {
     /// The guards of room `room` of the king's dungeon are dead: its door opens for good (the rooms cleared are counted up to it), and the loaded
     /// chunks that hold the castle are made again.
     pub fn open_king_door(&mut self, room: usize) {
+        self.note(WorldOp::OpenKingDoor(room as u8));
         self.landmarks.king_rooms_cleared = self.landmarks.king_rooms_cleared.max(room + 1);
         let (kx, kz) = horizen::king_centre(self.seed);
         let reach = KING_REACH;
@@ -322,6 +496,7 @@ impl World {
 
     /// The Orangutan is dead: the boards over the passage to the idol come down. The loaded chunks that hold the temple are made again.
     pub fn open_temple(&mut self) {
+        self.note(WorldOp::OpenTemple);
         self.landmarks.orangutan_slain = true;
         let (jx, jz) = crate::terrain::jungle_centre(self.seed);
         let reach = crate::temple::TEMPLE_REACH;
@@ -344,6 +519,7 @@ impl World {
 
     /// Unlock the door of the tower centred on the column (x, z) for good, and make its chunks again.
     pub fn unlock_tower(&mut self, x: i32, z: i32) {
+        self.note(WorldOp::UnlockTower(x, z));
         if !self.landmarks.towers_unlocked.contains(&(x, z)) {
             self.landmarks.towers_unlocked.push((x, z));
         }
@@ -431,6 +607,7 @@ impl World {
         if let Some(chunk) = self.chunks.get_mut(&key) {
             chunk.dirty = true;
         }
+        self.note(WorldOp::Berry(pos));
         true
     }
 
@@ -587,6 +764,28 @@ impl World {
         }
     }
 
+    /// Generate (without meshing) the chunks round `pos` that are missing, at most `budget` of them: the host keeps the land round each
+    /// guest alive, so that the creatures there move and the bosses there appear. Returns how many were made.
+    pub fn load_around(&mut self, pos: Vec3, budget: usize) -> usize {
+        let centre = Self::chunk_of_pos(pos);
+        let mut made = 0;
+        for ring in 0..=gen_radius() {
+            for dz in -ring..=ring {
+                for dx in -ring..=ring {
+                    if dx.abs().max(dz.abs()) != ring || self.chunks.contains_key(&(centre.0 + dx, centre.1 + dz)) {
+                        continue;
+                    }
+                    if made >= budget {
+                        return made;
+                    }
+                    self.ensure_chunk(centre.0 + dx, centre.1 + dz);
+                    made += 1;
+                }
+            }
+        }
+        made
+    }
+
     /// Mark the chunk next to `key` dirty when (lx, lz) lies on that edge, because
     /// an edge block changes the faces visible in the neighbouring chunk.
     fn dirty_neighbours(&mut self, key: (i32, i32), lx: i32, lz: i32) {
@@ -624,6 +823,8 @@ impl World {
             }
         }
         self.dirty_neighbours(key, lx, lz);
+        self.note(WorldOp::Break((x, y, z)));
+        self.note_state((x, y, z));
     }
 
     /// Put a player-made block (placed item, fire, charcoal) at (x, y, z) and remember it.
@@ -637,6 +838,7 @@ impl World {
             c.dirty = true;
         }
         self.dirty_neighbours(key, lx, lz);
+        self.note(WorldOp::Set((x, y, z), block));
     }
 
     /// Light the placed log, the charcoal or the filled forge at `pos`: a log becomes a fire, charcoal becomes
@@ -650,6 +852,7 @@ impl World {
         };
         self.set_block(pos.0, pos.1, pos.2, lit);
         self.fires.insert(pos, seconds);
+        self.note_state(pos);
         true
     }
 
@@ -660,6 +863,7 @@ impl World {
             return false;
         }
         self.glow.insert(pos, BELLOWS_GLOW_SECONDS);
+        self.note_state(pos);
         true
     }
 
@@ -672,6 +876,7 @@ impl World {
         match self.fires.get_mut(&pos) {
             Some(t) => {
                 *t += seconds;
+                self.note_state(pos);
                 true
             }
             None => false,
@@ -701,6 +906,7 @@ impl World {
             return false;
         }
         self.cooking.insert(pos, Cooking { raw: item, left: item.heat_seconds() });
+        self.note_state(pos);
         true
     }
 
@@ -719,6 +925,7 @@ impl World {
             return false;
         }
         self.pots.insert(pos, Pot::empty());
+        self.note_state(pos);
         true
     }
 
@@ -727,6 +934,7 @@ impl World {
         match self.pots.get_mut(&pos) {
             Some(pot) if !pot.water => {
                 pot.water = true;
+                self.note_state(pos);
                 true
             }
             _ => false,
@@ -740,6 +948,7 @@ impl World {
             Some(pot) if pot.water && pot.meat.is_none() && meat.stewed().is_some() => {
                 pot.meat = Some(meat);
                 pot.left = STEW_SECONDS;
+                self.note_state(pos);
                 true
             }
             _ => false,
@@ -755,6 +964,7 @@ impl World {
         if pot.served >= STEW_SERVINGS {
             *pot = Pot::empty();
         }
+        self.note_state(pos);
         Some(stew)
     }
 
@@ -773,7 +983,9 @@ impl World {
         if !self.can_take_pot(pos) {
             return None;
         }
-        self.pots.remove(&pos).map(|pot| pot.meat)
+        let taken = self.pots.remove(&pos).map(|pot| pot.meat);
+        self.note_state(pos);
+        taken
     }
 
     /// Whether the ray from `origin` along `dir` reaches water within `reach` blocks, before anything solid.
@@ -799,7 +1011,9 @@ impl World {
         if !self.cooking.get(&pos)?.done() {
             return None;
         }
-        self.cooking.remove(&pos).map(|c| c.item())
+        let item = self.cooking.remove(&pos).map(|c| c.item());
+        self.note_state(pos);
+        item
     }
 
     /// Hand over (and forget) what fell off burnt-out fires since the last call.
@@ -841,6 +1055,7 @@ impl World {
             if let Some(piece) = self.cooking.remove(pos) {
                 self.released.extend(piece.released().into_iter().map(|item| (*pos, item)));
             }
+            self.note_state(*pos);
             match self.placed.get(pos) {
                 Some(Block::Fire) => self.set_block(pos.0, pos.1, pos.2, Block::Charcoal),
                 Some(Block::Embers) => self.set_block(pos.0, pos.1, pos.2, Block::Ash),

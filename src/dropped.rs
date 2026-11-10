@@ -14,6 +14,8 @@ const COLLIDE_HALF_XZ: f32 = 0.1;
 
 #[derive(Clone, Debug)]
 pub struct DroppedItem {
+    /// The number by which a multiplayer session names this item (0 until the host first reports it).
+    pub net: u32,
     pub kind: ItemKind,
     /// Centre of the item's collision box.
     pub pos: Vec3,
@@ -197,12 +199,12 @@ impl DroppedItem {
     pub fn spawn_at(kind: ItemKind, pos: Vec3, rng: &mut Rng) -> Self {
         let angle = rng.unit() * std::f32::consts::TAU;
         let speed = 0.6 + rng.unit() * 1.2;
-        DroppedItem { kind, pos, vel: vec3(angle.cos() * speed, 2.5 + rng.unit(), angle.sin() * speed), age: 0.0 }
+        DroppedItem { net: 0, kind, pos, vel: vec3(angle.cos() * speed, 2.5 + rng.unit(), angle.sin() * speed), age: 0.0 }
     }
 
     /// An item loaded from a save: already old enough to pick up, and not moving.
     pub fn at_rest(kind: ItemKind, pos: Vec3) -> Self {
-        DroppedItem { kind, pos, vel: Vec3::ZERO, age: PICKUP_DELAY }
+        DroppedItem { net: 0, kind, pos, vel: Vec3::ZERO, age: PICKUP_DELAY }
     }
 
     fn half(&self) -> Vec3 {

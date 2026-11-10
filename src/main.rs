@@ -44,7 +44,9 @@ mod kingcastle;
 mod hud;
 mod inventory;
 mod item;
+mod avatar;
 mod landmarks;
+mod lobby;
 mod menu;
 mod mesh;
 mod mines;
@@ -66,6 +68,7 @@ mod tower;
 mod hazard;
 mod tornado;
 mod ui;
+mod net;
 mod world;
 
 use macroquad::prelude::*;
@@ -91,6 +94,8 @@ async fn main() {
             Mode::Help => help::help_screen(&mut app),
             Mode::Settings => settings::settings_screen(&mut app),
             Mode::Playing => play::play_screen(&mut app),
+            Mode::Host => lobby::host_screen(&mut app),
+            Mode::Join => lobby::join_screen(&mut app),
         }
         next_frame().await;
     }

@@ -71,10 +71,18 @@ pub fn worlds_screen(app: &mut App) {
         text_centered(&app.error, w / 2.0, 146.0, 22, Color::new(0.95, 0.4, 0.4, 1.0));
     }
 
-    let create_rect = Rect::new(w / 2.0 - 360.0, h - 90.0, 300.0, 56.0);
-    let settings_rect = Rect::new(w / 2.0 - 50.0, h - 90.0, 200.0, 56.0);
-    let help_rect = Rect::new(w / 2.0 + 160.0, h - 90.0, 200.0, 56.0);
-    if button(create_rect, "Create New World", !modal) {
+    // One row of buttons: create, host, join, settings, help.
+    let row_w_total = (w - 40.0).min(1000.0);
+    let gap = 12.0;
+    let widths = [0.27, 0.17, 0.17, 0.19, 0.20];
+    let usable = row_w_total - gap * 4.0;
+    let mut x = (w - row_w_total) / 2.0;
+    let mut rects = Vec::new();
+    for share in widths {
+        rects.push(Rect::new(x, h - 90.0, usable * share, 56.0));
+        x += usable * share + gap;
+    }
+    if button(rects[0], "Create New World", !modal) {
         app.name.clear();
         app.seed.clear();
         app.dev_mode = false;
@@ -84,12 +92,28 @@ pub fn worlds_screen(app: &mut App) {
         while get_char_pressed().is_some() {}
         return;
     }
-    if button(settings_rect, "Settings", !modal) {
+    if button(rects[1], "Host Game", !modal) {
+        app.error.clear();
+        app.scroll = 0.0;
+        app.lobby_field = crate::app::LobbyField::Name;
+        app.mode = Mode::Host;
+        while get_char_pressed().is_some() {}
+        return;
+    }
+    if button(rects[2], "Join Game", !modal) {
+        app.error.clear();
+        app.lobby_status.clear();
+        app.lobby_field = crate::app::LobbyField::Name;
+        app.mode = Mode::Join;
+        while get_char_pressed().is_some() {}
+        return;
+    }
+    if button(rects[3], "Settings", !modal) {
         app.error.clear();
         app.open_settings();
         return;
     }
-    if button(help_rect, "Help", !modal) {
+    if button(rects[4], "Help", !modal) {
         app.error.clear();
         app.open_help();
         return;
