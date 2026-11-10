@@ -59,13 +59,15 @@ pub const ROOMS: [Room; 8] = [
 /// spirit guards, and the throne room has nothing.
 pub fn garrison(room: usize) -> &'static [(AnimalKind, usize)] {
     match room {
-        0 => &[(AnimalKind::SpiritGuard, 2)],
-        1 => &[(AnimalKind::VampireBat, 2)],
-        2 => &[(AnimalKind::IronQuail, 2)],
-        3 => &[(AnimalKind::BronzeParrot, 3)],
-        4 => &[(AnimalKind::SpiritGuard, 8)],
-        r if r < KING_THRONE_ROOM => &[(AnimalKind::SpiritGuard, KING_GUARDS_PER_ROOM)],
-        _ => &[],
+        0 => &[(AnimalKind::SpiritGuard, 4)],
+        1 => &[(AnimalKind::VampireBat, 2), (AnimalKind::Bat, 6)],
+        2 => &[(AnimalKind::IronQuail, 2), (AnimalKind::Bat, 4)],
+        3 => &[(AnimalKind::BronzeParrot, 3), (AnimalKind::Bat, 2)],
+        4 => &[(AnimalKind::SpiritGuard, 12)],
+        5 => &[(AnimalKind::SpiritGuard, 6),(AnimalKind::VampireBat, 4) ],
+        6 => &[(AnimalKind::SpiritGuard, 8), (AnimalKind::IronQuail, 1), (AnimalKind::BronzeParrot, 1)],
+
+        
     }
 }
 

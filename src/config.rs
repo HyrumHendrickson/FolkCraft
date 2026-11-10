@@ -1170,7 +1170,6 @@ pub const KING_GATE_HEIGHT: i32 = 6;
 /// each room as the player steps into it (when every room before it is cleared) and never again once it is cleared; the next door opens when
 /// the last of them is dead. They come no nearer the player than `KING_GUARD_MIN_DISTANCE` blocks. They shoot like the Wild Hunt's archers,
 /// every `SPIRIT_GUARD_INTERVAL` seconds.
-pub const KING_GUARDS_PER_ROOM: usize = 2;
 pub const KING_GUARD_MIN_DISTANCE: f32 = 6.0;
 pub const SPIRIT_GUARD_HEALTH: i32 = 14;
 pub const SPIRIT_GUARD_INTERVAL: f32 = 3.2;
