@@ -1365,7 +1365,7 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
             AnimalKind::GiantCrawfish => giant_crawfish_parts(a, time, night),
             AnimalKind::Dragon => dragon_parts(a, time, night),
             // Drawn by `draw_ghosts`, see-through.
-            AnimalKind::SpiritArcher => continue,
+            AnimalKind::SpiritArcher | AnimalKind::SpiritGuard => continue,
             _ => continue,
         };
         let (s, c) = a.heading.sin_cos();
@@ -1380,15 +1380,21 @@ pub fn draw_animals(animals: &[Animal], time: f32, player_chunk: (i32, i32), nig
     }
 }
 
+/// Whether `draw_ghosts` (the translucent pass) draws this kind: the will-o-whisps, the warriors of the Wild Hunt and the spirit archers,
+/// both the ones that follow the player and the guards of the king's dungeon. `draw_animals` skips them, so a kind missing here is never drawn.
+pub fn is_drawn_as_ghost(kind: AnimalKind) -> bool {
+    kind == AnimalKind::WillOWhisp || kind.is_wild_hunt() || matches!(kind, AnimalKind::SpiritArcher | AnimalKind::SpiritGuard)
+}
+
 /// Draw the will-o-whisps and the warriors of the Wild Hunt in range, translucent. They go on after the water, with the other
 /// translucent things, so that the water and the world behind them show through. Call while the 3D camera is active.
 pub fn draw_ghosts(animals: &[Animal], time: f32, player_chunk: (i32, i32)) {
-    for a in animals.iter().filter(|a| a.kind == AnimalKind::WillOWhisp || a.kind.is_wild_hunt() || a.kind == AnimalKind::SpiritArcher) {
+    for a in animals.iter().filter(|a| is_drawn_as_ghost(a.kind)) {
         if !in_render_range(player_chunk, World::chunk_of_pos(a.pos)) {
             continue;
         }
         let (s, c) = a.heading.sin_cos();
-        if a.kind == AnimalKind::SpiritArcher {
+        if matches!(a.kind, AnimalKind::SpiritArcher | AnimalKind::SpiritGuard) {
             for (((fx, fy, fz), (hx, hy, hz), color), pitch) in spirit_parts(a, time) {
                 let offset = vec3(fx * c - fz * s, fy, fx * s + fz * c);
                 draw_box_tilted(a.pos + offset, vec3(hx, hy, hz), a.heading, pitch, color);
@@ -1778,5 +1784,13 @@ mod tests {
         let samples: Vec<f32> = (0..20).map(|i| alpha(i as f32 * 0.13)).collect();
         let (lo, hi) = (samples.iter().cloned().fold(f32::MAX, f32::min), samples.iter().cloned().fold(f32::MIN, f32::max));
         assert!(hi - lo > 0.05, "the glow flickers ({lo}..{hi})");
+    }
+
+    #[test]
+    fn every_translucent_kind_is_drawn_by_the_ghost_pass() {
+        for kind in [AnimalKind::WillOWhisp, AnimalKind::SpiritArcher, AnimalKind::SpiritGuard, AnimalKind::HuntSwordsman, AnimalKind::HuntArcher, AnimalKind::HuntLancer, AnimalKind::HuntBear, AnimalKind::HuntCrow] {
+            assert!(is_drawn_as_ghost(kind), "{kind:?} is skipped by the opaque pass, so the ghost pass must draw it");
+        }
+        assert!(!is_drawn_as_ghost(AnimalKind::Bear));
     }
 }

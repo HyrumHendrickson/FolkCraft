@@ -11,6 +11,7 @@
 //!
 //! Pure function of a cell's place relative to the castle's centre (`castle_cell`); `dy` counts up from the cave floor's top.
 
+use crate::animal::AnimalKind;
 use crate::block::Block;
 use crate::config::*;
 
@@ -51,6 +52,28 @@ pub const ROOMS: [Room; 8] = [
     Room { name: "library", storey: 1, x0: 6, x1: 40, z0: -22, z1: -5 },
     Room { name: "throne room", storey: 1, x0: -34, x1: 4, z0: -30, z1: -8 },
 ];
+
+/// What holds each room of the dungeon, as (kind, how many) pairs: the creatures that come out when the player steps into the room (its turn
+/// having come), and whose death opens the door out of it. The gatehouse has two spirit guards, the hall of pillars two vampire bats, the
+/// armoury two Iron Quails, the barracks three Bronze Parrots and the crypt eight spirit guards; each room above has `KING_GUARDS_PER_ROOM`
+/// spirit guards, and the throne room has nothing.
+pub fn garrison(room: usize) -> &'static [(AnimalKind, usize)] {
+    match room {
+        0 => &[(AnimalKind::SpiritGuard, 2)],
+        1 => &[(AnimalKind::VampireBat, 2)],
+        2 => &[(AnimalKind::IronQuail, 2)],
+        3 => &[(AnimalKind::BronzeParrot, 3)],
+        4 => &[(AnimalKind::SpiritGuard, 8)],
+        r if r < KING_THRONE_ROOM => &[(AnimalKind::SpiritGuard, KING_GUARDS_PER_ROOM)],
+        _ => &[],
+    }
+}
+
+/// Whether a creature of `kind` at the cell (dx, dz, dy) (from the middle of the castle, `dy` above the cave floor's top) is one that holds
+/// `room`: of a kind its garrison has, and inside the room.
+pub fn holds(room: usize, kind: AnimalKind, dx: i32, dz: i32, dy: i32) -> bool {
+    garrison(room).iter().any(|&(k, _)| k == kind) && room_at(dx, dz, dy) == Some(room)
+}
 
 /// A door: a block of cells `KING_DOOR_HEIGHT` high from `base`, shut until its room's guards are dead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,8 +132,10 @@ fn furniture(room: usize, dx: i32, dz: i32, fy: i32) -> Option<Block> {
         0 if matches!((dx.abs(), dz), (5, 36) | (5, 40)) => stone,
         // The hall of pillars: two rows down the hall, the middle left clear.
         1 if matches!(dx.abs(), 6 | 12 | 18) && matches!(dz, 19 | 27) => stone,
-        // The armoury: armour stands against the west wall and the north wall.
-        2 if fy == 0 && ((dx == -40 && dz.rem_euclid(4) == 1) || (dz == 16 && matches!(dx, -38 | -34 | -28 | -25))) => Some(Block::ArmorStand),
+        // The armoury: plain swords on stands against the west wall and plain bows on stands against the north wall (the royal armour is
+        // not here; it is in the grand castle).
+        2 if fy == 0 && dx == -40 && dz.rem_euclid(4) == 1 => Some(Block::SwordStand),
+        2 if fy == 0 && dz == 16 && matches!(dx, -38 | -34 | -28 | -25) => Some(Block::BowStand),
         // The barracks: rows of low stone bunks along the north and south walls.
         3 if fy == 0 && dx.rem_euclid(4) < 2 && (dz == -2 || (dz == 12 && !(-34..=-30).contains(&dx))) => stone,
         // The crypt: gravestones in rows either side of the aisle.
@@ -226,6 +251,45 @@ mod tests {
         assert_eq!(room_at(bx, bz, by), Some(KING_THRONE_ROOM));
         assert_eq!(castle_cell(KING_WALL_HALF, -20, 5, 0), Some(Block::CastleStone), "the outer wall");
         assert_eq!(castle_cell(10, -20, KING_ROOF_DY, 0), Some(Block::CastleStone), "the roof");
+    }
+
+    #[test]
+    fn the_armoury_has_stands_with_plain_swords_and_bows_and_no_royal_armour() {
+        let armoury = ROOMS.iter().find(|r| r.name == "armoury").expect("an armoury");
+        let (mut swords, mut bows) = (0, 0);
+        for x in armoury.x0..=armoury.x1 {
+            for z in armoury.z0..=armoury.z1 {
+                for dy in armoury.base()..armoury.base() + 3 {
+                    match castle_cell(x, z, dy, 0) {
+                        Some(Block::SwordStand) => swords += 1,
+                        Some(Block::BowStand) => bows += 1,
+                        other => assert_ne!(other, Some(Block::ArmorStand), "no royal armour at {x},{z},{dy}"),
+                    }
+                }
+            }
+        }
+        assert!(swords >= 1 && bows >= 1, "swords {swords}, bows {bows}");
+        assert_eq!(crate::item::drops_for(Block::SwordStand, &mut crate::rng::Rng::new(1)), vec![crate::item::ItemKind::Sword]);
+        assert_eq!(crate::item::drops_for(Block::BowStand, &mut crate::rng::Rng::new(1)), vec![crate::item::ItemKind::Bow]);
+    }
+
+    #[test]
+    fn each_room_is_held_by_its_own_creatures_and_the_throne_room_by_none() {
+        use AnimalKind::*;
+        let held = |room: usize| garrison(room).to_vec();
+        assert_eq!(held(0), vec![(SpiritGuard, 2)], "gatehouse");
+        assert_eq!(held(1), vec![(VampireBat, 2)], "hall of pillars");
+        assert_eq!(held(2), vec![(IronQuail, 2)], "armoury");
+        assert_eq!(held(3), vec![(BronzeParrot, 3)], "barracks");
+        assert_eq!(held(4), vec![(SpiritGuard, 8)], "crypt");
+        for room in 5..KING_THRONE_ROOM {
+            assert_eq!(held(room), vec![(SpiritGuard, KING_GUARDS_PER_ROOM)], "{}", ROOMS[room].name);
+        }
+        assert!(held(KING_THRONE_ROOM).is_empty());
+        let r = ROOMS[1];
+        assert!(holds(1, VampireBat, (r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2, r.base() + 2));
+        assert!(!holds(1, SpiritGuard, (r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2, 0), "not its kind");
+        assert!(!holds(2, VampireBat, (r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2, 0), "not its room");
     }
 
     #[test]

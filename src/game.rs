@@ -2880,6 +2880,9 @@ pub fn enter_skylands(&mut self) {
         let spirits: Vec<(u32, f32)> = self.animals.iter().filter(|a| a.kind == AnimalKind::SpiritArcher).map(|a| (a.shots_left, a.orbit_angle())).collect();
         self.animals.retain(|a| a.kind != AnimalKind::SpiritArcher);
         if !keep {
+            self.stand_down_dungeon();
+        }
+        if !keep {
             // An Iron Quail left behind comes again (whole) when the player is back in the overworld.
             self.iron_quails_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::IronQuail).count() as u32;
             self.bronze_parrots_owed += self.animals.iter().filter(|a| a.kind == AnimalKind::BronzeParrot).count() as u32;
@@ -3808,10 +3811,11 @@ pub fn enter_skylands(&mut self) {
         self.king_room() == Some(kingcastle::KING_THRONE_ROOM)
     }
 
-    /// The king's dungeon: stepping into a room whose turn it is (every room before it cleared) brings out its `KING_GUARDS_PER_ROOM` spirit
-    /// guards; when the last of them is dead the door out of the room opens for good (`World::open_king_door`). A player who leaves the room
-    /// while its guards live finds them gone (they stand down), and they come again when the player returns. A cleared room never has guards
-    /// again, and the throne room never has any. Call once a frame.
+    /// The king's dungeon: stepping into a room whose turn it is (every room before it cleared) brings out its garrison
+    /// (`kingcastle::garrison`: spirit guards, vampire bats, Iron Quails or Bronze Parrots, by room); when the last of them is dead the door
+    /// out of the room opens for good (`World::open_king_door`). A player who leaves the room while its garrison lives finds it gone (it
+    /// stands down), and it comes again when the player returns. A cleared room never has a garrison again, and the throne room never has
+    /// one. Call once a frame.
     pub fn update_king_dungeon(&mut self) {
         if !self.in_horizen() {
             return;
@@ -3838,47 +3842,70 @@ pub fn enter_skylands(&mut self) {
         let cleared = self.world.landmarks.king_rooms_cleared;
         match (room, self.guard_room) {
             (Some(r), None) if r < kingcastle::KING_THRONE_ROOM && r == cleared => {
-                self.spawn_guards(r);
+                self.spawn_garrison(r);
                 self.guard_room = Some(r);
             }
             (Some(r), Some(g)) if r == g => {
-                if !self.animals.iter().any(|a| a.kind == AnimalKind::SpiritGuard) {
+                let centre = horizen::king_centre(self.info.seed);
+                if !self.animals.iter().any(|a| Self::holds_king_room(centre, a, r)) {
                     self.world.open_king_door(r);
                     self.guard_room = None;
-                    self.toasts.push(if r + 1 == kingcastle::KING_THRONE_ROOM { "The last guard falls. The doors of the throne room swing open.".to_string() } else { "The last guard falls. A door grinds open.".to_string() });
+                    self.toasts.push(if r + 1 == kingcastle::KING_THRONE_ROOM { "The last guardian falls. The doors of the throne room swing open.".to_string() } else { "The last guardian falls. A door grinds open.".to_string() });
                 }
             }
-            (_, Some(_)) => {
-                self.animals.retain(|a| a.kind != AnimalKind::SpiritGuard);
+            (_, Some(g)) => {
+                let centre = horizen::king_centre(self.info.seed);
+                self.animals.retain(|a| !Self::holds_king_room(centre, a, g));
                 self.guard_room = None;
             }
             _ => {}
         }
     }
 
-    /// Bring out the spirit guards of dungeon room `room`, on free floor in it at least `KING_GUARD_MIN_DISTANCE` from the player.
-    fn spawn_guards(&mut self, room: usize) {
+    /// Whether `a` is one of the creatures that hold dungeon room `room` of the king's castle (whose middle is `centre`): of a kind the room's
+    /// garrison has, and inside the room.
+    fn holds_king_room(centre: (i32, i32), a: &Animal, room: usize) -> bool {
+        kingcastle::holds(room, a.kind, a.pos.x.floor() as i32 - centre.0, a.pos.z.floor() as i32 - centre.1, (a.pos.y + 0.05).floor() as i32 - (GROUND_TOP + 1))
+    }
+
+    /// Bring out the garrison of dungeon room `room` (`kingcastle::garrison`), on free floor in it at least `KING_GUARD_MIN_DISTANCE` from the
+    /// player; a vampire bat comes out in the air, at its orbit height.
+    fn spawn_garrison(&mut self, room: usize) {
         let (kx, kz) = horizen::king_centre(self.info.seed);
         let r = kingcastle::ROOMS[room];
         let y = GROUND_TOP + 1 + r.base();
         let p = self.player.pos;
-        let mut made = 0;
-        for _ in 0..400 {
-            if made >= KING_GUARDS_PER_ROOM {
-                break;
-            }
-            let (x, z) = (kx + self.rng.range(r.x0, r.x1 + 1), kz + self.rng.range(r.z0, r.z1 + 1));
-            let at = vec3(x as f32 + 0.5, y as f32 + 0.01, z as f32 + 0.5);
-            let free = self.world.chunks.contains_key(&World::chunk_of(x, z))
-                && self.world.block_at(x, y, z) == Block::Air
-                && self.world.block_at(x, y + 1, z) == Block::Air
-                && self.world.block_at(x, y + 2, z) == Block::Air
-                && self.world.block_at(x, y - 1, z).collides();
-            if free && vec2(at.x - p.x, at.z - p.z).length() >= KING_GUARD_MIN_DISTANCE {
-                self.animals.push(Animal::new(AnimalKind::SpiritGuard, at, &mut self.rng));
-                made += 1;
+        for &(kind, count) in kingcastle::garrison(room) {
+            let rise = if kind == AnimalKind::VampireBat { VAMPIRE_BAT_ORBIT_HEIGHT } else { 0.01 };
+            let half = vec3(kind.half_width(), 0.0, kind.half_width());
+            let mut made = 0;
+            for _ in 0..400 {
+                if made >= count {
+                    break;
+                }
+                let (x, z) = (kx + self.rng.range(r.x0, r.x1 + 1), kz + self.rng.range(r.z0, r.z1 + 1));
+                let at = vec3(x as f32 + 0.5, y as f32 + rise, z as f32 + 0.5);
+                let free = self.world.chunks.contains_key(&World::chunk_of(x, z))
+                    && self.world.block_at(x, y, z) == Block::Air
+                    && self.world.block_at(x, y + 1, z) == Block::Air
+                    && self.world.block_at(x, y + 2, z) == Block::Air
+                    && self.world.block_at(x, y - 1, z).collides()
+                    && !self.world.box_blocked(at - half, at + half + vec3(0.0, kind.height(), 0.0));
+                if free && vec2(at.x - p.x, at.z - p.z).length() >= KING_GUARD_MIN_DISTANCE {
+                    self.animals.push(Animal::new(kind, at, &mut self.rng));
+                    made += 1;
+                }
             }
         }
+    }
+
+    /// The creatures that hold the king's rooms stand down when the player leaves the Horizen, so that none is left behind to come again.
+    fn stand_down_dungeon(&mut self) {
+        if self.in_horizen() {
+            let centre = horizen::king_centre(self.info.seed);
+            self.animals.retain(|a| !(0..kingcastle::KING_THRONE_ROOM).any(|room| Self::holds_king_room(centre, a, room)));
+        }
+        self.guard_room = None;
     }
 
     /// For tests: stand the player on a Skylands island other than the first (which no fire tornado visits), streaming its chunks.
@@ -13017,7 +13044,52 @@ mod ivy_dungeon_and_jungle_tests {
         let mut next = at_room(1);
         next.world.landmarks.king_rooms_cleared = 1;
         next.update_king_dungeon();
-        assert_eq!(guards(&next), KING_GUARDS_PER_ROOM);
+        assert_eq!(held(&next, AnimalKind::VampireBat), 2, "the hall of pillars is held by two vampire bats");
+        assert_eq!(guards(&next), 0);
+    }
+
+    fn held(g: &Game, kind: AnimalKind) -> usize {
+        g.animals.iter().filter(|a| a.kind == kind).count()
+    }
+
+    #[test]
+    fn every_room_brings_out_its_own_creatures_and_its_door_opens_when_they_are_dead() {
+        for (room, kind, count) in [
+            (0, AnimalKind::SpiritGuard, 2),
+            (1, AnimalKind::VampireBat, 2),
+            (2, AnimalKind::IronQuail, 2),
+            (3, AnimalKind::BronzeParrot, 3),
+            (4, AnimalKind::SpiritGuard, 8),
+            (5, AnimalKind::SpiritGuard, KING_GUARDS_PER_ROOM),
+        ] {
+            let mut g = at_room(room);
+            g.world.landmarks.king_rooms_cleared = room;
+            g.update_king_dungeon();
+            assert_eq!(g.animals.len(), count, "room {room}");
+            assert_eq!(held(&g, kind), count, "room {room} is held by {kind:?}");
+            assert!(!door_open(&g, room), "room {room}: the door is shut while they live");
+            let hits: Vec<(usize, i32)> = (0..g.animals.len()).map(|i| (i, 9999)).collect();
+            g.hurt_animals(&hits);
+            g.update_king_dungeon();
+            assert_eq!(g.world.landmarks.king_rooms_cleared, room + 1, "room {room} is cleared");
+            assert!(door_open(&g, room), "room {room}: the door opens");
+        }
+    }
+
+    #[test]
+    fn a_garrison_stands_down_when_the_player_leaves_and_is_not_left_to_follow_them_out_of_the_horizen() {
+        let mut g = at_room(2);
+        g.world.landmarks.king_rooms_cleared = 2;
+        g.update_king_dungeon();
+        assert_eq!(held(&g, AnimalKind::IronQuail), 2);
+        g.travel_to(Dimension::Overworld);
+        assert_eq!(g.iron_quails_owed, 0, "the armoury's quails do not come after the player");
+        let mut g = at_room(1);
+        g.world.landmarks.king_rooms_cleared = 1;
+        g.update_king_dungeon();
+        assert_eq!(held(&g, AnimalKind::VampireBat), 2);
+        g.travel_to(Dimension::Overworld);
+        assert_eq!(g.vampire_bats_owed, 0, "the hall's bats do not wait for the player's next visit");
     }
 
     #[test]
@@ -13064,8 +13136,7 @@ mod ivy_dungeon_and_jungle_tests {
     #[test]
     fn a_guard_shoots_at_a_player_it_can_see_and_it_is_not_part_of_the_wild_hunt() {
         assert!(!AnimalKind::SpiritGuard.is_wild_hunt() && !AnimalKind::SpiritGuard.is_boss() && AnimalKind::SpiritGuard.is_huntable());
-        let mut g = at_room(1);
-        g.world.landmarks.king_rooms_cleared = 1;
+        let mut g = at_room(0);
         g.update_king_dungeon();
         assert_eq!(guards(&g), KING_GUARDS_PER_ROOM);
         let mut shot = false;

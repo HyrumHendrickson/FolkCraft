@@ -267,7 +267,7 @@ pub const RAINBOW_ARC_RATIO: f32 = 0.45;
 /// Gold in the pile at the end of the rainbow.
 pub const RAINBOW_GOLD_DROP: u32 = 6;
 pub const BREAK_SECONDS_GOLD_PILE: f32 = 1.5;
-/// Taking the royal armour off its stand.
+/// Taking the royal armour, or a sword or a bow of the king's armoury, off its stand.
 pub const BREAK_SECONDS_ARMOR: f32 = 1.0;
 
 // --- Mineshafts under the mountain --------------------------------------------------------

@@ -65,6 +65,10 @@ pub enum Block {
     Gravestone,
     /// A suit of armour on a pedestal in the throne room (there at night). Taking it by hand gives the royal armour.
     ArmorStand,
+    /// A plain sword standing on a stone pedestal in the armoury of the king's castle. Taking it by hand gives a sword.
+    SwordStand,
+    /// A plain bow standing on a stone pedestal in the armoury of the king's castle. Taking it by hand gives a bow.
+    BowStand,
     /// The weathered deck of a bridge between two floating islands: a solid cube that cannot be broken or made.
     BridgePlank,
     /// A rope-rail post at the edge of a bridge: thin and walk-through, and it cannot be broken or made.
@@ -326,6 +330,25 @@ const ARMOR_STAND_PARTS: &[Part] = &[
     part([0.70, 0.72, 0.34], [0.86, 0.88, 0.66], (0.66, 0.68, 0.74)),
     part([0.36, 0.82, 0.38], [0.64, 1.0, 0.62], (0.80, 0.82, 0.88)),
 ];
+/// A plain sword, point up, on a stone pedestal: a grip with a pommel, a crossguard and a steel blade.
+const SWORD_STAND_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.18, 0.82], (0.40, 0.40, 0.44)),
+    part([0.44, 0.18, 0.44], [0.56, 0.24, 0.56], (0.55, 0.55, 0.60)),
+    part([0.46, 0.24, 0.46], [0.54, 0.38, 0.54], (0.33, 0.22, 0.12)),
+    part([0.28, 0.38, 0.44], [0.72, 0.44, 0.56], (0.58, 0.58, 0.64)),
+    part([0.45, 0.44, 0.46], [0.55, 0.92, 0.54], (0.80, 0.83, 0.90)),
+    part([0.47, 0.92, 0.47], [0.53, 1.0, 0.53], (0.86, 0.88, 0.94)),
+];
+/// A plain wooden bow, upright on a stone pedestal: a grip, two curved limbs and a taut string on the side the limbs bend towards.
+const BOW_STAND_PARTS: &[Part] = &[
+    part([0.18, 0.0, 0.18], [0.82, 0.18, 0.82], (0.40, 0.40, 0.44)),
+    part([0.52, 0.42, 0.45], [0.64, 0.66, 0.55], (0.50, 0.33, 0.16)),
+    part([0.46, 0.66, 0.45], [0.58, 0.80, 0.55], (0.50, 0.33, 0.16)),
+    part([0.38, 0.80, 0.45], [0.50, 0.94, 0.55], (0.50, 0.33, 0.16)),
+    part([0.46, 0.28, 0.45], [0.58, 0.42, 0.55], (0.50, 0.33, 0.16)),
+    part([0.38, 0.18, 0.45], [0.50, 0.28, 0.55], (0.50, 0.33, 0.16)),
+    part([0.36, 0.20, 0.49], [0.40, 0.92, 0.51], (0.88, 0.85, 0.76)),
+];
 /// A post at the edge of a bridge with a crosspiece and a loop of rope, drawn the same from every side.
 const BRIDGE_POST_PARTS: &[Part] = &[
     part([0.42, 0.0, 0.42], [0.58, 0.90, 0.58], (0.33, 0.22, 0.12)),
@@ -526,6 +549,8 @@ impl Block {
                 | Block::GoldPile
                 | Block::StardustPile
                 | Block::ArmorStand
+                | Block::SwordStand
+                | Block::BowStand
                 | Block::PinkSalt
                 | Block::Bones
                 | Block::KeyStand
@@ -594,7 +619,7 @@ impl Block {
             Block::ClayForge | Block::ForgeCharged => BREAK_SECONDS_FORGE,
             Block::GoldPile => BREAK_SECONDS_GOLD_PILE,
             Block::StardustPile => BREAK_SECONDS_STARDUST,
-            Block::ArmorStand => BREAK_SECONDS_ARMOR,
+            Block::ArmorStand | Block::SwordStand | Block::BowStand => BREAK_SECONDS_ARMOR,
             Block::PinkSalt => BREAK_SECONDS_SALT,
             Block::RubyCrystal | Block::SapphireCrystal | Block::AmethystCrystal => BREAK_SECONDS_CRYSTAL,
             Block::Mushroom => BREAK_SECONDS_MUSHROOM,
@@ -666,6 +691,8 @@ impl Block {
                 | Block::CastleDoor
                 | Block::Gravestone
                 | Block::ArmorStand
+                | Block::SwordStand
+                | Block::BowStand
                 | Block::BridgePlank
                 | Block::SilverStone
                 | Block::TowerDoor
@@ -739,6 +766,8 @@ impl Block {
             Block::StardustPile => STARDUST_PILE_PARTS,
             Block::Gravestone => GRAVESTONE_PARTS,
             Block::ArmorStand => ARMOR_STAND_PARTS,
+            Block::SwordStand => SWORD_STAND_PARTS,
+            Block::BowStand => BOW_STAND_PARTS,
             Block::BridgePost => BRIDGE_POST_PARTS,
             Block::TowerDoor => TOWER_DOOR_PARTS,
             Block::TowerDoorTop => TOWER_DOOR_TOP_PARTS,
@@ -846,7 +875,7 @@ impl Block {
 mod tests {
     use super::*;
 
-    const ALL: [Block; 59] = [
+    const ALL: [Block; 61] = [
         Block::Air,
         Block::Dirt,
         Block::Stone,
@@ -879,6 +908,8 @@ mod tests {
         Block::CastleDoor,
         Block::Gravestone,
         Block::ArmorStand,
+        Block::SwordStand,
+        Block::BowStand,
         Block::BridgePlank,
         Block::BridgePost,
         Block::SilverStone,
@@ -1149,7 +1180,7 @@ mod tests {
         assert!(!Block::PinkSalt.is_full_cube() && !Block::PinkSalt.opaque() && Block::PinkSalt.hand_breakable() && Block::PinkSalt.id().is_none(), "salt is a cluster of crystals, not a pink cube");
         assert!(Block::PinkSalt.parts().len() >= 6, "a tall prism with a tip and shorter ones round it");
         assert!(Block::Bones.hand_breakable() && !Block::Bones.collides() && !Block::Bones.opaque(), "bones are walked over");
-        for b in [Block::PinkSalt, Block::KeyStand, Block::StonePlinth, Block::HornPlinth, Block::CrownPlinth, Block::BootsPlinth, Block::IdolPlinth] {
+        for b in [Block::PinkSalt, Block::KeyStand, Block::SwordStand, Block::BowStand, Block::StonePlinth, Block::HornPlinth, Block::CrownPlinth, Block::BootsPlinth, Block::IdolPlinth] {
             assert!(b.can_break_with(None) && b.collides() && b.break_seconds() > 0.0, "{b:?} is taken by hand");
         }
         // The lock is on the outer (south) face of the door's lower half, and the upper half has none.

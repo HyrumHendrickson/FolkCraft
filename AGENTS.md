@@ -247,10 +247,14 @@ armoury, barracks, crypt, then (behind the crypt's door) a stair up to the chape
 (`DOORS`, `Block::CastleDoor`, unbreakable) joins room `i` to room `i + 1` and is shut until `Landmarks::king_rooms_cleared > i`.
 
 - `Game::update_king_dungeon` (each frame): when the player stands in room `r < KING_THRONE_ROOM` and `r == king_rooms_cleared`,
-  `KING_GUARDS_PER_ROOM` hostile **spirit guards** (`AnimalKind::SpiritGuard`: the Wild Hunt archer's behaviour with shorter ranges,
-  `SPIRIT_GUARD_*`, no boss bar, not part of the Hunt) come out on free floor at least `KING_GUARD_MIN_DISTANCE` away; when the last is
-  dead `World::open_king_door(r)` opens the door for good. A player who leaves the room with guards alive finds them gone
-  (`Game::guard_room`), and they return on re-entry. Cleared rooms and the throne room never have guards.
+  the room's garrison (`kingcastle::garrison`) comes out on free floor at least `KING_GUARD_MIN_DISTANCE` away (a vampire bat in the air):
+  two spirit guards in the gatehouse, two vampire bats in the hall of pillars, two Iron Quails in the armoury, three Bronze Parrots in the
+  barracks, eight spirit guards in the crypt, and `KING_GUARDS_PER_ROOM` spirit guards in each room above. A **spirit guard**
+  (`AnimalKind::SpiritGuard`) has the Wild Hunt archer's behaviour with shorter ranges, `SPIRIT_GUARD_*`, no boss bar, and is not part of
+  the Hunt. A creature belongs to a room's garrison when it is of a kind in it and inside the room (`kingcastle::holds`); when the last is
+  dead `World::open_king_door(r)` opens the door for good. A player who leaves the room with its garrison alive finds it gone
+  (`Game::guard_room`), and it returns on re-entry; leaving the Horizen stands the garrisons down too, so no quail, parrot or bat is
+  counted as left behind. Cleared rooms and the throne room never have a garrison.
 - **Only in the throne room** (`Game::in_throne_room`) do Musical Pipes make the king speak and open the pop-up
   (`Game::king_dialog`); `Game::give_gold_to_king` sends one friendly **spirit archer** (`AnimalKind::SpiritArcher`, up to
   `MAX_SPIRIT_ARCHERS`) per `GOLD_PER_SPIRIT` gold. They go with the player between dimensions.

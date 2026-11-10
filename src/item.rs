@@ -931,6 +931,8 @@ pub fn drops_for_with_berries(block: Block, berry_kind: ItemKind, rng: &mut Rng)
         Block::GoldPile => drops.extend(std::iter::repeat(ItemKind::Gold).take(RAINBOW_GOLD_DROP as usize)),
         Block::StardustPile => drops.extend(std::iter::repeat(ItemKind::Stardust).take(STARDUST_DROP as usize)),
         Block::ArmorStand => drops.push(ItemKind::RoyalArmor),
+        Block::SwordStand => drops.push(ItemKind::Sword),
+        Block::BowStand => drops.push(ItemKind::Bow),
         Block::RubyCrystal | Block::SapphireCrystal | Block::AmethystCrystal => {
             let kind = match block {
                 Block::RubyCrystal => ItemKind::Ruby,
