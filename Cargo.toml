@@ -2,6 +2,13 @@
 name = "folk_craft"
 version = "0.1.0"
 edition = "2021"
+description = "A small voxel adventure game with a folklore flavour, written in Rust with macroquad."
+license = "MIT"
+repository = "https://github.com/HyrumHendrickson/FolkCraft"
+readme = "README.md"
+keywords = ["game", "voxel", "macroquad", "sandbox"]
+categories = ["games"]
+publish = false
 
 [dependencies]
 macroquad = "0.4"

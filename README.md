@@ -1,5 +1,9 @@
 # Folk Craft
 
+[![CI](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/codeql.yml/badge.svg)](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Folk Craft is a small voxel adventure game, in the spirit of Minecraft, with a folklore flavour. You explore a forest of
 rivers, hills and clearings, hunt and cook, craft tools, and follow rainbows, ghostly trails and old stories to castles, a
 mountain, caves under the world and islands in the sky.
@@ -51,4 +55,14 @@ On the world list, **Host Game** opens a world to your wifi network and **Join G
 ## Living with the game
 
 - It is a work in progress: things change between versions, and older worlds still load.
-- Found a bug, or want to add something? Open the project in your editor, read `AGENTS.md`, and run `cargo test` before sharing a change.
+- Found a bug, or want to add something? Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md), and run `cargo test` before sharing a change.
+
+## Project
+
+- [Contributing](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security policy](SECURITY.md): please report vulnerabilities privately
+- [Changelog](CHANGELOG.md)
+
+## License
+
+Folk Craft is released under the [MIT License](LICENSE).

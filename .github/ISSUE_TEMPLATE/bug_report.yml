@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in the game does not work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you see instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: Output of `git rev-parse --short HEAD`
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and Rust version
+      description: For example "Debian 12, rustc 1.88"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console output or screenshots
+      render: shell

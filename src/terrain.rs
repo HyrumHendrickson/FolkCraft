@@ -85,6 +85,8 @@ pub fn altar_site_ok(seed: i64, landmarks: &Landmarks, x: i32, z: i32) -> bool {
 }
 
 /// The altar nearest to the column (x, z) within `reach` blocks (the ones that can stand: `altar_site_ok`), as its column.
+/// Crows use `nearest_altar_beyond` (they skip the altar they are perched on); this form is for the tests.
+#[cfg(test)]
 pub fn nearest_altar(seed: i64, landmarks: &Landmarks, x: i32, z: i32, reach: f32) -> Option<(i32, i32)> {
     nearest_altar_beyond(seed, landmarks, x, z, 0.0, reach)
 }

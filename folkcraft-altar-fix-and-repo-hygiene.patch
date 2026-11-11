@@ -1,0 +1,508 @@
+From 6685a439e895edad512c17e5987a8de4a972cd45 Mon Sep 17 00:00:00 2001
+From: Hyrum Hendrickson <hyrumh.guru@byui.edu>
+Date: Wed, 11 Nov 2026 17:49:17 +0000
+Subject: [PATCH 1/2] Make nearest_altar test-only to clear the dead_code
+ warning
+
+Crows call nearest_altar_beyond (they skip the altar they are perched on),
+so the plain nearest_altar wrapper is used only by tests.
+---
+ src/terrain.rs | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/terrain.rs b/src/terrain.rs
+index e324c7d..f9053e1 100644
+--- a/src/terrain.rs
++++ b/src/terrain.rs
+@@ -85,6 +85,8 @@ pub fn altar_site_ok(seed: i64, landmarks: &Landmarks, x: i32, z: i32) -> bool {
+ }
+ 
+ /// The altar nearest to the column (x, z) within `reach` blocks (the ones that can stand: `altar_site_ok`), as its column.
++/// Crows use `nearest_altar_beyond` (they skip the altar they are perched on); this form is for the tests.
++#[cfg(test)]
+ pub fn nearest_altar(seed: i64, landmarks: &Landmarks, x: i32, z: i32, reach: f32) -> Option<(i32, i32)> {
+     nearest_altar_beyond(seed, landmarks, x, z, 0.0, reach)
+ }
+-- 
+2.43.0
+
+
+From d9d52c6b7b93353eff0ec5fb8892d086eebf2dca Mon Sep 17 00:00:00 2001
+From: Hyrum Hendrickson <hyrumh.guru@byui.edu>
+Date: Wed, 11 Nov 2026 17:49:17 +0000
+Subject: [PATCH 2/2] Add MIT license and standard open source project files
+
+- LICENSE (MIT), SECURITY.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, CHANGELOG.md
+- CI (build with warnings as errors, tests), CodeQL, and cargo audit workflows
+- Dependabot for cargo and GitHub Actions, CODEOWNERS, issue and PR templates
+- Cargo.toml package metadata, .editorconfig, README badges and project links
+---
+ .editorconfig                              | 15 ++++++++++
+ .github/CODEOWNERS                         |  1 +
+ .github/ISSUE_TEMPLATE/bug_report.yml      | 32 ++++++++++++++++++++++
+ .github/ISSUE_TEMPLATE/config.yml          |  5 ++++
+ .github/ISSUE_TEMPLATE/feature_request.yml | 14 ++++++++++
+ .github/PULL_REQUEST_TEMPLATE.md           | 11 ++++++++
+ .github/dependabot.yml                     | 11 ++++++++
+ .github/workflows/audit.yml                | 26 ++++++++++++++++++
+ .github/workflows/ci.yml                   | 29 ++++++++++++++++++++
+ .github/workflows/codeql.yml               | 31 +++++++++++++++++++++
+ CHANGELOG.md                               | 15 ++++++++++
+ CODE_OF_CONDUCT.md                         | 22 +++++++++++++++
+ CONTRIBUTING.md                            | 30 ++++++++++++++++++++
+ Cargo.toml                                 |  7 +++++
+ LICENSE                                    | 21 ++++++++++++++
+ README.md                                  | 16 ++++++++++-
+ SECURITY.md                                | 31 +++++++++++++++++++++
+ 17 files changed, 316 insertions(+), 1 deletion(-)
+ create mode 100644 .editorconfig
+ create mode 100644 .github/CODEOWNERS
+ create mode 100644 .github/ISSUE_TEMPLATE/bug_report.yml
+ create mode 100644 .github/ISSUE_TEMPLATE/config.yml
+ create mode 100644 .github/ISSUE_TEMPLATE/feature_request.yml
+ create mode 100644 .github/PULL_REQUEST_TEMPLATE.md
+ create mode 100644 .github/dependabot.yml
+ create mode 100644 .github/workflows/audit.yml
+ create mode 100644 .github/workflows/ci.yml
+ create mode 100644 .github/workflows/codeql.yml
+ create mode 100644 CHANGELOG.md
+ create mode 100644 CODE_OF_CONDUCT.md
+ create mode 100644 CONTRIBUTING.md
+ create mode 100644 LICENSE
+ create mode 100644 SECURITY.md
+
+diff --git a/.editorconfig b/.editorconfig
+new file mode 100644
+index 0000000..6e5410e
+--- /dev/null
++++ b/.editorconfig
+@@ -0,0 +1,15 @@
++root = true
++
++[*]
++charset = utf-8
++end_of_line = lf
++insert_final_newline = true
++trim_trailing_whitespace = true
++indent_style = space
++indent_size = 4
++
++[*.{yml,yaml,toml,json}]
++indent_size = 2
++
++[*.md]
++trim_trailing_whitespace = false
+diff --git a/.github/CODEOWNERS b/.github/CODEOWNERS
+new file mode 100644
+index 0000000..bb46bd5
+--- /dev/null
++++ b/.github/CODEOWNERS
+@@ -0,0 +1 @@
++* @HyrumHendrickson
+diff --git a/.github/ISSUE_TEMPLATE/bug_report.yml b/.github/ISSUE_TEMPLATE/bug_report.yml
+new file mode 100644
+index 0000000..15ee23e
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/bug_report.yml
+@@ -0,0 +1,32 @@
++name: Bug report
++description: Something in the game does not work as it should
++labels: [bug]
++body:
++  - type: textarea
++    id: what
++    attributes:
++      label: What happened?
++      description: What did you expect, and what did you see instead?
++    validations:
++      required: true
++  - type: textarea
++    id: steps
++    attributes:
++      label: Steps to reproduce
++    validations:
++      required: true
++  - type: input
++    id: version
++    attributes:
++      label: Commit or version
++      description: Output of `git rev-parse --short HEAD`
++  - type: input
++    id: os
++    attributes:
++      label: Operating system and Rust version
++      description: For example "Debian 12, rustc 1.88"
++  - type: textarea
++    id: logs
++    attributes:
++      label: Console output or screenshots
++      render: shell
+diff --git a/.github/ISSUE_TEMPLATE/config.yml b/.github/ISSUE_TEMPLATE/config.yml
+new file mode 100644
+index 0000000..2bf22cb
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/config.yml
+@@ -0,0 +1,5 @@
++blank_issues_enabled: false
++contact_links:
++  - name: Report a security vulnerability
++    url: https://github.com/HyrumHendrickson/FolkCraft/security/advisories/new
++    about: Please report security problems privately, not in a public issue.
+diff --git a/.github/ISSUE_TEMPLATE/feature_request.yml b/.github/ISSUE_TEMPLATE/feature_request.yml
+new file mode 100644
+index 0000000..1a3c25e
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/feature_request.yml
+@@ -0,0 +1,14 @@
++name: Feature request
++description: Suggest an addition or change
++labels: [enhancement]
++body:
++  - type: textarea
++    id: idea
++    attributes:
++      label: What would you like to see?
++    validations:
++      required: true
++  - type: textarea
++    id: why
++    attributes:
++      label: Why does it fit the game?
+diff --git a/.github/PULL_REQUEST_TEMPLATE.md b/.github/PULL_REQUEST_TEMPLATE.md
+new file mode 100644
+index 0000000..cc817ae
+--- /dev/null
++++ b/.github/PULL_REQUEST_TEMPLATE.md
+@@ -0,0 +1,11 @@
++## Summary
++
++<!-- What does this change, and why? -->
++
++## Checklist
++
++- [ ] `cargo build` produces no warnings
++- [ ] `cargo test` passes
++- [ ] Tests added or updated for new logic
++- [ ] In-game Help and `README.md` updated if rules changed
++- [ ] `CHANGELOG.md` updated
+diff --git a/.github/dependabot.yml b/.github/dependabot.yml
+new file mode 100644
+index 0000000..f35bb06
+--- /dev/null
++++ b/.github/dependabot.yml
+@@ -0,0 +1,11 @@
++version: 2
++updates:
++  - package-ecosystem: cargo
++    directory: /
++    schedule:
++      interval: weekly
++    open-pull-requests-limit: 5
++  - package-ecosystem: github-actions
++    directory: /
++    schedule:
++      interval: weekly
+diff --git a/.github/workflows/audit.yml b/.github/workflows/audit.yml
+new file mode 100644
+index 0000000..593d3a3
+--- /dev/null
++++ b/.github/workflows/audit.yml
+@@ -0,0 +1,26 @@
++name: Security audit
++
++on:
++  push:
++    branches: [main]
++    paths: [Cargo.toml, Cargo.lock]
++  pull_request:
++    paths: [Cargo.toml, Cargo.lock]
++  schedule:
++    - cron: "0 6 * * 1"
++
++permissions:
++  contents: read
++
++jobs:
++  audit:
++    name: cargo audit
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      checks: write
++    steps:
++      - uses: actions/checkout@v4
++      - uses: rustsec/audit-check@v2
++        with:
++          token: ${{ secrets.GITHUB_TOKEN }}
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..4aaaa2f
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,29 @@
++name: CI
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++
++permissions:
++  contents: read
++
++env:
++  CARGO_TERM_COLOR: always
++
++jobs:
++  build:
++    name: Build and test
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: dtolnay/rust-toolchain@stable
++      - uses: Swatinem/rust-cache@v2
++      - name: Install system dependencies
++        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
++      - name: Build (warnings are errors)
++        run: cargo build --locked
++        env:
++          RUSTFLAGS: -D warnings
++      - name: Test
++        run: cargo test --locked
+diff --git a/.github/workflows/codeql.yml b/.github/workflows/codeql.yml
+new file mode 100644
+index 0000000..b263944
+--- /dev/null
++++ b/.github/workflows/codeql.yml
+@@ -0,0 +1,31 @@
++# If GitHub's "default setup" for code scanning is enabled, disable it
++# (Settings > Code security) before using this workflow: the two conflict.
++name: CodeQL
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++  schedule:
++    - cron: "0 7 * * 1"
++
++jobs:
++  analyze:
++    name: Analyze (${{ matrix.language }})
++    runs-on: ubuntu-latest
++    permissions:
++      contents: read
++      security-events: write
++    strategy:
++      fail-fast: false
++      matrix:
++        language: [rust, actions]
++    steps:
++      - uses: actions/checkout@v4
++      - uses: github/codeql-action/init@v4
++        with:
++          languages: ${{ matrix.language }}
++          build-mode: none
++      - uses: github/codeql-action/analyze@v4
++        with:
++          category: /language:${{ matrix.language }}
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..05d69b0
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,15 @@
++# Changelog
++
++All notable changes to this project are documented here. The format follows
++[Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
++
++## [Unreleased]
++
++### Added
++
++- MIT license, security policy, contributing guide, code of conduct, issue and pull request templates.
++- Continuous integration (build, test, CodeQL, dependency audit) and Dependabot updates.
++
++### Fixed
++
++- Removed the `dead_code` warning for `terrain::nearest_altar`, which only the tests use (crows call `nearest_altar_beyond`).
+diff --git a/CODE_OF_CONDUCT.md b/CODE_OF_CONDUCT.md
+new file mode 100644
+index 0000000..f1f17e0
+--- /dev/null
++++ b/CODE_OF_CONDUCT.md
+@@ -0,0 +1,22 @@
++# Code of Conduct
++
++## Our standard
++
++Folk Craft is a project for people of all ages. Participants are expected to be respectful, patient and constructive,
++to give and accept feedback graciously, and to focus on what is best for the project and its players.
++
++Unacceptable behavior includes harassment or discrimination of any kind, insults or personal attacks, sexualized
++language or imagery, publishing others' private information, and any conduct that would be inappropriate in a
++professional setting.
++
++## Scope
++
++This applies to all project spaces (issues, pull requests, discussions) and to public spaces when representing the
++project.
++
++## Enforcement
++
++Maintainers may edit or remove comments, commits, issues and other contributions that violate this code, and may
++temporarily or permanently ban contributors for behavior they judge inappropriate. Report concerns privately through
++[GitHub private vulnerability reporting](https://github.com/HyrumHendrickson/FolkCraft/security/advisories/new) or by
++contacting a maintainer through their GitHub profile. Reports are handled in confidence.
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+new file mode 100644
+index 0000000..5e35f8d
+--- /dev/null
++++ b/CONTRIBUTING.md
+@@ -0,0 +1,30 @@
++# Contributing to Folk Craft
++
++Thank you for your interest. Bug reports, fixes, tests, documentation and new content are all welcome.
++
++## Getting started
++
++1. Install [Rust](https://www.rust-lang.org/tools/install) (stable). On Debian or Ubuntu also install `libasound2-dev`.
++2. Fork the repository and create a branch from `main`.
++3. Read [`AGENTS.md`](AGENTS.md): it is the technical guide (code map, conventions and invariants, how to extend).
++
++## Before you open a pull request
++
++```sh
++cargo build    # must produce no warnings
++cargo test     # no window or GPU needed
++```
++
++- Keep logic in plain functions and methods that can be unit tested; keep macroquad drawing and input in the thin UI
++  wrappers described in `AGENTS.md`.
++- Add or update tests for new logic, and update the in-game Help (`src/help.rs`) and `README.md` when rules change.
++- Do not add dependencies without a strong reason.
++- Keep commits focused, with a short imperative subject line ("Fix crow altar lookup").
++- By submitting a contribution you agree that it is licensed under the [MIT License](LICENSE).
++
++## Reporting bugs and requesting features
++
++Use the issue templates. Include the commit, your operating system, and steps to reproduce. Report security problems
++privately, as described in [`SECURITY.md`](SECURITY.md).
++
++All participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+diff --git a/Cargo.toml b/Cargo.toml
+index 43963f7..d100de2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -2,6 +2,13 @@
+ name = "folk_craft"
+ version = "0.1.0"
+ edition = "2021"
++description = "A small voxel adventure game with a folklore flavour, written in Rust with macroquad."
++license = "MIT"
++repository = "https://github.com/HyrumHendrickson/FolkCraft"
++readme = "README.md"
++keywords = ["game", "voxel", "macroquad", "sandbox"]
++categories = ["games"]
++publish = false
+ 
+ [dependencies]
+ macroquad = "0.4"
+diff --git a/LICENSE b/LICENSE
+new file mode 100644
+index 0000000..c0781b2
+--- /dev/null
++++ b/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 Hyrum Hendrickson
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/README.md b/README.md
+index fbd477c..5246bb5 100644
+--- a/README.md
++++ b/README.md
+@@ -1,5 +1,9 @@
+ # Folk Craft
+ 
++[![CI](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/ci.yml)
++[![CodeQL](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/codeql.yml/badge.svg)](https://github.com/HyrumHendrickson/FolkCraft/actions/workflows/codeql.yml)
++[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
++
+ Folk Craft is a small voxel adventure game, in the spirit of Minecraft, with a folklore flavour. You explore a forest of
+ rivers, hills and clearings, hunt and cook, craft tools, and follow rainbows, ghostly trails and old stories to castles, a
+ mountain, caves under the world and islands in the sky.
+@@ -51,4 +55,14 @@ On the world list, **Host Game** opens a world to your wifi network and **Join G
+ ## Living with the game
+ 
+ - It is a work in progress: things change between versions, and older worlds still load.
+-- Found a bug, or want to add something? Open the project in your editor, read `AGENTS.md`, and run `cargo test` before sharing a change.
++- Found a bug, or want to add something? Read [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md), and run `cargo test` before sharing a change.
++
++## Project
++
++- [Contributing](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md)
++- [Security policy](SECURITY.md): please report vulnerabilities privately
++- [Changelog](CHANGELOG.md)
++
++## License
++
++Folk Craft is released under the [MIT License](LICENSE).
+diff --git a/SECURITY.md b/SECURITY.md
+new file mode 100644
+index 0000000..fa16a6e
+--- /dev/null
++++ b/SECURITY.md
+@@ -0,0 +1,31 @@
++# Security Policy
++
++## Supported versions
++
++Folk Craft is under active development. Only the latest commit on `main` receives security fixes.
++
++## Reporting a vulnerability
++
++Please do not open a public issue for a security problem. Report it privately through
++[GitHub private vulnerability reporting](https://github.com/HyrumHendrickson/FolkCraft/security/advisories/new).
++
++Include the affected commit or version, a description of the impact, and steps to reproduce. You can expect an
++acknowledgement within 7 days and a status update within 30 days. Reporters are credited in the advisory unless they
++ask otherwise.
++
++## Scope
++
++In scope:
++
++- The local multiplayer protocol (`src/net.rs`, `src/lobby.rs`, `src/game/session.rs`): memory safety, crashes or
++  resource exhaustion triggered by a malformed or hostile packet, and any way for a guest to affect the host's machine.
++- Loading of save files (`src/save.rs`) and world files from untrusted sources.
++
++Out of scope: gameplay exploits that only affect a world you host yourself, and issues in third-party dependencies
++that are already tracked upstream (these are monitored through Dependabot and `cargo audit`).
++
++## Multiplayer exposure
++
++A hosted game listens on TCP port 24680 on all interfaces and announces itself by UDP broadcast on port 24681. The
++protocol is not encrypted or authenticated. Host only on networks you trust, and do not forward these ports to the
++public internet.
+-- 
+2.43.0
+
